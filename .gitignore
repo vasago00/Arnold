@@ -13,6 +13,8 @@ arnold-app/dist/
 
 # Health data — stays local
 arnold-memory/
+Garmin.env.txt
+*.env.txt
 
 # Python runtime
 __pycache__/
