@@ -1,0 +1,6 @@
+{
+  "workouts": { "count": 0, "lastUpdated": null, "dateRange": null },
+  "races": { "count": 0, "lastUpdated": null, "dateRange": null },
+  "garmin": { "count": 0, "lastUpdated": null, "dateRange": null },
+  "cronometer": { "count": 0, "lastUpdated": null, "dateRange": null }
+}
