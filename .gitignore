@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+arnold-app/node_modules/
+
+# Environment files — never commit credentials
+.env
+.env.*
+arnold-garmin-api/.env
+arnold-app/.env
+
+# Build output
+arnold-app/dist/
+
+# Health data — stays local
+arnold-memory/
+
+# Python runtime
+__pycache__/
+*.pyc
+session.json
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log
