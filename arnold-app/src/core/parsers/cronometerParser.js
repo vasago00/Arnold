@@ -1,6 +1,52 @@
 // ─── Cronometer Daily Summary CSV Parser ─────────────────────────────────────
 // Handles the full 61-column dailysummary.csv export from Cronometer.
 
+export function parseTodayNutrition(csvText) {
+  const lines = csvText.trim().split(/\r?\n/);
+  if (lines.length < 2) return null;
+  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+  const today = new Date().toISOString().split('T')[0];
+
+  const findIdx = name => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
+
+  // Find today's row or use most recent
+  let targetRow = null;
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    const rowDate = cols[0]?.replace(/"/g, '').trim();
+    if (rowDate === today) { targetRow = cols; break; }
+    if (!targetRow) targetRow = cols; // fallback to first data row
+  }
+  if (!targetRow) return null;
+
+  const get = name => {
+    const idx = findIdx(name);
+    if (idx < 0 || idx >= targetRow.length) return 0;
+    const v = parseFloat((targetRow[idx] || '').replace(/"/g, '').replace(/,/g, ''));
+    return isNaN(v) ? 0 : v;
+  };
+
+  return {
+    date: targetRow[0]?.replace(/"/g, '').trim(),
+    calories: Math.round(get('Energy')),
+    protein: parseFloat(get('Protein').toFixed(1)),
+    carbs: parseFloat(get('Carbs').toFixed(1)),
+    netCarbs: parseFloat(get('Net Carbs').toFixed(1)),
+    fat: parseFloat(get('Fat').toFixed(1)),
+    fiber: parseFloat(get('Fiber').toFixed(1)),
+    sugar: parseFloat(get('Sugars').toFixed(1)),
+    sodium: Math.round(get('Sodium')),
+    potassium: Math.round(get('Potassium')),
+    magnesium: Math.round(get('Magnesium')),
+    water: parseFloat((get('Water') / 1000).toFixed(2)),
+    vitaminD: parseFloat(get('Vitamin D').toFixed(1)),
+    vitaminC: parseFloat(get('Vitamin C').toFixed(1)),
+    calcium: Math.round(get('Calcium')),
+    iron: parseFloat(get('Iron').toFixed(1)),
+  };
+}
+
+
 function parseCSVLine(line) {
   const vals = []; let cur = '', inQ = false;
   for (const ch of line) { if (ch === '"') inQ = !inQ; else if (ch === ',' && !inQ) { vals.push(cur); cur = ''; } else cur += ch; }
