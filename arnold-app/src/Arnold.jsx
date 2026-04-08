@@ -270,7 +270,7 @@ const TABS=[
 // ROOT
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App(){
-  const [tab,setTab]=useState("weekly");
+  const [tab,setTab]=useState("training");
   const [data,setData]=useState(DD);
   const [loading,setLoading]=useState(true);
   const [aiLoad,setAiLoad]=useState(false);
