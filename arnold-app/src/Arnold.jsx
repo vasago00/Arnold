@@ -3310,11 +3310,16 @@ function ProfileSettings({data,persist,showToast}){
     <div style={S.sec}>
       <div style={S.st}>Profile</div>
 
-      {/* Personal info */}
-      {textField("Name","name","")}
-      {numField("Age","age","")}
-      {numField("Height","height","cm")}
-      {textField("Main Goal","goal","")}
+      {/* Personal info — compact */}
+      <div style={{...S.lg,marginTop:4}}>
+        <div style={S.gt}>◐ Personal</div>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:"clamp(10px,1vw,16px)"}}>
+          {textField("Name","name","")}
+          {numField("Age","age","")}
+          {numField("Height","height","cm")}
+        </div>
+        {textField("Main Goal","goal","")}
+      </div>
 
       {/* ── RUN GOALS ── */}
       <div style={{...S.lg,marginTop:4}}>
