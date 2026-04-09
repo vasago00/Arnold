@@ -19,7 +19,23 @@ import { detectCSVType } from "./core/parsers/detectType.js";
 import { fetchAndParseICS } from "./core/parsers/icsParser.js";
 import { parseFITFile } from "./core/parsers/fitParser.js";
 import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronometerParser.js";
-import { storage } from "./core/storage.js";
+import { storage, migrateLegacyStorage, attachEngine } from "./core/storage.js";
+import * as dbEngine from "./core/db.js";
+import { fmtHMS, fmtHM, hydrationFor, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
+import { ImportDiagnostics } from "./components/ImportDiagnostics.jsx";
+import { GoalsHub } from "./components/GoalsHub.jsx";
+import { SupplementsTab } from "./components/SupplementsTab.jsx";
+import { StackCard } from "./components/StackCard.jsx";
+import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
+import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as getSupAdherence, getDailyNutrientTotals as getSupTotals } from "./core/supplements.js";
+import { AVATAR_LIBRARY } from "./core/avatars.js";
+import { getGoals } from "./core/goals.js";
+import { WeeklyPlanner } from "./components/WeeklyPlanner.jsx";
+import { todayPlanned } from "./core/planner.js";
+import { trainingAnnotations, dailyAnnotations } from "./core/aiAnnotations.js";
+import { AnnotationStrip } from "./components/AnnotationStrip.jsx";
+import { CockpitRail } from "./components/CockpitRail.jsx";
+import { Sparkline } from "./components/Sparkline.jsx";
 import { ArcDial } from "./components/ArcDial.jsx";
 import { TrendBadge } from "./components/TrendBadge.jsx";
 import { MiniBar } from "./components/MiniBar.jsx";
@@ -105,6 +121,12 @@ const BM={
   "Hematocrit (%)":{cat:"Blood",opt:[40,50],warn:[38,40],unit:"%",dir:"mid",lbl:"Hematocrit"},
   "White blood cells (thousands/uL)":{cat:"Blood",opt:[4.0,7.0],warn:[3.5,4.0],unit:"K/µL",dir:"mid",lbl:"WBC"},
   "Platelets (thousands/uL)":{cat:"Blood",opt:[150,300],warn:[130,150],unit:"K/µL",dir:"mid",lbl:"Platelets"},
+  "Calcium (mg/dL)":{cat:"Electrolytes",opt:[9.2,10.2],warn:[8.8,9.2],unit:"mg/dL",dir:"mid",lbl:"Calcium"},
+  "Potassium (mmol/L)":{cat:"Electrolytes",opt:[3.8,4.5],warn:[3.5,3.8],unit:"mmol/L",dir:"mid",lbl:"Potassium"},
+  "Sodium (mmol/L)":{cat:"Electrolytes",opt:[136,142],warn:[134,136],unit:"mmol/L",dir:"mid",lbl:"Sodium"},
+  "Creatine kinase (U/L)":{cat:"Inflammation",opt:[30,200],warn:[200,400],unit:"U/L",dir:"low",lbl:"CK"},
+  "TIBC (ug/dL)":{cat:"Nutrients",opt:[250,400],warn:[220,250],unit:"µg/dL",dir:"mid",lbl:"TIBC"},
+  "Transferrin saturation (%)":{cat:"Nutrients",opt:[20,45],warn:[15,20],unit:"%",dir:"mid",lbl:"Trans Sat"},
   "Creatine kinase (U/L)":{cat:"Blood",opt:[40,300],warn:[300,500],unit:"U/L",dir:"mid",lbl:"CK"},
 };
 const BCATS=["Metabolic","Lipids","Inflammation","Hormones","Nutrients","Liver","Blood"];
@@ -231,7 +253,7 @@ function mergeLogs(ex,inc,strat){
 // ─── Weather: uses fetchWeatherForDate from pdfParser.js ─────────────────────
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-const td=()=>new Date().toISOString().split("T")[0];
+const td=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const fmt=(v,u="")=>(v!==""&&v!=null?`${v}${u}`:"—");
 const Q=["—","1","2","3","4","5"];
 const HRV_L={excellent:"Excellent",good:"Good",moderate:"Moderate",low:"Low"};
@@ -262,7 +284,8 @@ const TABS=[
   {id:"labs",     label:"Labs",   icon:"⬡"},
   {id:"clinical", label:"Body",   icon:"◉"},
   {id:"races",    label:"Races",  icon:"⚑"},
-  {id:"ai",       label:"AI",     icon:"✦"},
+  {id:"goals",    label:"Goals",  icon:"◎"},
+  {id:"supplements",label:"Stack",icon:"◈"},
   {id:"settings", label:"Profile",icon:"◎"},
 ];
 
@@ -280,12 +303,18 @@ export default function App(){
   const [aiSummStream,setAiSummStream]=useState("");
   const [toast,setToast]=useState("");
 
-  useEffect(()=>{loadData().then(d=>{
-    const needSeed=!d.labSnapshots?.length&&!d.clinicalTests?.length;
-    if(needSeed){const s={...d,labSnapshots:SEED_LABS,clinicalTests:SEED_CLINICAL};setData(s);saveData(s);}
-    else setData(d);
-    setLoading(false);
-  });},[]);
+  useEffect(()=>{
+    // Phase 1: one-shot migration from legacy arnold-memory:* keys to unified arnold:* store
+    migrateLegacyStorage();
+    // Phase 7: hydrate IndexedDB engine, then attach so all storage calls route through it
+    dbEngine.hydrateDB().then(()=>{attachEngine(dbEngine);}).catch(e=>console.warn('IDB hydration failed, using localStorage',e));
+    loadData().then(d=>{
+      const needSeed=!d.labSnapshots?.length&&!d.clinicalTests?.length;
+      if(needSeed){const s={...d,labSnapshots:SEED_LABS,clinicalTests:SEED_CLINICAL};setData(s);saveData(s);}
+      else setData(d);
+      setLoading(false);
+    });
+  },[]);
 
   const persist=useCallback(async nd=>{setData(nd);await saveData(nd);},[]);
   const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(""),2500);};
@@ -296,8 +325,10 @@ export default function App(){
     <div style={S.root}>
       <div style={S.bg}/>
       <header style={S.hdr}>
-        <div style={S.hl}><div style={{width:28,height:28,borderRadius:6,background:"var(--accent-dim)",border:"0.5px solid var(--accent-border)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)"}}>A</div><div style={{display:"flex",flexDirection:"column",gap:1}}><div style={S.an}>ARNOLD</div><div style={S.as}>Health Intelligence</div></div></div>
-        <div style={S.hr}>{data.profile.name&&<span style={S.un}>{data.profile.name}</span>}<span style={S.dc2}>{td()}</span></div>
+        {(()=>{const lp=(()=>{try{return JSON.parse(localStorage.getItem('arnold:profile')||'{}');}catch{return{};}})();const p={...(data.profile||{}),...lp};return(
+<div style={S.hl}><div style={{width:44,height:44,borderRadius:8,background:"var(--accent-dim)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)",overflow:"hidden",flexShrink:0}}>{p.avatar?<img src={p.avatar} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:(p.alias?.[0]||p.name?.[0]||"A").toUpperCase()}</div><div style={{display:"flex",flexDirection:"column",gap:2,justifyContent:"center"}}><div style={S.an}>ARNOLD</div><div style={S.as}>Health Intelligence</div></div></div>
+);})()}
+        <div style={S.hr}>{(()=>{let n=data.profile?.name;try{const lp=JSON.parse(localStorage.getItem('arnold:profile')||'{}');n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
       </header>
       <nav style={S.nav}>
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
@@ -317,7 +348,8 @@ export default function App(){
         {tab==="training"&&<TrainingTab setTab={setTab} data={data}/>}
         {tab==="daily"&&<LogDay data={data} persist={persist} showToast={showToast}/>}
         {tab==="races"&&<RacesTab showToast={showToast}/>}
-        {tab==="ai"&&<AICoach data={data} loading={aiLoad} setLoading={setAiLoad} response={aiResp} setResponse={setAiResp} question={aiQ} setQuestion={setAiQ}/>}
+        {tab==="goals"&&<div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div>}
+        {tab==="supplements"&&<SupplementsTab showToast={showToast}/>}
         {tab==="settings"&&<ProfileSettings data={data} persist={persist} showToast={showToast}/>}
       </main>
       {toast&&<div style={S.toast}>{toast}</div>}
@@ -775,12 +807,71 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
   const inYear=d=>d&&d.startsWith(yearStr);
 
   // ── Load data ──
-  const profile=storage.get('profile')||{};
+  const profile={...(storage.get('profile')||{}),...getGoals()};
   const activities=storage.get('activities')||[];
   const nutrition=storage.get('cronometer')||[];
   const weightData=storage.get('weight')||[];
   const sleepData=storage.get('sleep')||[];
   const hrvData=storage.get('hrv')||[];
+
+  // ── Weekly Sync (Sunday CSV drop) ──
+  const [syncStatus,setSyncStatus]=useState({});
+  const [syncing,setSyncing]=useState(false);
+  const handleWeeklySync=async(files)=>{
+    if(!files||!files.length)return;
+    setSyncing(true);
+    const status={};
+    const readText=f=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f);});
+    for(const file of files){
+      const name=file.name;
+      try{
+        const txt=await readText(file);
+        const type=detectCSVType(name,txt);
+        if(type==='activities'){
+          const parsed=parseActivitiesCSV(txt);
+          const existing=storage.get('activities')||[];
+          const {merged}=mergeActivities(existing,parsed);
+          storage.set('activities',merged);
+          status[name]={ok:true,count:parsed.length,type:'Activities'};
+        }else if(type==='hrv'){
+          const parsed=parseHRVCSV(txt);
+          const existing=storage.get('hrv')||[];
+          const {merged}=mergeHRV(existing,parsed);
+          storage.set('hrv',merged);
+          status[name]={ok:true,count:parsed.length,type:'HRV'};
+        }else if(type==='sleep'){
+          const parsed=parseSleepCSV(txt);
+          const existing=storage.get('sleep')||[];
+          const {merged}=mergeSleep(existing,parsed);
+          storage.set('sleep',merged);
+          status[name]={ok:true,count:parsed.length,type:'Sleep'};
+        }else if(type==='weight'){
+          const parsed=parseWeightCSV(txt);
+          const existing=storage.get('weight')||[];
+          const {merged}=mergeWeight(existing,parsed);
+          storage.set('weight',merged);
+          status[name]={ok:true,count:parsed.length,type:'Weight'};
+        }else if(type==='cronometer'){
+          const parsed=parseCronometerCSV(txt);
+          const existing=storage.get('cronometer')||[];
+          const byDate=new Map(existing.map(r=>[r.date,r]));
+          for(const r of parsed) byDate.set(r.date,r);
+          storage.set('cronometer',Array.from(byDate.values()));
+          status[name]={ok:true,count:parsed.length,type:'Cronometer'};
+        }else{
+          status[name]={ok:false,error:'Unknown CSV type'};
+        }
+      }catch(e){status[name]={ok:false,error:e.message};}
+      setSyncStatus({...status});
+    }
+    setSyncing(false);
+    if(Object.values(status).some(s=>s.ok)){
+      showToast&&showToast('Weekly sync complete · running AI summary…');
+      try{onAiSum&&onAiSum();}catch{}
+      setTimeout(()=>window.location.reload(),1500);
+    }
+  };
+
   // ── This/last week activities ──
   const thisWeekActs=activities.filter(a=>inWk(a.date,monday,now));
   const lastWeekActs=activities.filter(a=>inWk(a.date,lastMonday,lastSunday));
@@ -1036,6 +1127,30 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
 
       </div>
 
+      {/* ── Weekly Sync (Sunday CSV drop) ── */}
+      <div style={{...panelStyle,borderLeft:`3px solid ${C.acc}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:500,color:C.t}}>◈ Weekly Sync</div>
+            <div style={{fontSize:10,color:C.m,marginTop:2}}>Drop your Sunday Garmin + Cronometer exports (Activities, HRV, Sleep, Weight, Cronometer)</div>
+          </div>
+          <label style={{fontSize:11,padding:'6px 12px',borderRadius:6,background:'rgba(167,139,250,0.15)',color:C.acc,border:`0.5px solid ${C.ab2}`,cursor:syncing?'wait':'pointer'}}>
+            {syncing?'Syncing…':'Choose files'}
+            <input type="file" accept=".csv" multiple style={{display:'none'}} disabled={syncing} onChange={e=>handleWeeklySync(Array.from(e.target.files||[]))}/>
+          </label>
+        </div>
+        {Object.keys(syncStatus).length>0&&(
+          <div style={{display:'flex',flexDirection:'column',gap:4,marginTop:8}}>
+            {Object.entries(syncStatus).map(([name,s])=>(
+              <div key={name} style={{fontSize:11,color:s.ok?'#4ade80':'#f87171',display:'flex',justifyContent:'space-between'}}>
+                <span>{s.ok?'✓':'✗'} {name}</span>
+                <span style={{color:C.m}}>{s.ok?`${s.type} · ${s.count} rows`:s.error}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* ── Section 2: AI Weekly Summary ── */}
       <button style={{...S.aib,...(aiSummLoad?{opacity:0.7,cursor:"not-allowed"}:{})}} onClick={onAiSum} disabled={aiSummLoad}>
         <span style={aiSummLoad?{display:"inline-block",animation:"arnoldSpin 1s linear infinite"}:{}}>{aiSummLoad?"◌":"✦"}</span>
@@ -1116,11 +1231,11 @@ function LogDay({data,persist,showToast}){
   const[todayLoaded,setTodayLoaded]=useState(false);
   const fitRef=useRef();
   const nutRef=useRef();
-  const profile=storage.get('profile')||{};
+  const profile={...(storage.get('profile')||{}),...getGoals()};
 
   // Load today's saved entry on mount
   useEffect(()=>{
-    const today=new Date().toISOString().split('T')[0];
+    const today=td();
     try{
       const logs=JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');
       const todayEntry=logs.find(e=>e.date===today);
@@ -1136,7 +1251,7 @@ function LogDay({data,persist,showToast}){
   // Auto-persist FIT / nutrition data the moment it parses (so unsaved data isn't lost)
   useEffect(()=>{
     if(!todayFIT&&!todayNutrition)return;
-    const today=new Date().toISOString().split('T')[0];
+    const today=td();
     const existing=(()=>{
       try{return JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');}
       catch{return[];}
@@ -1149,7 +1264,7 @@ function LogDay({data,persist,showToast}){
   },[todayFIT,todayNutrition]);
 
   const handleSave=()=>{
-    const today=new Date().toISOString().split('T')[0];
+    const today=td();
     const entry={
       date:today,
       savedAt:new Date().toISOString(),
@@ -1255,7 +1370,54 @@ function LogDay({data,persist,showToast}){
   const miniVal={fontSize:13,fontWeight:500,color:'var(--text-primary)',lineHeight:1.2};
   const miniLbl={fontSize:9,color:'var(--text-muted)',marginTop:2};
 
-  const fitData=todayFIT;
+  // fitData = today's .fit upload OR fallback to today's row from synced activities
+  // Hydration row — uses pure derive/hydration.js so the formula lives in one place
+  const HydrationRow=({fd})=>{
+    const h=hydrationFor(fd,profile);
+    return<>
+      <div style={divider}/>
+      <div style={subHdr}>Hydration</div>
+      <div style={{display:'flex',gap:5}}>
+        <div style={miniTile}>
+          <div style={{...miniVal,color:'#60a5fa'}}>{h.sweatLossL!=null?`${h.sweatLossL.toFixed(2)} L`:'—'}</div>
+          <div style={miniLbl}>est. sweat loss</div>
+        </div>
+        <div style={miniTile}>
+          <div style={{...miniVal,color:'#4ade80'}}>{h.replenishL!=null?`${h.replenishL.toFixed(2)} L`:'—'}</div>
+          <div style={miniLbl}>replenish water</div>
+        </div>
+        <div style={miniTile}>
+          <div style={miniVal}>{h.replenishOz!=null?`${h.replenishOz} oz`:'—'}</div>
+          <div style={miniLbl}>≈ in oz</div>
+        </div>
+        <div style={miniTile}>
+          <div style={miniVal}>{h.windowHrs} hrs</div>
+          <div style={miniLbl}>window</div>
+        </div>
+      </div>
+    </>;
+  };
+
+  const fitData=todayFIT||(()=>{
+    const acts=storage.get('activities')||[];
+    const todayStr=td();
+    const row=acts.find(a=>a.date===todayStr);
+    if(!row)return null;
+    const isRun=/running|trail/i.test(row.activityType||'');
+    const isStrength=/strength|weight/i.test(row.activityType||'');
+    const mins=row.durationSecs?Math.round(row.durationSecs/60):null;
+    return{
+      ...row,
+      isRun,isStrength,
+      durationMins:mins,
+      duration:row.durationFormatted||(mins?`${mins} min`:'—'),
+      avgPacePerMi:row.avgPaceRaw,
+      avgPowerW:row.avgPower,
+      maxPowerW:row.maxPower,
+      aerobicTrainingEffect:row.aerobicTE,
+      source:'activities-csv',
+    };
+  })();
   const nutData=todayNutrition;
   const calT=parseFloat(profile.dailyCalorieTarget)||2200;
 
@@ -1496,19 +1658,21 @@ function LogDay({data,persist,showToast}){
                 </div>
               )}
 
-              {/* Strength: 2 dials centered */}
-              {fitData.isStrength&&(
-                <div style={{display:'flex',justifyContent:'center',gap:24,marginBottom:14}}>
-                  <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-                    <ArcDial value={fitData.durationMins} max={90} size={68} color="#a78bfa" label="min" sublabel={fitData.duration||'—'}/>
-                    <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Duration</div>
-                  </div>
-                  <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-                    <ArcDial value={fitData.calories||0} max={600} size={68} color="#fbbf24" label="kcal" sublabel={fitData.calories||'—'}/>
-                    <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Calories</div>
-                  </div>
+              {/* Strength: 5 dials parallel to runs */}
+              {fitData.isStrength&&(()=>{
+                const movSecs=fitData.movingTimeSecs||fitData.durationSecs;
+                const movMins=movSecs?Math.round(movSecs/60):null;
+                const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
+                return(
+                <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
+                  <SmallDial color="#a78bfa" value={movMins} max={90} unit="min" label="Duration" displayValue={fmtHMS(movSecs)}/>
+                  <SmallDial color="#fbbf24" value={fitData.calories||0} max={600} unit="kcal" label="Calories" displayValue={fitData.calories||'—'}/>
+                  <SmallDial color="#f87171" value={fitData.avgHR} max={185} unit="bpm" label="Avg HR" displayValue={fitData.avgHR||'—'}/>
+                  <SmallDial color="#ef4444" value={fitData.maxHR} max={200} unit="bpm" label="Max HR" displayValue={fitData.maxHR||'—'}/>
+                  <SmallDial color="#4ade80" value={fitData.aerobicTrainingEffect||fitData.aerobicTE} max={5} unit="TE" label="Aero TE" displayValue={(fitData.aerobicTrainingEffect||fitData.aerobicTE)?(fitData.aerobicTrainingEffect||fitData.aerobicTE).toFixed(1):'—'}/>
                 </div>
-              )}
+                );
+              })()}
 
               {/* Run metrics — 2 rows of 4 tiles */}
               {fitData.isRun&&<>
@@ -1541,6 +1705,8 @@ function LogDay({data,persist,showToast}){
                   ))}
                 </div>
 
+                <HydrationRow fd={fitData}/>
+
                 {/* Vs goal MiniBars */}
                 <div style={divider}/>
                 <div style={subHdr}>Vs Goal</div>
@@ -1554,16 +1720,25 @@ function LogDay({data,persist,showToast}){
                   pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||20)}/>
               </>}
 
-              {/* Strength session metrics */}
+              {/* Strength metrics — parallel to runs: 2 rows of 4 tiles + Vs Goal */}
               {fitData.isStrength&&<>
                 <div style={divider}/>
-                <div style={subHdr}>Session metrics</div>
-                <div style={{display:'flex',gap:5}}>
+                <div style={subHdr}>Strength metrics</div>
+                {(()=>{
+                  const movSecs=fitData.movingTimeSecs||fitData.durationSecs;
+                  const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
+                  const totalMin=movSecs?Math.round(movSecs/60):null;
+                  const hrMax=fitData.maxHR||parseFloat(profile?.maxHR)||190;
+                  const pct=fitData.avgHR?fitData.avgHR/hrMax:null;
+                  const zone=pct==null?null:pct>=0.9?'Z5':pct>=0.8?'Z4':pct>=0.7?'Z3':pct>=0.6?'Z2':'Z1';
+                  const zoneLabel=totalMin!=null&&zone?(totalMin>=60?`${Math.floor(totalMin/60)}h${totalMin%60}m · ${zone}`:`${totalMin}m · ${zone}`):'—';
+                  return<>
+                <div style={{display:'flex',gap:5,marginBottom:5}}>
                   {[
-                    {label:'avg HR',val:fitData.avgHR||'—'},
-                    {label:'max HR',val:fitData.maxHR||'—'},
+                    {label:'duration',val:fmtHMS(movSecs)},
                     {label:'sets',val:fitData.setsCount||'—'},
-                    {label:'active',val:fitData.activeDuration?`${Math.round(fitData.activeDuration/60)}m`:'—'},
+                    {label:'reps',val:fitData.totalReps||'—'},
+                    {label:'intensity',val:zoneLabel},
                   ].map(m=>(
                     <div key={m.label} style={miniTile}>
                       <div style={miniVal}>{m.val}</div>
@@ -1571,6 +1746,46 @@ function LogDay({data,persist,showToast}){
                     </div>
                   ))}
                 </div>
+                <div style={{display:'flex',gap:5}}>
+                  {[
+                    {label:'body batt',val:fitData.bodyBatteryDrain?`-${fitData.bodyBatteryDrain}`:'—'},
+                    {label:'TSS',val:fitData.trainingStressScore?fitData.trainingStressScore.toFixed(0):'—'},
+                    {label:'aero TE',val:(fitData.aerobicTrainingEffect||fitData.aerobicTE)?(fitData.aerobicTrainingEffect||fitData.aerobicTE).toFixed(1):'—'},
+                    {label:'anaero TE',val:fitData.anaerobicTE?fitData.anaerobicTE.toFixed(1):'—'},
+                  ].map(m=>(
+                    <div key={m.label} style={miniTile}>
+                      <div style={miniVal}>{m.val}</div>
+                      <div style={miniLbl}>{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+                  </>;
+                })()}
+
+                <HydrationRow fd={fitData}/>
+
+                {/* Vs goal MiniBars */}
+                {(()=>{
+                  const acts=storage.get('activities')||[];
+                  const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
+                  const wkStrength=acts.filter(a=>/strength|weight/i.test(a.activityType||'')&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                  const wkCount=wkStrength.length;
+                  const wkMins=wkStrength.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
+                  const target=parseFloat(profile?.weeklyStrengthTarget)||2;
+                  const minTarget=parseFloat(profile?.weeklyStrengthMinutesTarget)||60;
+                  return<>
+                    <div style={divider}/>
+                    <div style={subHdr}>Vs Goal</div>
+                    <MiniBar label="Sessions this week"
+                      displayValue={`${wkCount} / ${target}`}
+                      goalLabel={`Goal: ${target}/week`}
+                      pct={wkCount/target}/>
+                    <MiniBar label="Strength minutes"
+                      displayValue={`${Math.round(wkMins)} / ${minTarget} min`}
+                      goalLabel={`Goal: ${minTarget} min/week`}
+                      pct={wkMins/minTarget}/>
+                  </>;
+                })()}
               </>}
             </>}
           </div>
@@ -1791,6 +2006,7 @@ function LogDay({data,persist,showToast}){
         </div>
       </div>
 
+      <StackCard dateStr={ts} showToast={showToast}/>
     </div>
   );
 }
@@ -2198,7 +2414,7 @@ async function processImport(type,text){
     const rows=parseActivitiesCSV(text);
     const ex=await getGarminActivities();
     const{merged,added,updated}=mergeActivities(ex,rows);
-    await saveGarminActivities(merged);
+    await await saveGarminActivities(merged);
     storage.set('activities',merged);
     // Also save to legacy garmin store for Training tab compatibility
     const runRows=rows.filter(r=>/running|trail/i.test(r.activityType||''));
@@ -2262,6 +2478,25 @@ function ImportHub({data,persist,showToast,setTab}){
 
   const handleFile=async(file,forceType)=>{
     if(!file)return;
+    // FIT file (binary) — route to the Garmin FIT SDK parser and merge into activities
+    if(/\.fit$/i.test(file.name)){
+      setZones(z=>({...z,activities:{file:file.name,loading:true}}));
+      try{
+        const act=await parseFITFile(file);
+        const merged=storage.merge('activities',[act],'date');
+        setZones(z=>({...z,activities:{file:file.name,count:merged.length,loading:false}}));
+        setBanners(b=>({...b,activities:`Detected: FIT file — ${act.activityType} on ${act.date}`}));
+        const newEntry={date:new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}),count:1,source:'fit',file:file.name};
+        const newHist=[newEntry,...hist].slice(0,20);
+        setHist(newHist);
+        await saveImportHistory(newHist);
+        showToast(`✓ FIT: ${act.activityType} imported`);
+      }catch(e){
+        setZones(z=>({...z,activities:null}));
+        showToast(`⚠ FIT parse failed: ${e.message}`);
+      }
+      return;
+    }
     const text=await file.text();
     const type=forceType||detectCSVType(text,file.name);
     if(!type){showToast("⚠ Could not detect CSV type");return;}
@@ -2286,7 +2521,7 @@ function ImportHub({data,persist,showToast,setTab}){
 
   const handleMultiDrop=async(e)=>{
     e.preventDefault();
-    const files=Array.from(e.dataTransfer.files).filter(f=>f.name.endsWith('.csv'));
+    const files=Array.from(e.dataTransfer.files).filter(f=>/\.(csv|fit)$/i.test(f.name));
     for(const file of files) await handleFile(file,null);
   };
 
@@ -2308,7 +2543,7 @@ function ImportHub({data,persist,showToast,setTab}){
           cursor:loaded?"default":"pointer",transition:"all var(--transition)",padding:6,overflow:"hidden",
         }}
       >
-        <input ref={ref} type="file" accept=".csv" style={{display:"none"}}
+        <input ref={ref} type="file" accept=".csv,.fit" style={{display:"none"}}
           onChange={e=>{const f=e.target.files[0];if(f)handleFile(f,id);e.target.value="";}}/>
         {loading&&<div style={{fontSize:11,color:C.m}}>Parsing…</div>}
         {!loaded&&!loading&&<>
@@ -2338,7 +2573,7 @@ function ImportHub({data,persist,showToast,setTab}){
           display:"flex",flexDirection:"row",alignItems:"center",justifyContent:"center",gap:10,cursor:"pointer",
         }}
       >
-        <input ref={masterRef} type="file" accept=".csv" multiple style={{display:"none"}}
+        <input ref={masterRef} type="file" accept=".csv,.fit" multiple style={{display:"none"}}
           onChange={async e=>{for(const f of Array.from(e.target.files))await handleFile(f,null);e.target.value="";}}/>
         <span style={{fontSize:18,color:C.acc}}>⇡</span>
         <span style={{fontSize:13,fontWeight:500,color:C.t}}>Drop all files here</span>
@@ -2393,13 +2628,83 @@ function ImportHub({data,persist,showToast,setTab}){
 // TRAINING TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function TrainingTab({setTab,data}){
-  const profile=storage.get('profile')||{};
+  const profile={...(storage.get('profile')||{}),...getGoals()};
   const activities=storage.get('activities')||[];
   const cronometer=storage.get('cronometer')||[];
   const weightData=storage.get('weight')||[];
   const hrvData=storage.get('hrv')||[];
   const sleepData=storage.get('sleep')||[];
   const dailyLogs=storage.get('daily-logs')||[];
+
+  // ── Tab-owned AI analysis (persisted) ──
+  const AI_KEY='arnold:ai:training';
+  const[aiState,setAiState]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(AI_KEY)||'null');}catch{return null;}
+  });
+  const[aiLoading,setAiLoading]=useState(false);
+  const[aiStream2,setAiStream2]=useState('');
+  const runTrainingAI=async()=>{
+    if(aiLoading)return;
+    setAiLoading(true);setAiStream2('');
+    try{
+      // Build a compact training context from the same data the tab already reads.
+      const ytdRunsLocal=activities.filter(a=>a.date&&new Date(a.date)>=new Date(new Date().getFullYear(),0,1)&&/run/i.test(a.activityType||''));
+      const ytdMi=ytdRunsLocal.reduce((s,a)=>s+(a.distanceMi||0),0);
+      const last7Sleep=sleepData.slice(0,7).filter(s=>s.durationMinutes);
+      const last7HRV=hrvData.slice(0,7).filter(h=>h.overnightHRV);
+      const ctx={
+        date:new Date().toISOString().slice(0,10),
+        ytd:{runs:ytdRunsLocal.length,miles:Math.round(ytdMi*10)/10,goalMi:profile?.annualRunDistanceTarget||800},
+        weekly:{
+          avgMi:ytdRunsLocal.length?Math.round((ytdMi/((Date.now()-new Date(new Date().getFullYear(),0,1))/86400000/7))*10)/10:0,
+          targetMi:profile?.weeklyRunDistanceTarget||20,
+        },
+        recovery:{
+          avgSleepHrs:last7Sleep.length?Math.round((last7Sleep.reduce((s,r)=>s+r.durationMinutes,0)/last7Sleep.length/60)*10)/10:null,
+          avgHRV:last7HRV.length?Math.round(last7HRV.reduce((s,r)=>s+r.overnightHRV,0)/last7HRV.length):null,
+        },
+        body:{
+          weightLbs:weightData[0]?.weightLbs||null,
+          bodyFatPct:weightData[0]?.bodyFatPct||null,
+          targetLbs:profile?.targetWeight||null,
+          targetBF:profile?.targetBodyFat||null,
+        },
+        recentRuns:ytdRunsLocal.slice(0,8).map(r=>({date:r.date,mi:r.distanceMi,pace:r.avgPaceRaw,hr:r.avgHR})),
+        goalPace:profile?.targetRacePace||null,
+      };
+      const text=await aiStream(
+        `You are Arnold, a precise training analyst. Use only the provided JSON. Be direct, cite real numbers, and avoid fluff.`,
+        `Analyze my training. Today: ${ctx.date}.
+
+DATA:
+${JSON.stringify(ctx,null,2)}
+
+Structure:
+## Training Status
+2-3 sentence executive summary with a 1-10 readiness score.
+
+## What's Working ✓
+2-3 bullets with specific numbers.
+
+## What Needs Attention ⚠
+2-3 bullets with specific numbers and why they matter for the annual mileage and race-pace goals.
+
+## 3 Actions for Next Week
+1. [Specific, measurable]
+2. [Specific, measurable]
+3. [Specific, measurable]`,
+        1500,
+        chunk=>setAiStream2(chunk)
+      );
+      const next={text,date:new Date().toISOString()};
+      localStorage.setItem(AI_KEY,JSON.stringify(next));
+      setAiState(next);
+    }catch(e){
+      setAiStream2(`Error: ${e.message}`);
+    }finally{
+      setAiLoading(false);
+    }
+  };
 
   // Empty state
   if(!activities.length&&!cronometer.length&&!weightData.length){
@@ -2512,13 +2817,54 @@ function TrainingTab({setTab,data}){
   const avgRPE=rpeEntries.length?(rpeEntries.reduce((s,l)=>s+l.rpe,0)/rpeEntries.length).toFixed(1):null;
 
   // ── Focus areas ──
-  const focusItems=[
-    avgWeeklyMi<weeklyRunTarget*0.8?{label:'Weekly volume ↓',value:avgWeeklyMi.toFixed(1),unit:'mi/wk',detail:`${Math.round(avgWeeklyMi/weeklyRunTarget*100)}% of ${weeklyRunTarget} mi goal`,severity:'critical'}:null,
-    (ytdStrength.length/weeksElapsed)<strTarget*0.9?{label:'Strength deficit ↓',value:(ytdStrength.length/weeksElapsed).toFixed(1),unit:'sess/wk',detail:`${Math.round((ytdStrength.length/weeksElapsed)/strTarget*100)}% of ${strTarget}/wk goal`,severity:'critical'}:null,
-    currentBF&&currentBF>22?{label:'Body fat ↑ concern',value:currentBF.toFixed(1),unit:'%',detail:`+${(currentBF-24.7).toFixed(1)}% vs Mar 2025 baseline`,severity:'warn'}:null,
-    avgPaceSecs&&avgPaceSecs>goalPaceSecs*1.02?{label:'Pace near goal ↑',value:fmtPace(avgPaceSecs),unit:'/mi',detail:`${Math.round(avgPaceSecs-goalPaceSecs)}s off ${fmtPace(goalPaceSecs)} target`,severity:'warn'}:null,
-  ].filter(Boolean);
-  while(focusItems.length<4)focusItems.push({label:'On track',value:'✓',unit:'',detail:'Within target range',severity:'ok'});
+  // Each tile reports a status using the locked semantic palette, plus an
+  // ACTION line driven by the Weekly Planner so the dashboard suggests what
+  // to do today (advisory only — the user always decides).
+  const strSessPerWk=ytdStrength.length/weeksElapsed;
+  const planned=todayPlanned();
+  const plannedTypeLabel=planned?({easy_run:'Easy run',long_run:'Long run',tempo:'Tempo',intervals:'Intervals',strength:'Strength',hiit:'HIIT',mobility:'Mobility',cross:'Cross-train',rest:'Rest day',race:'Race day'}[planned.type]||(planned.type.charAt(0).toUpperCase()+planned.type.slice(1))):null;
+  const plannedDist=planned?.distanceMi?` · ${planned.distanceMi}mi`:planned?.durationMin?` · ${planned.durationMin}min`:'';
+  const volPct=avgWeeklyMi/weeklyRunTarget;
+  const strPct=strSessPerWk/strTarget;
+  // ── Attention tiles (dynamic) ──
+  // Build candidates, then keep ONLY items that need eyes today. The rail
+  // already shows state; these tiles surface action. If everything is green
+  // we collapse to a single "all systems nominal" tile.
+  const attention=[];
+  // Today's planned session (always shown if planned, advisory)
+  if(planned&&plannedTypeLabel){
+    attention.push({label:'Today',value:plannedTypeLabel,unit:'',detail:plannedDist?plannedDist.replace(' · ',''):'planned',severity:'neutral',action:'From your weekly plan'});
+  }
+  // Volume gap
+  if(volPct<0.9){
+    attention.push({label:'Volume gap',value:avgWeeklyMi.toFixed(1),unit:'mi/wk',detail:`${Math.round(volPct*100)}% of ${weeklyRunTarget} mi goal`,severity:volPct<0.7?'critical':'warn',action:`Add ${Math.max(2,Math.round((weeklyRunTarget-avgWeeklyMi)*0.5))} easy miles this week`});
+  }
+  // Strength gap
+  if(strPct<0.9){
+    attention.push({label:'Strength gap',value:strSessPerWk.toFixed(1),unit:'sess/wk',detail:`${Math.round(strPct*100)}% of ${strTarget}/wk`,severity:strPct<0.5?'critical':'warn',action:'Schedule a strength block this week'});
+  }
+  // Pace drift
+  if(avgPaceSecs&&avgPaceSecs>goalPaceSecs*1.02){
+    attention.push({label:'Pace drift',value:fmtPace(avgPaceSecs),unit:'/mi',detail:`${Math.round(avgPaceSecs-goalPaceSecs)}s off ${fmtPace(goalPaceSecs)}`,severity:'warn',action:`Add a tempo run at ${fmtPace(goalPaceSecs)}`});
+  }
+  // Recovery flag — HRV or sleep dip
+  const latestHRV=hrvData[0]?.overnightHRV||null;
+  if(avgHRV30&&latestHRV&&latestHRV<avgHRV30*0.9){
+    attention.push({label:'Recovery dip',value:latestHRV,unit:'ms',detail:`HRV ${Math.round((1-latestHRV/avgHRV30)*100)}% below 30-day avg`,severity:'warn',action:'Easy day or full rest'});
+  }
+  // Sleep flag
+  if(latestSleepScore&&latestSleepScore<70){
+    attention.push({label:'Sleep low',value:latestSleepScore,unit:'/100',detail:'Below 70 — recovery compromised',severity:'warn',action:'Aim for earlier bedtime tonight'});
+  }
+  // Nutrition flag — protein under target
+  if(avgProtein&&avgProtein<(getGoals().dailyProteinTarget||150)*0.85){
+    attention.push({label:'Protein low',value:Math.round(avgProtein),unit:'g/day',detail:`${Math.round(avgProtein/(getGoals().dailyProteinTarget||150)*100)}% of target`,severity:'warn',action:'Add a protein-anchored snack'});
+  }
+  // If everything is green, collapse to a single nominal tile
+  if(attention.length===0){
+    attention.push({label:'All systems',value:'nominal',unit:'',detail:'Every metric on or above target',severity:'ok',action:null});
+  }
+  const focusItems=attention;
 
   // ── Blood markers ──
   const labSnaps=[...((data?.labSnapshots)||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
@@ -2586,16 +2932,72 @@ function TrainingTab({setTab,data}){
           <div style={{fontSize:14,fontWeight:500,color:'var(--text-primary)',letterSpacing:'0.02em'}}>◈ Training Intelligence</div>
           <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{yearLabel} · {yearStr}</div>
         </div>
-        <div style={{display:'flex',gap:6}}>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
           <span style={{fontSize:9,padding:'3px 8px',borderRadius:10,background:'rgba(96,165,250,0.12)',color:'#60a5fa'}}>YTD</span>
           <span style={{fontSize:9,padding:'3px 8px',borderRadius:10,background:'rgba(167,139,250,0.12)',color:'#a78bfa'}}>{Math.floor(daysInYear)} days in</span>
+          <button onClick={runTrainingAI} disabled={aiLoading} style={{fontSize:10,padding:'4px 10px',borderRadius:10,background:'rgba(167,139,250,0.15)',color:'#a78bfa',border:'0.5px solid rgba(167,139,250,0.35)',cursor:aiLoading?'wait':'pointer',fontWeight:500,letterSpacing:'0.03em'}}>{aiLoading?'✦ Analyzing…':(aiState?'✦ Refresh AI':'✦ Analyze training')}</button>
         </div>
       </div>
 
+      {/* Cockpit instrument rail */}
+      {(()=>{
+        // Build 8-week history arrays for each gauge from existing weeklyStats
+        // weeklyStats rows: { mi, hrs, pace, weight }
+        const milesHist=weeklyStats.map(w=>w.mi||0).reverse();
+        const hoursHist=weeklyStats.map(w=>w.hrs||0).reverse();
+        const hrvHist=hrvData.slice(0,8).map(h=>h.overnightHRV||null).reverse().filter(Boolean);
+        const bfHist=sortedW.slice(0,8).map(w=>w.bodyFatPct||null).reverse().filter(Boolean);
+        const avgHrHist=ytdRuns.slice(0,8).map(r=>r.avgHR||null).reverse().filter(Boolean);
+        const rhrHist=sortedSleep.slice(0,8).map(s=>s.restingHR||null).reverse().filter(Boolean);
+        const G=getGoals();
+        const sleepScoreHist=sortedSleep.slice(0,8).map(s=>s.sleepScore||null).reverse().filter(Boolean);
+        const proteinHist=recentNut.slice(0,8).map(n=>n.protein||null).reverse().filter(Boolean);
+        return <CockpitRail gauges={[
+          {label:'Weekly miles',  value:Number(avgWeeklyMi.toFixed(1)), unit:'mi', goal:G.weeklyRunDistanceTarget, history:milesHist, color:'#60a5fa'},
+          {label:'Weekly hours',  value:Number(avgWeeklyHrsTotal.toFixed(1)), unit:'hrs', goal:G.weeklyTimeTargetHrs, history:hoursHist, color:'#a78bfa'},
+          {label:'Avg run HR',    value:avgHR||null, unit:'bpm', goal:G.targetAvgRunHR, invert:true, history:avgHrHist, color:'#fbbf24'},
+          {label:'RHR',           value:latestRHR||null, unit:'bpm', goal:G.targetRHR, invert:true, history:rhrHist, color:'#f59e0b'},
+          {label:'HRV',           value:hrvHist.slice(-1)[0]||null, unit:'ms', goal:G.targetHRV, history:hrvHist, color:'#34d399'},
+          {label:'Sleep score',   value:latestSleepScore||null, unit:'/100', goal:G.targetSleepScore, history:sleepScoreHist, color:'#22d3ee'},
+          {label:'Protein',       value:avgProtein||null, unit:'g', goal:G.dailyProteinTarget, history:proteinHist, color:'#f472b6'},
+          {label:'Body fat',      value:currentBF?Number(currentBF.toFixed(1)):null, unit:'%', goal:G.targetBodyFat, invert:true, history:bfHist, color:'#f87171'},
+        ]}/>;
+      })()}
+
       {/* Section 2: Focus areas */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4, minmax(0,1fr))',gap:8}}>
+      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(focusItems.length,4)}, minmax(0,1fr))`,gap:8}}>
         {focusItems.slice(0,4).map((f,i)=><FocusCard key={i} {...f}/>)}
       </div>
+
+      {/* Race Focus + Observations — side by side */}
+      {(()=>{
+        const races=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
+        const nowD=new Date();
+        const upcoming=races.filter(r=>r.date&&new Date(r.date)>=nowD).sort((a,b)=>new Date(a.date)-new Date(b.date));
+        const nr=upcoming[0];
+        const runs30=ytdRuns.filter(a=>new Date(a.date)>=thirtyDays);
+        const paces30=runs30.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
+        const avgPace30=paces30.length?paces30.reduce((s,v)=>s+v,0)/paces30.length:null;
+        return(
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
+            <RaceFocusCard race={nr} goalPaceSecs={goalPaceSecs} avgPace30={avgPace30} fmtPace={fmtPace} planned={planned} plannedTypeLabel={plannedTypeLabel}/>
+            <div style={{minWidth:0}}>
+              <AnnotationStrip annotations={trainingAnnotations()}/>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* AI analysis card */}
+      {(aiLoading||aiStream2||aiState)&&(
+        <div style={{...panelStyle,borderLeft:'3px solid #a78bfa'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>✦ Training Analysis</span>
+            <span style={{fontSize:9,color:'var(--text-muted)'}}>{aiLoading?'streaming…':(aiState?.date?new Date(aiState.date).toLocaleString():'')}</span>
+          </div>
+          <div style={{fontSize:12,lineHeight:1.6,color:'var(--text-secondary)',whiteSpace:'pre-wrap'}}>{aiLoading?aiStream2:(aiState?.text||'')}</div>
+        </div>
+      )}
 
       {/* Section 3: Two vertical panels */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
@@ -3261,6 +3663,8 @@ ${JSON.stringify(lb[1]?.markers||{})}
 
 DAILY LOGS (last 7): ${JSON.stringify((data.logs||[]).slice(0,7))}
 
+SUPPLEMENT STACK: ${(()=>{try{const cat=getSupCatalog();const st=getSupStack();const by=Object.fromEntries(cat.map(s=>[s.id,s]));const adh=getSupAdherence(7);const lines=st.map(e=>{const s=by[e.supplementId];return s?`${s.brand} ${s.product} (${e.timeOfDay}${e.doseMultiplier!==1?`, ${e.doseMultiplier}x`:''})`:null;}).filter(Boolean);return `${lines.length} daily · ${adh.pct}% 7-day adherence\n${lines.join('; ')}`;}catch{return 'n/a';}})()}
+
 CONTEXT: Clinical tests are 6-month baselines. Daily Garmin/Cronometer data is the ongoing signal. Training data from Garmin CSV is prepended as [ARNOLD TRAINING CONTEXT]. Be precise, cite actual numbers, and connect metrics across test types. Use optimal longevity ranges, not just clinical normals.`;
 }
 
@@ -3282,7 +3686,7 @@ function ProfileSettings({data,persist,showToast}){
   const handleSave=async()=>{
     localStorage.setItem('arnold:profile',JSON.stringify(form));
     try{
-      await persist({...data,profile:{name:form.name,goal:form.goal,age:form.age,height:form.height}});
+      await persist({...data,profile:{name:form.name,alias:form.alias,birthDate:form.birthDate,height:form.height,avatar:form.avatar,goal:form.goal,age:form.age}});
     }catch{}
     setSaved(true);
     setTimeout(()=>setSaved(false),2000);
@@ -3298,11 +3702,32 @@ function ProfileSettings({data,persist,showToast}){
         onChange={e=>update(key,e.target.value)} placeholder={placeholder||""} style={S.inp}/>
     </div>
   );
+  const normalizeDate=(v)=>{
+    if(!v)return v;const s=String(v).trim();
+    let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);if(m)return `${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}-${m[1]}`;
+    m=s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);if(m){let y=m[3];if(y.length===2)y='19'+y;return `${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}-${y}`;}
+    m=s.match(/^(\d{2})(\d{2})(\d{4})$/);if(m)return `${m[1]}-${m[2]}-${m[3]}`;
+    m=s.match(/^(\d{4})(\d{2})(\d{2})$/);if(m)return `${m[2]}-${m[3]}-${m[1]}`;
+    return s;
+  };
+  const normalizeHeight=(v)=>{
+    if(!v)return v;const s=String(v).trim().toLowerCase();
+    let m=s.match(/^(\d)[\s'\-]*(\d{1,2})"?$/);if(m)return `${m[1]}'${m[2]}"`;
+    m=s.match(/^(\d)(\d{2})$/);if(m)return `${m[1]}'${m[2]}"`;
+    m=s.match(/^(\d{2,3})\s*cm$/);if(m)return `${m[1]}cm`;
+    m=s.match(/^(\d{2,3})$/);if(m){const n=parseInt(m[1]);if(n>=120&&n<=230)return `${n}cm`;}
+    return v;
+  };
+  const normalizers={birthDate:normalizeDate,height:normalizeHeight};
+  const commitField=(key)=>{const fn=normalizers[key];if(fn)update(key,fn(form[key]));};
   const textField=(label,key,placeholder)=>(
     <div key={key} style={S.field}>
       <label style={S.fl}>{label}</label>
       <input type="text" value={form[key]??""}
-        onChange={e=>update(key,e.target.value)} placeholder={placeholder||""} style={S.inp}/>
+        onChange={e=>update(key,e.target.value)}
+        onBlur={()=>commitField(key)}
+        onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();commitField(key);e.target.blur();}}}
+        placeholder={placeholder||""} style={S.inp}/>
     </div>
   );
 
@@ -3313,14 +3738,51 @@ function ProfileSettings({data,persist,showToast}){
       {/* Personal info — compact */}
       <div style={{...S.lg,marginTop:4}}>
         <div style={S.gt}>◐ Personal</div>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:"clamp(10px,1vw,16px)"}}>
-          {textField("Name","name","")}
-          {numField("Age","age","")}
-          {numField("Height","height","cm")}
+        <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:10,alignItems:"stretch"}}>
+          {/* Avatar uploader — spans top of Name to bottom of BirthDate */}
+          <label style={{cursor:"pointer",display:"flex",height:64,width:64,marginTop:21,flexShrink:0}}>
+              <div style={{width:"100%",height:"100%",borderRadius:12,background:"var(--accent-dim)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:48,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)",overflow:"hidden"}}>
+                {form.avatar?<img src={form.avatar} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:(form.alias?.[0]||form.name?.[0]||"A").toUpperCase()}
+              </div>
+              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                const f=e.target.files?.[0];if(!f)return;
+                const r=new FileReader();r.onload=()=>update("avatar",r.result);r.readAsDataURL(f);
+              }}/>
+          </label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"clamp(10px,1vw,16px)",alignContent:"stretch"}}>
+            {textField("Name","name","")}
+            {textField("Alias","alias","")}
+            {textField("Birth date","birthDate","YYYY-MM-DD")}
+            {textField("Height","height","e.g. 5'10\" or 178cm")}
+          </div>
         </div>
-        {textField("Main Goal","goal","")}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:10,color:C.m,letterSpacing:"0.06em",textTransform:"uppercase"}}>Avatar library</span>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+            <div onClick={()=>update("avatar","")} title="Initial only"
+              style={{width:26,height:26,borderRadius:6,overflow:"hidden",cursor:"pointer",border:!form.avatar?"1.5px solid var(--text-accent)":"0.5px solid var(--border-default)",background:"var(--accent-dim)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)"}}>
+              {(form.alias?.[0]||form.name?.[0]||"A").toUpperCase()}
+            </div>
+            {AVATAR_LIBRARY.map(a=>(
+              <div key={a.id} onClick={()=>update("avatar",a.src)} title={a.theme}
+                style={{width:26,height:26,borderRadius:6,overflow:"hidden",cursor:"pointer",border:form.avatar===a.src?"1.5px solid var(--text-accent)":"0.5px solid var(--border-default)"}}>
+                <img src={a.src} alt="" style={{width:"100%",height:"100%",display:"block"}}/>
+              </div>
+            ))}
+          </div>
+          <span style={{fontSize:10,color:C.m,cursor:"pointer"}} onClick={()=>document.querySelector('input[type=file]')?.click()}>or upload own</span>
+          {form.avatar&&<span style={{fontSize:10,color:C.m,cursor:"pointer"}} onClick={()=>update("avatar","")}>remove</span>}
+        </div>
       </div>
 
+      <button style={S.sb} onClick={handleSave}>{saved?'✓ Saved':'Save Profile'}</button>
+
+      <div style={{height:1,background:C.b,margin:"4px 0"}}/>
+      <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Reset Arnold</div>
+      <button style={S.db} onClick={()=>{if(window.confirm("This will permanently delete all your data. Are you sure?"))persist(DD).then(()=>showToast("✓ Arnold reset"));}}>Reset All Data</button>
+
+      {/* legacy block hidden */}
+      {false&&<>
       {/* ── RUN GOALS ── */}
       <div style={{...S.lg,marginTop:4}}>
         <div style={S.gt}>◉ Run Goals</div>
@@ -3378,6 +3840,72 @@ function ProfileSettings({data,persist,showToast}){
       </div>
 
       <button style={S.sb} onClick={handleSave}>{saved?'✓ Saved':'Save Profile & Goals'}</button>
+
+      {/* ── GOALS HUB ── */}
+      <GoalsHub showToast={showToast}/>
+
+      {/* ── WEEKLY PLANNER ── */}
+      <WeeklyPlanner showToast={showToast}/>
+
+      {/* ── IMPORT DIAGNOSTICS ── */}
+      <ImportDiagnostics/>
+
+      {/* ── BULK HISTORICAL IMPORT ── */}
+      <div style={S.lg}>
+        <div style={S.gt}>⇪ Bulk Historical Import</div>
+        <div style={{fontSize:11,color:C.m,lineHeight:1.5}}>
+          Loads all CSVs from <code style={{color:C.ta}}>public/data-imports/</code>: Activities, Cronometer, HRV, Sleep, Weight. Safe to re-run — merges by date.
+        </div>
+        <button
+          style={{...S.sb,background:C.ad,borderColor:C.ab2,color:C.ta}}
+          onClick={async()=>{
+            const strip=t=>t.replace(/^\uFEFF/,'');
+            const load=async(name)=>{
+              const r=await fetch(`/data-imports/${name}`);
+              if(!r.ok)throw new Error(`${name}: HTTP ${r.status}`);
+              return strip(await r.text());
+            };
+            const report=[];
+            try{
+              // Writes to the SAME storage keys the Training/Weekly tabs read from.
+              // storage.merge() dedupes by date and sorts.
+              try{
+                const parsed=parseActivitiesCSV(await load('Activities.csv'));
+                storage.set('activities',parsed);const merged=parsed;
+                report.push(`✓ Activities: ${parsed.length} parsed, ${merged.length} total`);
+              }catch(e){report.push(`✗ Activities: ${e.message}`);}
+              try{
+                const parsed=parseCronometerCSV(await load('Cronometer-dailysummary.csv'));
+                storage.set('cronometer',parsed);const merged=parsed;
+                report.push(`✓ Cronometer: ${parsed.length} parsed, ${merged.length} total`);
+              }catch(e){report.push(`✗ Cronometer: ${e.message}`);}
+              try{
+                const parsed=parseHRVCSV(await load('HRV Status.csv'));
+                storage.set('hrv',parsed);const merged=parsed;
+                report.push(`✓ HRV: ${parsed.length} parsed, ${merged.length} total`);
+              }catch(e){report.push(`✗ HRV: ${e.message}`);}
+              try{
+                const parsed=parseSleepCSV(await load('Sleep.csv'));
+                storage.set('sleep',parsed);const merged=parsed;
+                report.push(`✓ Sleep: ${parsed.length} parsed, ${merged.length} total`);
+              }catch(e){report.push(`✗ Sleep: ${e.message}`);}
+              try{
+                const parsed=parseWeightCSV(await load('Weight.csv'));
+                storage.set('weight',parsed);const merged=parsed;
+                report.push(`✓ Weight: ${parsed.length} parsed, ${merged.length} total`);
+              }catch(e){report.push(`✗ Weight: ${e.message}`);}
+              showToast&&showToast(report.join(" · "));
+              console.log("[Bulk Import]\n"+report.join("\n"));
+              alert("Bulk import complete:\n\n"+report.join("\n")+"\n\nReloading to refresh all tabs…");
+              window.location.reload();
+            }catch(e){
+              showToast&&showToast("Bulk import failed: "+e.message);
+              alert("Bulk import failed: "+e.message);
+            }
+          }}
+        >⇪ Load Historical CSVs</button>
+      </div>
+
       <div style={{height:1,background:C.b,margin:"4px 0"}}/>
       <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Danger Zone</div>
       <button style={S.db} onClick={()=>{if(window.confirm("This will permanently delete all your data. Are you sure?"))persist(DD).then(()=>showToast("✓ Data cleared"));}}>Delete All Data</button>
@@ -3386,6 +3914,7 @@ function ProfileSettings({data,persist,showToast}){
         <span>{(data.labSnapshots||[]).length} lab snapshots</span>
         <span>{(data.clinicalTests||[]).length} clinical tests</span>
       </div>
+      </>}
     </div>
   );
 }
@@ -3446,9 +3975,9 @@ const S={
   logo:{fontSize:22,color:C.acc,fontFamily:"var(--font-mono)"},
   an:{fontSize:"clamp(11px,0.5vw + 8px,14px)",fontWeight:600,letterSpacing:"0.18em",color:C.t,fontFamily:"var(--font-mono)"},
   as:{fontSize:10,color:C.m,letterSpacing:"0.10em",fontWeight:400},
-  hr:{display:"flex",alignItems:"center",gap:8},
-  un:{fontSize:"clamp(10px,0.3vw + 9px,12px)",color:C.m},
-  dc2:{fontSize:11,color:C.m,background:C.elev,border:"0.5px solid var(--border-subtle)",borderRadius:5,padding:"3px 10px",fontFamily:"var(--font-mono)"},
+  hr:{display:"flex",alignItems:"center",gap:14},
+  un:{fontSize:"clamp(14px,0.4vw + 12px,18px)",color:C.t,fontFamily:'"Snell Roundhand","Apple Chancery","Brush Script MT","Lucida Handwriting",cursive',fontStyle:"italic",fontWeight:500,letterSpacing:"0.02em",lineHeight:1},
+  dc2:{fontSize:11,color:C.m,background:"transparent",border:"none",padding:0,fontFamily:"var(--font-mono)",lineHeight:1},
   nav:{display:"flex",borderBottom:`0.5px solid ${C.bs}`,background:C.bg,overflowX:"auto",height:"clamp(52px,5vw,64px)",position:"sticky",top:"clamp(52px,5vw,64px)",zIndex:9},
   nb:{flex:1,minWidth:44,padding:"0 4px",background:"none",border:"none",borderBottom:"2px solid transparent",color:C.s,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,transition:"color var(--transition)",fontFamily:"var(--font-ui)"},
   nba:{color:C.ta,borderBottom:`2px solid ${C.acc}`},

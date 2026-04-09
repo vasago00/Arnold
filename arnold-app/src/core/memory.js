@@ -1,67 +1,27 @@
-// ─── ARNOLD Memory System ─────────────────────────────────────────────────────
-// Single service for all arnold-memory persistence. Uses window.storage (Tauri/
-// Claude Desktop bridge) with localStorage as fallback.
+// ─── ARNOLD Memory (compatibility shim) ──────────────────────────────────────
+// This file used to maintain its own `arnold-memory:*` localStorage namespace,
+// which caused silent data divergence with `storage.js` (`arnold:*`).
+//
+// As of Phase 1 of the refactor, memory.js is a thin async wrapper over the
+// unified `storage` service in storage.js. All reads/writes go through the
+// SAME canonical keys. Existing call sites (which used the async signatures)
+// keep working without changes.
+//
+// New code should import { storage } from './storage.js' directly.
 
-const KEYS = {
-  workouts:       'arnold-memory:workouts',
-  races:          'arnold:races',
-  garmin:         'arnold-memory:garmin',
-  cronometer:     'arnold-memory:cronometer',
-  garminActivities: 'arnold-memory:garmin-activities',
-  garminHRV:      'arnold-memory:garmin-hrv',
-  garminSleep:    'arnold-memory:garmin-sleep',
-  garminWeight:   'arnold-memory:garmin-weight',
-  importHistory:  'arnold-memory:import-history',
-  index:          'arnold-memory:index',
-};
+import { storage } from './storage.js';
 
-async function storageGet(key) {
-  try {
-    if (window.storage?.get) {
-      const r = await window.storage.get(key);
-      return r?.value ? JSON.parse(r.value) : null;
-    }
-  } catch {}
-  try {
-    const v = localStorage.getItem(key);
-    return v ? JSON.parse(v) : null;
-  } catch {}
-  return null;
-}
-
-async function storageSet(key, data) {
-  const json = JSON.stringify(data);
-  try {
-    if (window.storage?.set) { await window.storage.set(key, json); return; }
-  } catch {}
-  try { localStorage.setItem(key, json); } catch {}
-}
-
-async function updateIndex(type, entries) {
-  const idx = (await storageGet(KEYS.index)) || {};
-  const sorted = [...entries].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  idx[type] = {
-    count: entries.length,
-    lastUpdated: new Date().toISOString(),
-    dateRange: entries.length
-      ? { oldest: sorted[0]?.date || null, newest: sorted[sorted.length - 1]?.date || null }
-      : null,
-  };
-  await storageSet(KEYS.index, idx);
-}
-
-// ── Workouts ──────────────────────────────────────────────────────────────────
+// ─── Workouts ──────────────────────────────────────────────────────────────────
 export async function getWorkouts() {
-  return (await storageGet(KEYS.workouts)) || [];
+  return storage.get('workouts') || [];
 }
 
 export async function saveWorkout(entry) {
   const all = await getWorkouts();
   const idx = all.findIndex(w => w.id === entry.id);
   if (idx >= 0) all[idx] = entry; else all.unshift(entry);
-  all.sort((a, b) => b.date.localeCompare(a.date));
-  await storageSet(KEYS.workouts, all);
-  await updateIndex('workouts', all);
+  all.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  storage.set('workouts', all, { skipValidation: true });
   return all;
 }
 
@@ -70,95 +30,99 @@ export async function findRelevantWorkouts(type, limit = 3) {
   return all.filter(w => w.type === type).slice(0, limit);
 }
 
-// ── Races ─────────────────────────────────────────────────────────────────────
+// ─── Races ────────────────────────────────────────────────────────────────────
 export async function getRaces() {
-  return (await storageGet(KEYS.races)) || [];
+  return storage.get('races') || [];
 }
 
 export async function saveRaces(races) {
-  await storageSet(KEYS.races, races);
-  await updateIndex('races', races);
+  storage.set('races', races, { skipValidation: true });
   return races;
 }
 
-// ── Garmin ────────────────────────────────────────────────────────────────────
+// ─── Garmin (legacy aggregate, kept for Training tab compatibility) ──────────
 export async function getGarmin() {
-  return (await storageGet(KEYS.garmin)) || [];
+  // Falls back to the unified activities collection
+  return storage.get('activities') || [];
 }
 
 export async function saveGarmin(entries) {
-  await storageSet(KEYS.garmin, entries);
-  await updateIndex('garmin', entries);
+  // Merge into activities so the Training tab and other readers see them
+  const existing = storage.get('activities') || [];
+  const map = new Map(existing.map(e => [`${e.date}|${e.title || ''}`, e]));
+  for (const e of entries) {
+    map.set(`${e.date}|${e.title || ''}`, { ...(map.get(`${e.date}|${e.title || ''}`) || {}), ...e });
+  }
+  storage.set('activities', [...map.values()].sort((a, b) => (b.date || '').localeCompare(a.date || '')));
   return entries;
 }
 
-// ── Cronometer ────────────────────────────────────────────────────────────────
+// ─── Cronometer ───────────────────────────────────────────────────────────────
 export async function getCronometer() {
-  return (await storageGet(KEYS.cronometer)) || [];
+  return storage.get('cronometer') || [];
 }
 
 export async function saveCronometer(entries) {
-  await storageSet(KEYS.cronometer, entries);
-  await updateIndex('cronometer', entries);
+  storage.set('cronometer', entries);
   return entries;
 }
 
-// ── Garmin Activities ────────────────────────────────────────────────────────
+// ─── Garmin Activities ────────────────────────────────────────────────────────
 export async function getGarminActivities() {
-  return (await storageGet(KEYS.garminActivities)) || [];
+  return storage.get('activities') || [];
 }
 export async function saveGarminActivities(entries) {
-  await storageSet(KEYS.garminActivities, entries);
-  await updateIndex('garminActivities', entries);
+  storage.set('activities', entries);
   return entries;
 }
 
-// ── Garmin HRV ───────────────────────────────────────────────────────────────
+// ─── Garmin HRV ───────────────────────────────────────────────────────────────
 export async function getGarminHRV() {
-  return (await storageGet(KEYS.garminHRV)) || [];
+  return storage.get('hrv') || [];
 }
 export async function saveGarminHRV(entries) {
-  await storageSet(KEYS.garminHRV, entries);
-  await updateIndex('garminHRV', entries);
+  storage.set('hrv', entries);
   return entries;
 }
 
-// ── Garmin Sleep ─────────────────────────────────────────────────────────────
+// ─── Garmin Sleep ─────────────────────────────────────────────────────────────
 export async function getGarminSleep() {
-  return (await storageGet(KEYS.garminSleep)) || [];
+  return storage.get('sleep') || [];
 }
 export async function saveGarminSleep(entries) {
-  await storageSet(KEYS.garminSleep, entries);
-  await updateIndex('garminSleep', entries);
+  storage.set('sleep', entries);
   return entries;
 }
 
-// ── Garmin Weight ────────────────────────────────────────────────────────────
+// ─── Garmin Weight ────────────────────────────────────────────────────────────
 export async function getGarminWeight() {
-  return (await storageGet(KEYS.garminWeight)) || [];
+  return storage.get('weight') || [];
 }
 export async function saveGarminWeight(entries) {
-  await storageSet(KEYS.garminWeight, entries);
-  await updateIndex('garminWeight', entries);
+  storage.set('weight', entries);
   return entries;
 }
 
-// ── Import History ───────────────────────────────────────────────────────────
+// ─── Import History ───────────────────────────────────────────────────────────
 export async function getImportHistory() {
-  return (await storageGet(KEYS.importHistory)) || [];
+  return storage.get('importHistory') || [];
 }
 export async function saveImportHistory(entries) {
-  await storageSet(KEYS.importHistory, entries.slice(0, 20));
+  storage.set('importHistory', entries.slice(0, 20), { skipValidation: true });
   return entries;
 }
 
-// ── Memory index ──────────────────────────────────────────────────────────────
+// ─── Memory index (rebuilt on demand from inventory) ─────────────────────────
 export async function getMemoryIndex() {
-  return (await storageGet(KEYS.index)) || {};
+  const inv = storage.inventory();
+  const idx = {};
+  for (const [name, count] of Object.entries(inv)) {
+    if (count > 0) idx[name] = { count, lastUpdated: new Date().toISOString() };
+  }
+  return idx;
 }
 
-// ── AI context builder ────────────────────────────────────────────────────────
-// Builds the memory recall block prepended to AI prompts
+// ─── AI context builder ───────────────────────────────────────────────────────
 export async function buildWorkoutMemoryContext(type, limit = 3) {
   const workouts = await findRelevantWorkouts(type, limit);
   if (!workouts.length) return '';

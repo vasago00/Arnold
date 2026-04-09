@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@garmin/fitsdk": "^21.195.0",
+    "dexie": "^4.0.10",
     "ical.js": "^2.2.1",
     "pdfjs-dist": "^5.6.205",
     "react": "^19.2.4",

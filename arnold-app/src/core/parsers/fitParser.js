@@ -111,9 +111,23 @@ export async function parseFITFile(file) {
   const avgVerticalRatio = session.avgVerticalRatio ? parseFloat(session.avgVerticalRatio) : null;
   const avgGroundContactTime = session.avgStanceTime ? Math.round(parseFloat(session.avgStanceTime)) : null;
 
-  // Sets count (strength)
-  const setsCount = messages.setMesgs?.length || null;
-  const activeDuration = session.totalTimerTime ? Math.round(parseFloat(session.totalTimerTime)) : durationSecs;
+  // Moving time — totalTimerTime is the active (moving) time in FIT sessions
+  const movingTimeSecs = session.totalTimerTime ? Math.round(parseFloat(session.totalTimerTime)) : null;
+
+  // Sets + reps (strength)
+  const setMesgs = messages.setMesgs || [];
+  const setsCount = setMesgs.length || null;
+  const totalReps = setMesgs.reduce((sum, s) => sum + (parseInt(s.repetitions) || 0), 0) || null;
+  const activeDuration = movingTimeSecs || durationSecs;
+
+  // Body battery drain (session field if present)
+  const bodyBatteryDrain = (() => {
+    const start = session.bodyBatteryStart ?? session.startingBodyBattery;
+    const end = session.bodyBatteryEnd ?? session.endingBodyBattery;
+    if (start != null && end != null) return Math.round(parseFloat(start) - parseFloat(end));
+    if (session.bodyBatteryDrain != null) return Math.round(parseFloat(session.bodyBatteryDrain));
+    return null;
+  })();
 
   return {
     // Core
@@ -177,6 +191,9 @@ export async function parseFITFile(file) {
 
     // Strength specific
     setsCount,
+    totalReps,
+    movingTimeSecs,
+    bodyBatteryDrain,
 
     source: { type: 'fit', filename: file.name },
   };

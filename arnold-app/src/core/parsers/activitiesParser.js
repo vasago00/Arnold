@@ -68,8 +68,22 @@ export function parseActivitiesCSV(text) {
       aerobicTE: num(g(row, 'aerobic te')),
       avgCadence: int(g(row, 'avg run cadence')),
       maxCadence: int(g(row, 'max run cadence')),
-      avgPaceRaw: g(row, 'avg pace') !== '--' ? g(row, 'avg pace') : null,
-      bestPaceRaw: g(row, 'best pace') !== '--' ? g(row, 'best pace') : null,
+      // Garmin export: runs store pace under "Avg Speed" (e.g. "9:58"), not "Avg Pace".
+      // Prefer Avg Pace → Avg GAP (grade-adjusted) → Avg Speed.
+      avgPaceRaw: (() => {
+        const candidates = [g(row, 'avg pace'), g(row, 'avg gap'), g(row, 'avg speed')];
+        for (const c of candidates) {
+          if (c && c !== '--' && /^\d{1,2}:\d{2}/.test(c)) return c;
+        }
+        return null;
+      })(),
+      bestPaceRaw: (() => {
+        const candidates = [g(row, 'best pace'), g(row, 'max speed')];
+        for (const c of candidates) {
+          if (c && c !== '--' && /^\d{1,2}:\d{2}/.test(c)) return c;
+        }
+        return null;
+      })(),
       totalAscentFt,
       totalAscentM: totalAscentFt != null ? Math.round(totalAscentFt * 0.3048) : null,
       totalDescentFt,
@@ -78,6 +92,8 @@ export function parseActivitiesCSV(text) {
       avgPower: int(g(row, 'avg power')),
       maxPower: int(g(row, 'max power')),
       steps: int(g(row, 'steps')),
+      totalReps: int(g(row, 'total reps')),
+      setsCount: int(g(row, 'total sets')),
       bodyBatteryDrain: int(g(row, 'body battery drain')),
       movingTimeSecs,
       trainingStressScore: num(g(row, 'training stress score')),
