@@ -251,36 +251,36 @@ export const TIME_SLOTS = [
 
 // ─── Storage helpers ─────────────────────────────────────────────────────────
 export function getCatalog() {
-  const stored = storage.get('supplements') || [];
+  const stored = storage.get('supplementsCatalog') || [];
   // Seed on first run
   if (!stored.length) {
-    storage.set('supplements', SEED_CATALOG, { skipValidation: true });
+    storage.set('supplementsCatalog', SEED_CATALOG, { skipValidation: true });
     return SEED_CATALOG;
   }
   return stored;
 }
 
 export function saveCatalog(catalog) {
-  storage.set('supplements', catalog, { skipValidation: true });
+  storage.set('supplementsCatalog', catalog, { skipValidation: true });
 }
 
 export function getStack() {
-  const stored = storage.get('supplementStack');
+  const stored = storage.get('supplementsStack');
   if (!stored) {
-    storage.set('supplementStack', DEFAULT_STACK, { skipValidation: true });
+    storage.set('supplementsStack', DEFAULT_STACK, { skipValidation: true });
     return DEFAULT_STACK;
   }
   return stored;
 }
 
 export function saveStack(stack) {
-  storage.set('supplementStack', stack, { skipValidation: true });
+  storage.set('supplementsStack', stack, { skipValidation: true });
 }
 
 // ─── Daily log ───────────────────────────────────────────────────────────────
 // Shape: { 'YYYY-MM-DD': { [stackEntryId]: timestamp } }
 export function getSupplementLog() {
-  return storage.get('supplementLog') || {};
+  return storage.get('supplementsLog') || {};
 }
 
 export function getTodayTaken(dateStr) {
@@ -297,7 +297,7 @@ export function toggleTaken(dateStr, stackEntryId) {
     today[stackEntryId] = Date.now();
   }
   log[dateStr] = today;
-  storage.set('supplementLog', log, { skipValidation: true });
+  storage.set('supplementsLog', log, { skipValidation: true });
   return today;
 }
 
@@ -312,7 +312,7 @@ export function takeAllInSlot(dateStr, slotId) {
     }
   }
   log[dateStr] = today;
-  storage.set('supplementLog', log, { skipValidation: true });
+  storage.set('supplementsLog', log, { skipValidation: true });
   return today;
 }
 

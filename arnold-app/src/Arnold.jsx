@@ -19,7 +19,7 @@ import { detectCSVType } from "./core/parsers/detectType.js";
 import { fetchAndParseICS } from "./core/parsers/icsParser.js";
 import { parseFITFile } from "./core/parsers/fitParser.js";
 import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronometerParser.js";
-import { storage, migrateLegacyStorage, attachEngine } from "./core/storage.js";
+import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine } from "./core/storage.js";
 import * as dbEngine from "./core/db.js";
 import { fmtHMS, fmtHM, hydrationFor, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
 import { ImportDiagnostics } from "./components/ImportDiagnostics.jsx";
@@ -325,6 +325,7 @@ export default function App(){
     if(syncPayload&&syncPayload!=='local'){applySyncData(syncPayload,showToast);return;}
     // Phase 1: one-shot migration from legacy arnold-memory:* keys to unified arnold:* store
     migrateLegacyStorage();
+    migrateSupplementKeys();
     // Phase 7: hydrate IndexedDB engine, then attach so all storage calls route through it
     dbEngine.hydrateDB().then(()=>{attachEngine(dbEngine);}).catch(e=>console.warn('IDB hydration failed, using localStorage',e));
     loadData().then(d=>{
@@ -350,10 +351,10 @@ export default function App(){
         <button className="arnold-mobile-back" onClick={()=>setTab('training')}>⬡</button>
       )}
       <header style={S.hdr} className="arnold-hdr">
-        {(()=>{const lp=(()=>{try{return JSON.parse(localStorage.getItem('arnold:profile')||'{}');}catch{return{};}})();const p={...(data.profile||{}),...lp};return(
+        {(()=>{const lp=storage.get('profile')||{};const p={...(data.profile||{}),...lp};return(
 <div style={S.hl}><div style={{width:44,height:44,borderRadius:8,background:"var(--accent-dim)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)",overflow:"hidden",flexShrink:0}}>{p.avatar?<img src={p.avatar} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:(p.alias?.[0]||p.name?.[0]||"A").toUpperCase()}</div><div style={{display:"flex",flexDirection:"column",gap:2,justifyContent:"center"}}><div style={S.an}>ARNOLD</div><div style={S.as}>Health Intelligence</div></div></div>
 );})()}
-        <div style={S.hr} className="arnold-hdr-right">{(()=>{let n=data.profile?.name;try{const lp=JSON.parse(localStorage.getItem('arnold:profile')||'{}');n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
+        <div style={S.hr} className="arnold-hdr-right">{(()=>{let n=data.profile?.name;try{const lp=storage.get('profile')||{};n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
       </header>
       <nav style={S.nav} className="arnold-nav">
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
@@ -1265,7 +1266,7 @@ function LogDay({data,persist,showToast}){
   useEffect(()=>{
     const today=td();
     try{
-      const logs=JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');
+      const logs=storage.get('dailyLogs')||[];
       const todayEntry=logs.find(e=>e.date===today);
       if(todayEntry){
         const fitIsToday=todayEntry.fitData&&(!todayEntry.fitData.date||todayEntry.fitData.date===today);
@@ -1285,15 +1286,12 @@ function LogDay({data,persist,showToast}){
   useEffect(()=>{
     if(!todayFIT&&!todayNutrition)return;
     const today=td();
-    const existing=(()=>{
-      try{return JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');}
-      catch{return[];}
-    })();
+    const existing=storage.get('dailyLogs')||[];
     const todayEntry=existing.find(e=>e.date===today)||{date:today,notes:''};
     const updated={...todayEntry,fitData:todayFIT||todayEntry.fitData,nutData:todayNutrition||todayEntry.nutData,savedAt:new Date().toISOString()};
     const filtered=existing.filter(e=>e.date!==today);
     filtered.unshift(updated);
-    localStorage.setItem('arnold:daily-logs',JSON.stringify(filtered.slice(0,90)));
+    storage.set('dailyLogs',filtered.slice(0,90),{skipValidation:true});
   },[todayFIT,todayNutrition]);
 
   const handleSave=()=>{
@@ -1305,14 +1303,11 @@ function LogDay({data,persist,showToast}){
       fitData:todayFIT||null,
       nutData:todayNutrition||null,
     };
-    const existing=(()=>{
-      try{return JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');}
-      catch{return[];}
-    })();
+    const existing=storage.get('dailyLogs')||[];
     const updated=existing.filter(e=>e.date!==today);
     updated.unshift(entry);
     const trimmed=updated.slice(0,90);
-    localStorage.setItem('arnold:daily-logs',JSON.stringify(trimmed));
+    storage.set('dailyLogs',trimmed,{skipValidation:true});
     // Also call legacy save() for backward compat with data.logs
     save();
     setSaveStatus('saved');
@@ -1905,7 +1900,7 @@ function LogDay({data,persist,showToast}){
             <NutritionInputPanel date={todayStr} onUpdate={()=>{
               // Refresh nutrition data from the new nutrition-log store
               try{
-                const entries=JSON.parse(localStorage.getItem('arnold:nutrition-log')||'[]')
+                const entries=(storage.get('nutritionLog')||[])
                   .filter(e=>e.date===todayStr);
                 if(entries.length>0){
                   const tot={calories:0,protein:0,carbs:0,fat:0,fiber:0,sugar:0,water:0};
@@ -2915,8 +2910,8 @@ Structure:
   // 2. Daily-tab saved workouts (arnold:workouts)
   const todayWorkouts=(storage.get('workouts')||[]).filter(w=>w.date===todayDateStr);
   // 3. Daily logs (arnold:daily-logs) — FIT uploads stored as fitData nested object
-  // Note: 'daily-logs' is NOT in storage KEYS map, so read raw from localStorage
-  const allDailyLogs=(()=>{try{return JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');}catch{return[];}})();
+  // Phase 1: daily-logs now in KEYS map as 'dailyLogs'
+  const allDailyLogs=storage.get('dailyLogs')||[];
   const todayDailyLogs=allDailyLogs.filter(l=>l.date===todayDateStr);
   const todayHasLog=todayDailyLogs.some(l=>l.fitData||l.workout||l.distanceMi||l.duration);
   const planCompleted=(()=>{
@@ -3822,7 +3817,7 @@ function ProfileSettings({data,persist,showToast}){
   // and never define an inner input component (causes remount on every keystroke).
   const[form,setForm]=useState(()=>{
     try{
-      const stored=JSON.parse(localStorage.getItem('arnold:profile')||'{}');
+      const stored=storage.get('profile')||{};
       return{...(data?.profile||{}),...stored};
     }catch{return{...(data?.profile||{})};}
   });
@@ -3830,7 +3825,7 @@ function ProfileSettings({data,persist,showToast}){
   const update=(key,val)=>setForm(prev=>({...prev,[key]:val}));
 
   const handleSave=async()=>{
-    localStorage.setItem('arnold:profile',JSON.stringify(form));
+    storage.set('profile',form,{skipValidation:true});
     try{
       await persist({...data,profile:{name:form.name,alias:form.alias,birthDate:form.birthDate,height:form.height,avatar:form.avatar,goal:form.goal,age:form.age}});
     }catch{}

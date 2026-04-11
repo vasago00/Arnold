@@ -28,6 +28,13 @@ export const KEYS = {
   planner:       'arnold:planner',
   races:         'arnold:races',
   logs:          'arnold:logs',
+  dailyLogs:     'arnold:daily-logs',        // Phase 1: was missing, forced direct localStorage
+  nutritionLog:  'arnold:nutrition-log',      // Phase 1: was missing, forced direct localStorage
+
+  // Supplements
+  supplementsCatalog:  'arnold:supplements-catalog',   // Phase 1: was unprefixed 'supplements'
+  supplementsStack:    'arnold:supplements-stack',      // Phase 1: was unprefixed 'supplementStack'
+  supplementsLog:      'arnold:supplements-log',        // Phase 1: was unprefixed 'supplementLog'
 
   // System
   importHistory: 'arnold:import-history',
@@ -188,6 +195,46 @@ export function migrateLegacyStorage() {
     return { migrated: moved };
   } catch (e) {
     console.error('migrateLegacyStorage failed:', e);
+    return { error: e.message };
+  }
+}
+
+// ─── Phase 1 migration: move unprefixed supplement keys to arnold:* namespace ─
+// supplements.js previously used raw keys ('supplements', 'supplementStack',
+// 'supplementLog') because they weren't in the KEYS map. Now that they are,
+// we migrate once to the canonical arnold:* prefixed keys. Idempotent.
+const SUPP_MIGRATION_FLAG = 'arnold:migration:supplements-v1';
+
+const SUPP_LEGACY_MAP = {
+  'supplements':    KEYS.supplementsCatalog,   // → arnold:supplements-catalog
+  'supplementStack': KEYS.supplementsStack,     // → arnold:supplements-stack
+  'supplementLog':  KEYS.supplementsLog,        // → arnold:supplements-log
+};
+
+export function migrateSupplementKeys() {
+  try {
+    if (localStorage.getItem(SUPP_MIGRATION_FLAG)) return { skipped: true };
+    const moved = {};
+    for (const [oldKey, newKey] of Object.entries(SUPP_LEGACY_MAP)) {
+      const raw = localStorage.getItem(oldKey);
+      if (raw === null) continue;
+      const existing = localStorage.getItem(newKey);
+      // Only copy if the new key is empty (don't overwrite)
+      if (existing === null) {
+        localStorage.setItem(newKey, raw);
+        moved[oldKey] = newKey;
+      }
+      // Clean up old key after successful migration
+      localStorage.removeItem(oldKey);
+    }
+    localStorage.setItem(SUPP_MIGRATION_FLAG, new Date().toISOString());
+    logEvent({ type: 'migration:supplements-v1', moved });
+    if (Object.keys(moved).length) {
+      console.info('arnold: migrated supplement keys to arnold:* namespace', moved);
+    }
+    return { migrated: moved };
+  } catch (e) {
+    console.error('migrateSupplementKeys failed:', e);
     return { error: e.message };
   }
 }

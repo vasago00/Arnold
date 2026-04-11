@@ -7,7 +7,8 @@ const ARNOLD_KEYS = [
   'arnold:profile','arnold:goals','arnold:planner','arnold:races',
   'arnold:logs','arnold:import-history','arnold:events','arnold:diagnostics',
   'arnold:ai-cache','arnold:daily-logs','arnold:nutrition-log',
-  'arnold:supplements-stack','arnold:supplements-adherence','arnold:migration:v1',
+  'arnold:supplements-catalog','arnold:supplements-stack','arnold:supplements-log',
+  'arnold:migration:v1','arnold:migration:supplements-v1',
 ];
 
 function getAllArnoldData() {

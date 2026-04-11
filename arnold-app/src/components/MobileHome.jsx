@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Sparkline } from "./Sparkline.jsx";
 import { STATUS, statusFromPct } from "../core/semantics.js";
 import { getGoals } from "../core/goals.js";
+import { storage } from "../core/storage.js";
 import { todayPlanned, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
@@ -284,8 +285,8 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
   // Greeting
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const profileName = (() => { try { return JSON.parse(localStorage.getItem('arnold:profile') || '{}').name || ''; } catch { return ''; } })();
-  const profileAvatar = (() => { try { return JSON.parse(localStorage.getItem('arnold:profile') || '{}').avatar || ''; } catch { return ''; } })();
+  const profileName = (() => { try { return (storage.get('profile') || {}).name || ''; } catch { return ''; } })();
+  const profileAvatar = (() => { try { return (storage.get('profile') || {}).avatar || ''; } catch { return ''; } })();
 
   // Action items (warnings) and ok items (wins)
   const actionItems = (focusItems || []).filter(f => f.severity !== 'ok' && f.severity !== 'neutral').slice(0, 4);
@@ -541,9 +542,9 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
         let completed = false;
         try {
           // 3 stores: garmin-activities, workouts, daily-logs
-          const acts = JSON.parse(localStorage.getItem('arnold:garmin-activities') || '[]');
-          const wkts = JSON.parse(localStorage.getItem('arnold:workouts') || '[]');
-          const logs = JSON.parse(localStorage.getItem('arnold:daily-logs') || '[]');
+          const acts = storage.get('activities') || [];
+          const wkts = storage.get('workouts') || [];
+          const logs = storage.get('dailyLogs') || [];
           const todayActs = acts.filter(a => a.date === todayStr);
           const todayWkts = wkts.filter(w => w.date === todayStr);
           const todayLogs = logs.filter(l => l.date === todayStr);

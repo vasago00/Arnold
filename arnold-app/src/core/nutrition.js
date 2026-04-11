@@ -24,7 +24,7 @@ export const MEAL_CATEGORIES = [
 
 export const MACRO_KEYS = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'water'];
 
-const STORAGE_KEY = 'nutrition-log';
+const STORAGE_KEY = 'nutritionLog'; // KEYS map alias → arnold:nutrition-log
 
 // ─── Entry helpers ──────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ export function createEntry(opts) {
 
 export function getAllEntries() {
   try {
-    return JSON.parse(localStorage.getItem('arnold:nutrition-log') || '[]');
+    return storage.get(STORAGE_KEY) || [];
   } catch { return []; }
 }
 
@@ -83,13 +83,13 @@ export function saveEntry(entry) {
   const all = getAllEntries();
   const idx = all.findIndex(e => e.id === entry.id);
   if (idx >= 0) all[idx] = entry; else all.unshift(entry);
-  localStorage.setItem('arnold:nutrition-log', JSON.stringify(all));
+  storage.set(STORAGE_KEY, all, { skipValidation: true });
   return entry;
 }
 
 export function deleteEntry(id) {
   const all = getAllEntries().filter(e => e.id !== id);
-  localStorage.setItem('arnold:nutrition-log', JSON.stringify(all));
+  storage.set(STORAGE_KEY, all, { skipValidation: true });
 }
 
 export function getEntriesForDate(dateStr) {
@@ -111,7 +111,7 @@ export function dailyTotals(dateStr) {
 
   // Merge Cronometer data for the same date (backward compat)
   try {
-    const crono = JSON.parse(localStorage.getItem('arnold:cronometer') || '[]');
+    const crono = storage.get('cronometer') || [];
     const dayC = crono.find(c => c.date === dateStr);
     if (dayC && entries.length === 0) {
       // Only use Cronometer if no manual entries exist for the day
