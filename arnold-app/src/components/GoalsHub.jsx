@@ -73,7 +73,7 @@ export function GoalsHub({ showToast }) {
       <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>◉ Goals Hub</div>
       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8 }}>Single source of truth for every target.</div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, alignItems:'start' }}>
+      <div className="arnold-goals-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, alignItems:'start' }}>
       {(() => {
         const order = ['Run','Strength','Recovery','Body','Nutrition'];
         const ordered = order.filter(g=>groups[g]).map(g=>[g,groups[g]]);

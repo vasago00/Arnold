@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Personal health data — never commit
+public/data-imports/
+public/arnold-sync-data.json
+
+# Debug / temp tools
+public/debug-today.html

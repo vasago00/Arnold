@@ -27,6 +27,10 @@ import { GoalsHub } from "./components/GoalsHub.jsx";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
+import { MobileHome } from "./components/MobileHome.jsx";
+import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
+import { BackupPanel } from "./components/BackupPanel.jsx";
+import { startAutoBackup } from "./core/backup.js";
 import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as getSupAdherence, getDailyNutrientTotals as getSupTotals } from "./core/supplements.js";
 import { AVATAR_LIBRARY } from "./core/avatars.js";
 import { getGoals } from "./core/goals.js";
@@ -40,6 +44,7 @@ import { ArcDial } from "./components/ArcDial.jsx";
 import { TrendBadge } from "./components/TrendBadge.jsx";
 import { MiniBar } from "./components/MiniBar.jsx";
 import { FocusCard } from "./components/FocusCard.jsx";
+import { NutritionInput as NutritionInputPanel } from "./components/NutritionInput.jsx";
 import { ArcDialSVG } from "./components/ArcDialSVG.jsx";
 import {
   weeklyLoad, loadTrend, paceTrend, hrEfficiency,
@@ -303,7 +308,20 @@ export default function App(){
   const [aiSummStream,setAiSummStream]=useState("");
   const [toast,setToast]=useState("");
 
+  // ── Mobile detection at App level ──
+  const [isMobileApp,setIsMobileApp]=useState(()=>window.innerWidth<=600);
   useEffect(()=>{
+    const mq=window.matchMedia('(max-width: 600px)');
+    const h=e=>setIsMobileApp(e.matches);
+    mq.addEventListener('change',h);
+    return()=>mq.removeEventListener('change',h);
+  },[]);
+  const mobileHomeActive=isMobileApp&&tab==='training';
+
+  useEffect(()=>{
+    // Check for incoming sync data
+    const syncPayload=checkSyncImport();
+    if(syncPayload&&syncPayload!=='local'){applySyncData(syncPayload,showToast);return;}
     // Phase 1: one-shot migration from legacy arnold-memory:* keys to unified arnold:* store
     migrateLegacyStorage();
     // Phase 7: hydrate IndexedDB engine, then attach so all storage calls route through it
@@ -313,6 +331,8 @@ export default function App(){
       if(needSeed){const s={...d,labSnapshots:SEED_LABS,clinicalTests:SEED_CLINICAL};setData(s);saveData(s);}
       else setData(d);
       setLoading(false);
+      // Start auto-backup (every 6 hours)
+      startAutoBackup(6 * 60 * 60 * 1000);
     });
   },[]);
 
@@ -322,19 +342,23 @@ export default function App(){
   if(loading)return(<div style={S.splash}><div style={S.si}><div style={S.pr}/><span style={S.sl}>⬡</span></div></div>);
 
   return(
-    <div style={S.root}>
+    <div style={S.root} className={mobileHomeActive?'arnold-mobile-active':''}>
       <div style={S.bg}/>
-      <header style={S.hdr}>
+      {/* Mobile back button when drilling into a tab */}
+      {isMobileApp&&!mobileHomeActive&&tab!=='training'&&(
+        <button className="arnold-mobile-back" onClick={()=>setTab('training')}>⬡</button>
+      )}
+      <header style={S.hdr} className="arnold-hdr">
         {(()=>{const lp=(()=>{try{return JSON.parse(localStorage.getItem('arnold:profile')||'{}');}catch{return{};}})();const p={...(data.profile||{}),...lp};return(
 <div style={S.hl}><div style={{width:44,height:44,borderRadius:8,background:"var(--accent-dim)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)",overflow:"hidden",flexShrink:0}}>{p.avatar?<img src={p.avatar} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:(p.alias?.[0]||p.name?.[0]||"A").toUpperCase()}</div><div style={{display:"flex",flexDirection:"column",gap:2,justifyContent:"center"}}><div style={S.an}>ARNOLD</div><div style={S.as}>Health Intelligence</div></div></div>
 );})()}
-        <div style={S.hr}>{(()=>{let n=data.profile?.name;try{const lp=JSON.parse(localStorage.getItem('arnold:profile')||'{}');n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
+        <div style={S.hr} className="arnold-hdr-right">{(()=>{let n=data.profile?.name;try{const lp=JSON.parse(localStorage.getItem('arnold:profile')||'{}');n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
       </header>
-      <nav style={S.nav}>
+      <nav style={S.nav} className="arnold-nav">
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
       </nav>
-      <main style={S.main}>
-        {tab==="weekly"&&<Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} onAiSum={async()=>{
+      <main style={S.main} className="arnold-main">
+        {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} onAiSum={async()=>{
           if(aiSummLoad)return;
           setAiSummLoad(true);setAiSummStream("");
           try{
@@ -342,15 +366,15 @@ export default function App(){
             await persist({...data,aiInsights:[{date:td(),text:ins},...data.aiInsights.slice(0,4)]});
           }catch(e){setAiSummStream(`Error: ${e.message}`);}
           finally{setAiSummLoad(false);}
-        }}/>}
-        {tab==="labs"&&<LabsModule data={data} persist={persist} showToast={showToast}/>}
-        {tab==="clinical"&&<ClinicalModule data={data} persist={persist} showToast={showToast}/>}
-        {tab==="training"&&<TrainingTab setTab={setTab} data={data}/>}
-        {tab==="daily"&&<LogDay data={data} persist={persist} showToast={showToast}/>}
-        {tab==="races"&&<RacesTab showToast={showToast}/>}
-        {tab==="goals"&&<div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div>}
-        {tab==="supplements"&&<SupplementsTab showToast={showToast}/>}
-        {tab==="settings"&&<ProfileSettings data={data} persist={persist} showToast={showToast}/>}
+        }}/></div>}
+        {tab==="labs"&&<div className="arnold-tab-panel"><LabsModule data={data} persist={persist} showToast={showToast}/></div>}
+        {tab==="clinical"&&<div className="arnold-tab-panel"><ClinicalModule data={data} persist={persist} showToast={showToast}/></div>}
+        {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data}/></div>}
+        {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast}/></div>}
+        {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
+        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
+        {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
+        {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
       </main>
       {toast&&<div style={S.toast}>{toast}</div>}
     </div>
@@ -1011,7 +1035,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
 
       {/* ── Section 1: Weekly Cockpit ── */}
       <div style={{fontSize:13,fontWeight:500,color:C.m,marginBottom:8}}>◈ Week of {weekLabel}</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0, 1fr))',gap:'clamp(8px,1vw,12px)',marginBottom:10}}>
+      <div className="arnold-dashboard-panels" style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0, 1fr))',gap:'clamp(8px,1vw,12px)',marginBottom:10}}>
 
         {/* ── TRAINING ── */}
         <div style={panelStyle}>
@@ -1187,8 +1211,8 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
                   <span style={{fontSize:13,fontWeight:500,color:C.t}}>{r.name||"Race"}</span>
                   {r.source==='garmin-ics'&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:"rgba(74,222,128,0.12)",color:"#4ade80"}}>Garmin</span>}
                 </div>
-                <div style={{fontSize:11,color:C.m}}>{new Date(r.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · {daysUntil(r.date)} days away</div>
-                {(r.goalTime||r.goal_time||r.distanceKm||r.distance_km)&&<div style={{fontSize:11,color:C.m}}>{(r.goalTime||r.goal_time)?`Goal: ${r.goalTime||r.goal_time}`:""}{(r.distanceKm||r.distance_km)?` · ${r.distanceKm||r.distance_km} km`:""}</div>}
+                <div style={{fontSize:11,color:C.m}}>{new Date(r.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · {daysUntil(r.date)} days away{(r.distanceKm||r.distance_km)?` · ${raceTypeBadge(r.distanceKm||r.distance_km)}`:''}</div>
+                {(r.goalTime||r.goal_time)&&<div style={{fontSize:11,color:C.m}}>Goal: {r.goalTime||r.goal_time}</div>}
               </div>
             )):allRaces.length>0?<div style={{fontSize:12,color:C.m}}>No races in the next 90 days{nextFutureRace?<span> · Next: <span style={{color:C.t}}>{nextFutureRace.name}</span></span>:""}<div style={{cursor:"pointer",color:C.ta,marginTop:4}} onClick={()=>setTab("races")}>See all races →</div></div>:<div style={{fontSize:12,color:C.m,cursor:"pointer"}} onClick={()=>setTab("races")}>Sync your Garmin calendar in the Races tab →</div>}
           </div>
@@ -1233,17 +1257,25 @@ function LogDay({data,persist,showToast}){
   const nutRef=useRef();
   const profile={...(storage.get('profile')||{}),...getGoals()};
 
-  // Load today's saved entry on mount
+  // Load today's saved entry on mount.
+  // RULE: the Daily dashboard shows activity & nutrition ONLY for today. If the
+  // latest upload is from a prior day, the dashboard stays empty until a new
+  // upload happens today. Notes still load if present so reflections persist.
   useEffect(()=>{
     const today=td();
     try{
       const logs=JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');
       const todayEntry=logs.find(e=>e.date===today);
       if(todayEntry){
-        if(todayEntry.fitData)setTodayFIT(todayEntry.fitData);
-        if(todayEntry.nutData)setTodayNutrition(todayEntry.nutData);
+        const fitIsToday=todayEntry.fitData&&(!todayEntry.fitData.date||todayEntry.fitData.date===today);
+        const nutIsToday=todayEntry.nutData&&(!todayEntry.nutData.date||todayEntry.nutData.date===today);
+        if(fitIsToday)setTodayFIT(todayEntry.fitData);else setTodayFIT(null);
+        if(nutIsToday)setTodayNutrition(todayEntry.nutData);else setTodayNutrition(null);
         if(todayEntry.notes)setNotes(todayEntry.notes);
-        setTodayLoaded(true);
+        setTodayLoaded(!!(fitIsToday||nutIsToday||todayEntry.notes));
+      }else{
+        // New day with no entry yet — ensure a clean slate
+        setTodayFIT(null);setTodayNutrition(null);
       }
     }catch(e){console.error('Failed to load daily log:',e);}
   },[]);
@@ -1398,9 +1430,9 @@ function LogDay({data,persist,showToast}){
     </>;
   };
 
-  const fitData=todayFIT||(()=>{
+  const todayStr=td();
+  const fitData=(todayFIT&&(!todayFIT.date||todayFIT.date===todayStr))?todayFIT:(()=>{
     const acts=storage.get('activities')||[];
-    const todayStr=td();
     const row=acts.find(a=>a.date===todayStr);
     if(!row)return null;
     const isRun=/running|trail/i.test(row.activityType||'');
@@ -1418,7 +1450,7 @@ function LogDay({data,persist,showToast}){
       source:'activities-csv',
     };
   })();
-  const nutData=todayNutrition;
+  const nutData=(todayNutrition&&(!todayNutrition.date||todayNutrition.date===todayStr))?todayNutrition:null;
   const calT=parseFloat(profile.dailyCalorieTarget)||2200;
 
   // Pace helpers
@@ -1619,7 +1651,7 @@ function LogDay({data,persist,showToast}){
       )}
 
       {/* ═══ Two-column cockpit ═══ */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
+      <div className="arnold-daily-grid" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
 
         {/* ── LEFT: Activity ── */}
         <div>
@@ -1861,6 +1893,31 @@ function LogDay({data,persist,showToast}){
                 goalLabel={`Goal: ${profile?.dailyFatTarget||65}g`}
                 pct={(nutData.fat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
             </>}
+          </div>
+
+          {/* ── Quick Food Log (manual/barcode/voice/photo) ── */}
+          <div style={{...panelStyle,marginTop:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Log Food</span>
+              <span style={{fontSize:10,color:'var(--text-muted)'}}>manual · barcode · voice · photo</span>
+            </div>
+            <NutritionInputPanel date={todayStr} onUpdate={()=>{
+              // Refresh nutrition data from the new nutrition-log store
+              try{
+                const entries=JSON.parse(localStorage.getItem('arnold:nutrition-log')||'[]')
+                  .filter(e=>e.date===todayStr);
+                if(entries.length>0){
+                  const tot={calories:0,protein:0,carbs:0,fat:0,fiber:0,sugar:0,water:0};
+                  entries.forEach(e=>{
+                    const s=e.servings||1;
+                    ['calories','protein','carbs','fat','fiber','sugar','water'].forEach(k=>{
+                      tot[k]+=(e.macros?.[k]||0)*s;
+                    });
+                  });
+                  setTodayNutrition({...tot,date:todayStr,source:'nutrition-log'});
+                }
+              }catch{}
+            }}/>
           </div>
         </div>
 
@@ -2706,8 +2763,27 @@ Structure:
     }
   };
 
-  // Empty state
+  // ── Mobile detection: serve smart-home layout on narrow screens ──
+  const [isMobile,setIsMobile]=useState(()=>window.innerWidth<=600);
+  useEffect(()=>{
+    const mq=window.matchMedia('(max-width: 600px)');
+    const handler=e=>setIsMobile(e.matches);
+    mq.addEventListener('change',handler);
+    return()=>mq.removeEventListener('change',handler);
+  },[]);
+
+  // Empty state — on mobile, show MobileHome even without data (with sync prompt)
   if(!activities.length&&!cronometer.length&&!weightData.length){
+    if(isMobile){
+      return <MobileHome
+        data={data} focusItems={[]} weeklyStats={[]} avgWeeklyMi={0} avgWeeklyHrsTotal={0}
+        avgPaceSecs={null} goalPaceSecs={null} fmtPace={s=>s?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`:'—'}
+        totalMi={0} annualRunTarget={800} totalSessions={0}
+        sortedSleep={[]} hrvData={[]} sortedW={[]} currentWeight={null} currentBF={null}
+        latestSleepScore={null} avgHRV30={null} recentNut={[]} avgProtein={null} latestRHR={null}
+        nextRace={null} onOpenTab={setTab}
+      />;
+    }
     return(
       <div style={S.sec}>
         <div style={S.st}>◈ Training Intelligence</div>
@@ -2831,34 +2907,72 @@ Structure:
   // already shows state; these tiles surface action. If everything is green
   // we collapse to a single "all systems nominal" tile.
   const attention=[];
-  // Today's planned session (always shown if planned, advisory)
+  // Today's planned session — check ALL stores for completed activity
+  const todayDateStr=td();
+  // 1. Garmin CSV activities (storage.get('activities') → arnold:garmin-activities)
+  const todayActs=activities.filter(a=>a.date===todayDateStr);
+  // 2. Daily-tab saved workouts (arnold:workouts)
+  const todayWorkouts=(storage.get('workouts')||[]).filter(w=>w.date===todayDateStr);
+  // 3. Daily logs (arnold:daily-logs) — FIT uploads stored as fitData nested object
+  // Note: 'daily-logs' is NOT in storage KEYS map, so read raw from localStorage
+  const allDailyLogs=(()=>{try{return JSON.parse(localStorage.getItem('arnold:daily-logs')||'[]');}catch{return[];}})();
+  const todayDailyLogs=allDailyLogs.filter(l=>l.date===todayDateStr);
+  const todayHasLog=todayDailyLogs.some(l=>l.fitData||l.workout||l.distanceMi||l.duration);
+  const planCompleted=(()=>{
+    if(!planned)return false;
+    const pt=planned.type||'';
+    const anyDone=todayActs.length>0||todayWorkouts.length>0||todayHasLog;
+    if(pt==='rest')return !anyDone;
+    if(!anyDone)return false;
+    // Check all stores for run/strength match
+    // Daily logs store FIT data as fitData.activityType (e.g. "Running")
+    const logType=l=>(l.fitData?.activityType||l.workout||l.type||'');
+    const hasRun=todayActs.some(a=>/run/i.test(a.activityType||''))
+      ||todayWorkouts.some(w=>/run/i.test(w.type||''))
+      ||todayDailyLogs.some(l=>/run/i.test(logType(l)));
+    const hasStr=todayActs.some(a=>/strength|weight/i.test(a.activityType||''))
+      ||todayWorkouts.some(w=>/strength/i.test(w.type||''))
+      ||todayDailyLogs.some(l=>/strength/i.test(logType(l)));
+    if(/run|tempo|interval|long/.test(pt)&&hasRun)return true;
+    if(/strength/.test(pt)&&hasStr)return true;
+    return anyDone;
+  })();
   if(planned&&plannedTypeLabel){
-    attention.push({label:'Today',value:plannedTypeLabel,unit:'',detail:plannedDist?plannedDist.replace(' · ',''):'planned',severity:'neutral',action:'From your weekly plan'});
+    attention.push({
+      label:'Today',value:plannedTypeLabel,unit:'',
+      detail:plannedDist?plannedDist.replace(' · ',''):'planned',
+      severity:planCompleted?'ok':'neutral',
+      action:planCompleted?'Completed ✓':'From your weekly plan',
+      completed:planCompleted,
+    });
   }
-  // Volume gap
+  // Volume gap — corrective action tile
   if(volPct<0.9){
-    attention.push({label:'Volume gap',value:avgWeeklyMi.toFixed(1),unit:'mi/wk',detail:`${Math.round(volPct*100)}% of ${weeklyRunTarget} mi goal`,severity:volPct<0.7?'critical':'warn',action:`Add ${Math.max(2,Math.round((weeklyRunTarget-avgWeeklyMi)*0.5))} easy miles this week`});
+    attention.push({label:'Volume gap',value:avgWeeklyMi.toFixed(1),unit:'mi/wk',detail:`${Math.round(volPct*100)}% of ${weeklyRunTarget} mi goal`,severity:volPct<0.5?'critical':volPct<0.7?'critical':'warn',corrective:true,action:`Add ${Math.max(2,Math.round((weeklyRunTarget-avgWeeklyMi)*0.5))} easy miles this week`});
   }
-  // Strength gap
+  // Strength gap — corrective action tile
   if(strPct<0.9){
-    attention.push({label:'Strength gap',value:strSessPerWk.toFixed(1),unit:'sess/wk',detail:`${Math.round(strPct*100)}% of ${strTarget}/wk`,severity:strPct<0.5?'critical':'warn',action:'Schedule a strength block this week'});
+    attention.push({label:'Strength gap',value:strSessPerWk.toFixed(1),unit:'sess/wk',detail:`${Math.round(strPct*100)}% of ${strTarget}/wk`,severity:strPct<0.5?'critical':'warn',corrective:true,action:'Schedule a strength block this week'});
   }
-  // Pace drift
+  // Pace drift — corrective action tile
   if(avgPaceSecs&&avgPaceSecs>goalPaceSecs*1.02){
-    attention.push({label:'Pace drift',value:fmtPace(avgPaceSecs),unit:'/mi',detail:`${Math.round(avgPaceSecs-goalPaceSecs)}s off ${fmtPace(goalPaceSecs)}`,severity:'warn',action:`Add a tempo run at ${fmtPace(goalPaceSecs)}`});
+    const driftPct=(avgPaceSecs-goalPaceSecs)/goalPaceSecs;
+    attention.push({label:'Pace drift',value:fmtPace(avgPaceSecs),unit:'/mi',detail:`${Math.round(avgPaceSecs-goalPaceSecs)}s off ${fmtPace(goalPaceSecs)}`,severity:driftPct>0.1?'critical':'warn',corrective:true,action:`Add a tempo run at ${fmtPace(goalPaceSecs)}`});
   }
   // Recovery flag — HRV or sleep dip
   const latestHRV=hrvData[0]?.overnightHRV||null;
   if(avgHRV30&&latestHRV&&latestHRV<avgHRV30*0.9){
-    attention.push({label:'Recovery dip',value:latestHRV,unit:'ms',detail:`HRV ${Math.round((1-latestHRV/avgHRV30)*100)}% below 30-day avg`,severity:'warn',action:'Easy day or full rest'});
+    const hrvDip=1-latestHRV/avgHRV30;
+    attention.push({label:'Recovery dip',value:latestHRV,unit:'ms',detail:`HRV ${Math.round(hrvDip*100)}% below 30-day avg`,severity:hrvDip>0.2?'critical':'warn',action:'Easy day or full rest'});
   }
   // Sleep flag
   if(latestSleepScore&&latestSleepScore<70){
-    attention.push({label:'Sleep low',value:latestSleepScore,unit:'/100',detail:'Below 70 — recovery compromised',severity:'warn',action:'Aim for earlier bedtime tonight'});
+    attention.push({label:'Sleep low',value:latestSleepScore,unit:'/100',detail:'Below 70 — recovery compromised',severity:latestSleepScore<50?'critical':'warn',action:'Aim for earlier bedtime tonight'});
   }
   // Nutrition flag — protein under target
   if(avgProtein&&avgProtein<(getGoals().dailyProteinTarget||150)*0.85){
-    attention.push({label:'Protein low',value:Math.round(avgProtein),unit:'g/day',detail:`${Math.round(avgProtein/(getGoals().dailyProteinTarget||150)*100)}% of target`,severity:'warn',action:'Add a protein-anchored snack'});
+    const protPct=avgProtein/(getGoals().dailyProteinTarget||150);
+    attention.push({label:'Protein low',value:Math.round(avgProtein),unit:'g/day',detail:`${Math.round(protPct*100)}% of target`,severity:protPct<0.5?'critical':'warn',corrective:true,action:'Add a protein-anchored snack'});
   }
   // If everything is green, collapse to a single nominal tile
   if(attention.length===0){
@@ -2924,6 +3038,37 @@ Structure:
   const maxWt=validWeights.length?Math.max(...validWeights):1;
   const targetWt=parseFloat(profile?.targetWeight)||175;
 
+  // Next race for mobile home
+  const nextRaceMobile=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
+
+  if(isMobile){
+    return <MobileHome
+      data={data}
+      focusItems={attention}
+      weeklyStats={weeklyStats}
+      avgWeeklyMi={avgWeeklyMi}
+      avgWeeklyHrsTotal={avgWeeklyHrsTotal}
+      avgPaceSecs={avgPaceSecs}
+      goalPaceSecs={goalPaceSecs}
+      fmtPace={fmtPace}
+      totalMi={totalMi}
+      annualRunTarget={annualRunTarget}
+      totalSessions={totalSessions}
+      sortedSleep={sortedSleep}
+      hrvData={hrvData}
+      sortedW={sortedW}
+      currentWeight={currentWeight}
+      currentBF={currentBF}
+      latestSleepScore={latestSleepScore}
+      avgHRV30={avgHRV30}
+      recentNut={recentNut}
+      avgProtein={avgProtein}
+      latestRHR={latestRHR}
+      nextRace={nextRaceMobile}
+      onOpenTab={setTab}
+    />;
+  }
+
   return(
     <div style={S.sec}>
       {/* Section 1: Page header */}
@@ -2965,7 +3110,7 @@ Structure:
       })()}
 
       {/* Section 2: Focus areas */}
-      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(focusItems.length,4)}, minmax(0,1fr))`,gap:8}}>
+      <div className="arnold-focus-tiles" style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(focusItems.length,4)}, minmax(0,1fr))`,gap:8}}>
         {focusItems.slice(0,4).map((f,i)=><FocusCard key={i} {...f}/>)}
       </div>
 
@@ -2979,7 +3124,7 @@ Structure:
         const paces30=runs30.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
         const avgPace30=paces30.length?paces30.reduce((s,v)=>s+v,0)/paces30.length:null;
         return(
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
+          <div className="arnold-race-obs" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
             <RaceFocusCard race={nr} goalPaceSecs={goalPaceSecs} avgPace30={avgPace30} fmtPace={fmtPace} planned={planned} plannedTypeLabel={plannedTypeLabel}/>
             <div style={{minWidth:0}}>
               <AnnotationStrip annotations={trainingAnnotations()}/>
@@ -3000,7 +3145,7 @@ Structure:
       )}
 
       {/* Section 3: Two vertical panels */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
+      <div className="arnold-training-grid" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
 
         {/* TRAINING PANEL */}
         <div style={{...panelStyle,display:'flex',flexDirection:'column'}}>
@@ -3738,7 +3883,7 @@ function ProfileSettings({data,persist,showToast}){
       {/* Personal info — compact */}
       <div style={{...S.lg,marginTop:4}}>
         <div style={S.gt}>◐ Personal</div>
-        <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:10,alignItems:"stretch"}}>
+        <div className="arnold-profile-grid" style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:10,alignItems:"stretch"}}>
           {/* Avatar uploader — spans top of Name to bottom of BirthDate */}
           <label style={{cursor:"pointer",display:"flex",height:64,width:64,marginTop:21,flexShrink:0}}>
               <div style={{width:"100%",height:"100%",borderRadius:12,background:"var(--accent-dim)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:48,fontWeight:600,color:"var(--text-accent)",fontFamily:"var(--font-mono)",overflow:"hidden"}}>
@@ -3776,6 +3921,11 @@ function ProfileSettings({data,persist,showToast}){
       </div>
 
       <button style={S.sb} onClick={handleSave}>{saved?'✓ Saved':'Save Profile'}</button>
+
+      <BackupPanel showToast={showToast}/>
+
+      <div style={{height:1,background:C.b,margin:"8px 0"}}/>
+      <SyncPanel showToast={showToast}/>
 
       <div style={{height:1,background:C.b,margin:"4px 0"}}/>
       <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Reset Arnold</div>
@@ -3976,7 +4126,7 @@ const S={
   an:{fontSize:"clamp(11px,0.5vw + 8px,14px)",fontWeight:600,letterSpacing:"0.18em",color:C.t,fontFamily:"var(--font-mono)"},
   as:{fontSize:10,color:C.m,letterSpacing:"0.10em",fontWeight:400},
   hr:{display:"flex",alignItems:"center",gap:14},
-  un:{fontSize:"clamp(14px,0.4vw + 12px,18px)",color:C.t,fontFamily:'"Snell Roundhand","Apple Chancery","Brush Script MT","Lucida Handwriting",cursive',fontStyle:"italic",fontWeight:500,letterSpacing:"0.02em",lineHeight:1},
+  un:{fontSize:"clamp(14px,0.4vw + 12px,18px)",color:"#f0f0f0",fontFamily:'"Snell Roundhand","Apple Chancery","Brush Script MT","Lucida Handwriting",cursive',fontStyle:"italic",fontWeight:600,letterSpacing:"0.03em",lineHeight:1,textShadow:"0 0 8px rgba(255,255,255,0.15)"},
   dc2:{fontSize:11,color:C.m,background:"transparent",border:"none",padding:0,fontFamily:"var(--font-mono)",lineHeight:1},
   nav:{display:"flex",borderBottom:`0.5px solid ${C.bs}`,background:C.bg,overflowX:"auto",height:"clamp(52px,5vw,64px)",position:"sticky",top:"clamp(52px,5vw,64px)",zIndex:9},
   nb:{flex:1,minWidth:44,padding:"0 4px",background:"none",border:"none",borderBottom:"2px solid transparent",color:C.s,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,transition:"color var(--transition)",fontFamily:"var(--font-ui)"},

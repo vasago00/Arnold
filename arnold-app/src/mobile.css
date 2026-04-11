@@ -1,0 +1,389 @@
+/* ─── Arnold Mobile Responsive ────────────────────────────────────────────────
+   Mobile-first overrides for Samsung S25 Ultra and similar (< 600px).
+   Glassmorphism + micro-interactions + bold typography.
+   Uses !important to override inline styles.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ─── Global touch & transitions ─────────────────────────────────────────── */
+* { -webkit-tap-highlight-color: transparent; }
+
+@media (max-width: 600px) {
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     MOBILE HOME — when smart home screen is active, hide desktop shell
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-mobile-active .arnold-hdr,
+  .arnold-mobile-active .arnold-nav {
+    display: none !important;
+  }
+  .arnold-mobile-active .arnold-main {
+    padding: 0 !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     FLOATING BACK BUTTON — for drill-down tabs
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-mobile-back {
+    position: fixed;
+    bottom: 72px; right: 16px;  /* above bottom nav, thumb-friendly */
+    z-index: 101;
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: rgba(96, 165, 250, 0.2);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(96,165,250,0.3);
+    color: #60a5fa;
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 12px rgba(96,165,250,0.2);
+    transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .arnold-mobile-back:active {
+    transform: scale(0.88);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     DRILL-DOWN HEADER — compact, glassmorphic
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-hdr {
+    flex-direction: row !important;
+    height: auto !important;
+    padding: 10px 14px !important; /* back button is now bottom-right */
+    gap: 8px !important;
+    align-items: center !important;
+    background: rgba(15, 16, 22, 0.85) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+  }
+  .arnold-hdr-right {
+    display: none !important; /* hide date/prepared on drill-down */
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     NAVIGATION — hidden in drill-down (back button replaces it)
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-nav {
+    display: none !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     MAIN CONTENT — glassmorphic background
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-main {
+    padding: 12px !important;
+    padding-bottom: 100px !important;  /* extra room for bottom nav bar */
+    min-height: 100vh !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     TAB PANELS — smooth entry animation
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel {
+    animation: arnoldSlideUp 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes arnoldSlideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     ALL PANELS & CARDS — glassmorphism treatment
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel > div > div[style*="background"] {
+    border-radius: 14px !important;
+    border: 1px solid rgba(255,255,255,0.06) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25) !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     GRID LAYOUTS — stack everything vertically
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-grid-2,
+  .arnold-grid-2col,
+  .arnold-training-grid,
+  .arnold-race-obs,
+  .arnold-daily-grid,
+  .arnold-goals-grid,
+  .arnold-dashboard-panels,
+  .arnold-chart-row {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .arnold-grid-3,
+  .arnold-stats-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     FOCUS TILES — 2-column on mobile
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-focus-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     COCKPIT RAIL — horizontal scroll with snap
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-cockpit-rail {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    padding-bottom: 8px !important;
+    scrollbar-width: none;
+    scroll-snap-type: x mandatory;
+  }
+  .arnold-cockpit-rail::-webkit-scrollbar { display: none; }
+  .arnold-cockpit-rail > div {
+    scroll-snap-align: start;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     LABS TAB — blood marker cards mobile layout
+     ═══════════════════════════════════════════════════════════════════════════ */
+  /* Lab marker grid: 3-col → 2-col */
+  .arnold-tab-panel div[style*="gridTemplateColumns: repeat(3"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  /* Lab category tabs: horizontal scroll */
+  .arnold-tab-panel div[style*="gap: 6"][style*="flex-wrap"] {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none;
+    padding-bottom: 4px !important;
+  }
+  .arnold-tab-panel div[style*="gap: 6"][style*="flex-wrap"]::-webkit-scrollbar { display: none; }
+  /* Lab marker cards: bigger touch targets */
+  .arnold-tab-panel div[style*="gridTemplateColumns: repeat(3"] > div {
+    padding: 12px !important;
+    border-radius: 12px !important;
+    min-height: 110px !important;
+  }
+  /* Lab summary badges */
+  .arnold-tab-panel span[style*="padding: 2px 8px"] {
+    padding: 4px 10px !important;
+    font-size: 11px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     BODY / CLINICAL TAB — cards and arc dials
+     ═══════════════════════════════════════════════════════════════════════════ */
+  /* Arc dial grids: 3-col → 2-col */
+  .arnold-tab-panel div[style*="repeat(3,minmax(0,1fr)"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+  }
+  /* Mini tile grids inside panels */
+  .arnold-tab-panel div[style*="repeat(3,minmax(0,1fr)"][style*="gap:5"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  /* Recovery mini tiles */
+  .arnold-tab-panel div[style*="repeat(4,minmax(0,1fr)"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     DAILY TAB — file upload, log cards
+     ═══════════════════════════════════════════════════════════════════════════ */
+  /* File upload area: bigger */
+  .arnold-tab-panel label[style*="border: 1px dashed"] {
+    padding: 24px 16px !important;
+    min-height: 80px !important;
+    border-radius: 14px !important;
+    font-size: 14px !important;
+  }
+  /* Daily log entry fields */
+  .arnold-tab-panel div[style*="display: 'grid'"][style*="gap: 6"] {
+    gap: 10px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     INPUTS — mobile touch targets (Apple HIG 44px minimum)
+     ═══════════════════════════════════════════════════════════════════════════ */
+  input, textarea, select {
+    font-size: 16px !important;  /* prevents iOS/Samsung zoom on focus */
+    padding: 12px 14px !important;
+    min-height: 44px !important;
+    border-radius: 10px !important;
+    background: rgba(255,255,255,0.06) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    color: #fff !important;
+    transition: border-color 0.2s ease !important;
+  }
+  input:focus, textarea:focus, select:focus {
+    border-color: rgba(96,165,250,0.5) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(96,165,250,0.15) !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     BUTTONS — larger, tactile feel
+     ═══════════════════════════════════════════════════════════════════════════ */
+  button {
+    min-height: 42px !important;
+    border-radius: 10px !important;
+    transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1),
+                background 0.2s ease !important;
+  }
+  button:active {
+    transform: scale(0.97) !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     PROFILE TAB — avatar + fields stack
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-profile-grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+  .arnold-profile-grid label:first-child {
+    width: 90px !important;
+    height: 90px !important;
+    margin: 0 auto !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     SECTION TITLES — bold mobile typography
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-section-title,
+  .arnold-tab-panel div[style*="fontSize: 15"][style*="fontWeight: 500"],
+  .arnold-tab-panel div[style*="fontSize:15"][style*="fontWeight:500"] {
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.01em !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     SPARKLINES & CHARTS — wider on mobile
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel svg {
+    max-width: 100% !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     MINI BAR progress bars — bigger text
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="fontSize: 10"][style*="MiniBar"],
+  .arnold-tab-panel div[style*="height: 4"] {
+    height: 6px !important;
+    border-radius: 3px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     WEEKLY PLANNER — cards
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="repeat(7"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     RACES TAB — race cards
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="repeat(2,minmax(0,1fr)"][style*="gap"] {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     HIDE DESKTOP-ONLY ELEMENTS
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-desktop-only {
+    display: none !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     TOAST NOTIFICATIONS — mobile positioned
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="position: fixed"][style*="bottom"] {
+    bottom: 20px !important;
+    left: 16px !important;
+    right: 16px !important;
+    border-radius: 12px !important;
+    font-size: 14px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     AI ANALYSIS CARD — full width
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="borderLeft: 3px solid #a78bfa"] {
+    border-radius: 14px !important;
+    padding: 14px !important;
+  }
+  .arnold-tab-panel div[style*="borderLeft: 3px solid #a78bfa"] div[style*="whiteSpace"] {
+    font-size: 13px !important;
+    line-height: 1.7 !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     SUPPLEMENT/STACK TAB — cards
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="gridTemplateColumns"][style*="repeat(2"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     ANNOTATION STRIP — observations panel
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="borderLeft: 3px solid #a78bfa"][style*="height: 100%"] {
+    height: auto !important;
+    border-radius: 14px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     RACE FOCUS CARD — checkered flag
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-tab-panel div[style*="conic-gradient"] {
+    border-radius: 14px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     BOTTOM NAV BAR — override any button min-height for nav items
+     ═══════════════════════════════════════════════════════════════════════════ */
+  .arnold-mobile-active nav[style*="position: fixed"] button {
+    min-height: auto !important;
+    border-radius: 0 !important;
+  }
+
+  /* When mobile home is active, give main content zero horizontal padding
+     (MobileHome handles its own) */
+  .arnold-mobile-active .arnold-main {
+    padding: 0 !important;
+  }
+
+  /* Bottom nav safe area for notched phones */
+  .arnold-mobile-active nav[style*="position: fixed"] {
+    padding-bottom: max(env(safe-area-inset-bottom, 8px), 8px) !important;
+  }
+
+} /* end @media (max-width: 600px) */
+
+/* ─── Touch-friendly scrollbar styling ────────────────────────────────────── */
+@media (pointer: coarse) {
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+}
+
+/* ─── Smooth transitions for interactive elements ─────────────────────────── */
+@media (max-width: 600px) {
+  .arnold-tab-panel * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
