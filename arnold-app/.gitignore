@@ -23,6 +23,11 @@ dist-ssr
 *.sln
 *.sw?
 
+# Secrets — NEVER commit
+.env
+.env.*
+*.env
+
 # Personal health data — never commit
 public/data-imports/
 public/arnold-sync-data.json
