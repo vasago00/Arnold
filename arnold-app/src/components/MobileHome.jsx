@@ -10,6 +10,7 @@ import { STATUS, statusFromPct } from "../core/semantics.js";
 import { getGoals } from "../core/goals.js";
 import { todayPlanned, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
+import { DataSync } from "./DataSync.jsx";
 
 // ─── Glassmorphism base ─────────────────────────────────────────────────────
 const glass = {
@@ -192,6 +193,7 @@ function MoreMenu({ onSelect, onClose }) {
     { label: 'Races', icon: '⚑', tab: 'races', grad: 'linear-gradient(135deg, #f97316, #eab308)' },
     { label: 'Goals', icon: '◎', tab: 'goals', grad: 'linear-gradient(135deg, #22c55e, #10b981)' },
     { label: 'Stack', icon: '◈', tab: 'supplements', grad: 'linear-gradient(135deg, #8b5cf6, #6366f1)' },
+    { label: 'Sync', icon: '⇄', tab: 'sync', grad: 'linear-gradient(135deg, #06b6d4, #22d3ee)' },
     { label: 'Profile', icon: '○', tab: 'settings', grad: 'linear-gradient(135deg, #6b7280, #9ca3af)' },
   ];
 
@@ -650,6 +652,13 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
         </div>
       )}
 
+      {/* ═══ DATA SYNC PANEL (inline when nav = sync) ═════════════════════ */}
+      {activeNav === 'sync' && (
+        <div style={{ marginBottom: 12 }}>
+          <DataSync variant="mobile" />
+        </div>
+      )}
+
       {/* ═══ BOTTOM NAV BAR ══════════════════════════════════════════════════ */}
       <nav style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
@@ -698,7 +707,10 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
       </nav>
 
       {/* ═══ MORE MENU (bottom sheet) ════════════════════════════════════════ */}
-      {moreOpen && <MoreMenu onSelect={(tab) => onOpenTab?.(tab)} onClose={() => setMoreOpen(false)} />}
+      {moreOpen && <MoreMenu onSelect={(tab) => {
+        if (tab === 'sync') { setActiveNav('sync'); }
+        else { onOpenTab?.(tab); }
+      }} onClose={() => setMoreOpen(false)} />}
 
       {/* Sheet animation keyframes injected once */}
       <style>{`

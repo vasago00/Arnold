@@ -45,6 +45,7 @@ import { TrendBadge } from "./components/TrendBadge.jsx";
 import { MiniBar } from "./components/MiniBar.jsx";
 import { FocusCard } from "./components/FocusCard.jsx";
 import { NutritionInput as NutritionInputPanel } from "./components/NutritionInput.jsx";
+import { DataSync } from "./components/DataSync.jsx";
 import { ArcDialSVG } from "./components/ArcDialSVG.jsx";
 import {
   weeklyLoad, loadTrend, paceTrend, hrEfficiency,
@@ -4055,6 +4056,9 @@ function ProfileSettings({data,persist,showToast}){
           }}
         >⇪ Load Historical CSVs</button>
       </div>
+
+      {/* ── DATA SYNC (PC ↔ Phone) ── */}
+      <DataSync variant="desktop"/>
 
       <div style={{height:1,background:C.b,margin:"4px 0"}}/>
       <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Danger Zone</div>
