@@ -722,3 +722,4 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
     </div>
   );
 }
+// sync-v1
