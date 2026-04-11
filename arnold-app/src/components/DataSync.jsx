@@ -72,12 +72,18 @@ export function DataSync({ variant = 'desktop' }) {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      if (data._version !== 'arnold-sync-v1') {
+      // Support both DataSync format (_version) and BackupPanel format (version + data wrapper)
+      let syncData = data;
+      if (data.data && typeof data.data === 'object') {
+        // BackupPanel format: { version, data: { arnold:keys... } }
+        syncData = data.data;
+        syncData._exportedAt = data.exportedAt;
+      } else if (!data._version && !Object.keys(data).some(k => k.startsWith('arnold:'))) {
         setStatus('Not a valid Arnold sync file');
         setImporting(false);
         return;
       }
-      const count = importArnoldData(data);
+      const count = importArnoldData(syncData);
       setStatus(`Imported ${count} data stores from ${data._exportedAt?.slice(0, 10) || 'unknown date'}`);
       setImporting(false);
       setTimeout(() => window.location.reload(), 1500);
