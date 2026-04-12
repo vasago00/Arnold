@@ -19,7 +19,7 @@ import { detectCSVType } from "./core/parsers/detectType.js";
 import { fetchAndParseICS } from "./core/parsers/icsParser.js";
 import { parseFITFile } from "./core/parsers/fitParser.js";
 import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronometerParser.js";
-import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine } from "./core/storage.js";
+import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption } from "./core/storage.js";
 import * as dbEngine from "./core/db.js";
 import { fmtHMS, fmtHM, hydrationFor, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
 import { computeActivityNeeds, trackReplenishment, replenishmentSummary } from "./core/activityNeeds.js";
@@ -368,6 +368,8 @@ export default function App(){
     // Phase 1: one-shot migration from legacy arnold-memory:* keys to unified arnold:* store
     migrateLegacyStorage();
     migrateSupplementKeys();
+    // Encryption at rest: decrypt sensitive keys into memory cache, re-encrypt with session key
+    initEncryption().catch(e=>console.warn('Encryption init failed, using plaintext fallback',e));
     // Phase 7: hydrate IndexedDB engine, then attach so all storage calls route through it
     dbEngine.hydrateDB().then(()=>{attachEngine(dbEngine);}).catch(e=>console.warn('IDB hydration failed, using localStorage',e));
     loadData().then(d=>{

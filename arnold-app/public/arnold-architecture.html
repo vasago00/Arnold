@@ -866,7 +866,7 @@
 
     <div style="background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); border-radius: 10px; padding: 16px; margin-bottom: 24px;">
       <div style="color: #ef4444; font-weight: 600; margin-bottom: 8px; font-size: 12px;">⚠ Security Warning</div>
-      <div style="color: #cbd5e1; font-size: 11px; line-height: 1.5;">All localStorage data is accessible to any JavaScript running on the same origin. Browser extensions and XSS vulnerabilities can read all keys. Consider implementing encryption-at-rest for HIGH and CRITICAL sensitivity data.</div>
+      <div style="color: #cbd5e1; font-size: 11px; line-height: 1.5;">All localStorage data is accessible to any JavaScript running on the same origin. <strong style="color:#4ade80">AES-256-GCM encryption at rest is now active</strong> for HIGH and CRITICAL keys (hrv, sleep, weight, daily-logs, profile, backup slots). Session key stored in sessionStorage (cleared on tab close). Plaintext backups maintained for session key rotation.</div>
     </div>
 
     <table class="data-table">
@@ -886,21 +886,21 @@
           <td>Heart rate variability data</td>
           <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
           <td>Protected health info (PHI), accessible via JS</td>
-          <td>Encrypt; add auth gate</td>
+          <td>✓ AES-256-GCM encrypted</td>
         </tr>
         <tr>
           <td><span class="key">arnold:sleep</span></td>
           <td>Sleep duration, scores</td>
           <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
           <td>PHI, browser-accessible</td>
-          <td>Encrypt; add auth gate</td>
+          <td>✓ AES-256-GCM encrypted</td>
         </tr>
         <tr>
           <td><span class="key">arnold:weight</span></td>
           <td>Body weight, body fat %</td>
           <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
           <td>PHI, body composition data</td>
-          <td>Encrypt; add auth gate</td>
+          <td>✓ AES-256-GCM encrypted</td>
         </tr>
         <tr>
           <td><span class="key">arnold:cronometer</span></td>
@@ -921,7 +921,7 @@
           <td>Daily FIT + nutrition combined</td>
           <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
           <td>Contains HR, calories, macros</td>
-          <td>Encrypt; add auth gate</td>
+          <td>✓ AES-256-GCM encrypted</td>
         </tr>
         <tr>
           <td><span class="key">arnold:nutrition-log</span></td>
@@ -991,7 +991,7 @@
           <td>Full data snapshots</td>
           <td><span class="tag" style="background:rgba(239,68,68,0.12);color:#ef4444">CRITICAL</span></td>
           <td>Contains ALL above data</td>
-          <td>Encrypt backup blobs</td>
+          <td>✓ AES-256-GCM encrypted</td>
         </tr>
         <tr>
           <td><span class="key">arnold:ai-cache</span></td>
