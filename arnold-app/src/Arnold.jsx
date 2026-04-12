@@ -285,7 +285,7 @@ function raceTypeBadge(distKm){
 }
 
 const TABS=[
-  {id:"training", label:"Training",icon:"◈"},
+  {id:"training", label:"EdgeIQ",icon:"◈"},
   {id:"daily",    label:"Daily",  icon:"⊕"},
   {id:"weekly",   label:"Weekly", icon:"◈"},
   {id:"labs",     label:"Labs",   icon:"⬡"},
@@ -324,10 +324,10 @@ export default function App(){
 
   // ── Mobile nav handler (for drill-down tabs — when MobileHome is NOT active) ──
   const handleMobileNav=(item)=>{
-    const tabMap={training:'weekly',daily_tab:'daily',body:'clinical'};
+    const tabMap={training:'weekly',activity:'activity',nutrition:'nutrition_mobile',body:'clinical'};
     if(item.id==='more'){setMobileMoreOpen(true);return;}
     if(tabMap[item.id]){setTab(tabMap[item.id]);return;}
-    // home, nutrition, sync → go back to MobileHome
+    // home, sync → go back to MobileHome
     setMobileInitView(item.id==='home'?'home':item.id);
     setTab('training');
   };
@@ -335,7 +335,9 @@ export default function App(){
   // ── Map current tab to active nav id for mobile ──
   const mobileActiveId=(()=>{
     if(tab==='weekly')return'training';
-    if(tab==='daily')return'daily_tab';
+    if(tab==='activity')return'activity';
+    if(tab==='nutrition_mobile')return'nutrition';
+    if(tab==='daily')return'activity'; // legacy daily → activity
     if(tab==='clinical')return'body';
     if(tab==='labs')return'body';
     if(tab==='goals'||tab==='supplements'||tab==='races')return'more';
@@ -343,7 +345,7 @@ export default function App(){
   })();
 
   // ── Swipe navigation for drill-down tabs ──
-  const SWIPE_ORDER=['home','training','daily_tab','body','nutrition'];
+  const SWIPE_ORDER=['home','training','activity','nutrition','body'];
   const mobileSwipe=useSwipeNav({
     onSwipeLeft:()=>{
       if(!isMobileApp||mobileHomeActive)return;
@@ -413,6 +415,8 @@ export default function App(){
         {tab==="clinical"&&<div className="arnold-tab-panel"><ClinicalModule data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('home')}/></div>}
         {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast}/></div>}
+        {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity"/></div>}
+        {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition"/></div>}
         {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
         {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
@@ -1314,7 +1318,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOG TODAY + WORKOUT LOG
 // ═══════════════════════════════════════════════════════════════════════════════
-function LogDay({data,persist,showToast}){
+function LogDay({data,persist,showToast,mobileView}){
   const ts=td(),ex=data.logs.find(l=>l.date===ts);
   const[notes,setNotes]=useState(ex?.notes||"");
   const[todayFIT,setTodayFIT]=useState(null);
@@ -1765,20 +1769,20 @@ function LogDay({data,persist,showToast}){
 
   return(
     <div style={S.sec}>
-      <div style={S.st}>⊕ Daily Log · {ts}</div>
+      <div style={S.st}>{mobileView==='activity'?'\u25CB Activity':mobileView==='nutrition'?'\u25C6 Nutrition':'\u2295 Daily Log'} {'\u00b7'} {ts}</div>
 
-      {todayLoaded&&(
+      {todayLoaded&&!mobileView&&(
         <div style={{fontSize:10,color:'var(--text-accent)',display:'flex',alignItems:'center',gap:4,marginBottom:8}}>
           <span>✓</span>
-          <span>Today's entry loaded · {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</span>
+          <span>Today's entry loaded {'\u00b7'} {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</span>
         </div>
       )}
 
-      {/* ═══ Two-column cockpit ═══ */}
-      <div className="arnold-daily-grid" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
+      {/* ═══ Two-column cockpit (desktop) / Single-column (mobile views) ═══ */}
+      <div className="arnold-daily-grid" style={{display:'grid',gridTemplateColumns:mobileView?'1fr':'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
 
-        {/* ── LEFT: Activity ── */}
-        <div>
+        {/* ── LEFT: Activity (show in desktop or mobileView=activity) ── */}
+        {mobileView!=='nutrition'&&<div>
           <UploadPill label="Today's activity" sub="Drop .fit or click to browse"
             accept=".fit,.FIT" onFile={handleTodayFIT} inputRef={fitRef}
             loaded={!!todayFIT} filename={fitFilename} error={fitError}/>
@@ -1947,13 +1951,14 @@ function LogDay({data,persist,showToast}){
               </>}
             </>}
           </div>
-        </div>
+        </div>}
 
-        {/* ── RIGHT: Nutrition ── */}
-        <div>
-          <UploadPill label="Today's nutrition" sub="Drop Cronometer CSV or click"
+        {/* ── RIGHT: Nutrition (show in desktop or mobileView=nutrition) ── */}
+        {mobileView!=='activity'&&<div>
+          {/* Cronometer CSV upload — desktop only (not on mobile nutrition tab) */}
+          {!mobileView&&<UploadPill label="Today's nutrition" sub="Drop Cronometer CSV or click"
             accept=".csv" onFile={handleTodayNut} inputRef={nutRef}
-            loaded={!!todayNutrition} filename={nutFilename} error={nutError}/>
+            loaded={!!todayNutrition} filename={nutFilename} error={nutError}/>}
 
           <div style={panelStyle}>
             {!nutData?(
@@ -2045,12 +2050,12 @@ function LogDay({data,persist,showToast}){
               }catch{}
             }}/>
           </div>
-        </div>
+        </div>}
 
       </div>
 
-      {/* ═══ 7-DAY TRENDS ═══ */}
-      {(()=>{
+      {/* ═══ 7-DAY TRENDS (desktop only) ═══ */}
+      {!mobileView&&(()=>{
         const targetWt=parseFloat(profile?.targetWeight)||175;
         const maxMiles=Math.max(...dailyMiles,1);
         const maxCal=Math.max(...dailyCals.filter(c=>c!=null),calT,1);
@@ -2146,8 +2151,8 @@ function LogDay({data,persist,showToast}){
         );
       })()}
 
-      {/* ═══ Recovery + Notes row ═══ */}
-      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12}}>
+      {/* ═══ Recovery + Notes row (desktop) ═══ */}
+      {!mobileView&&<div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12}}>
         {/* Recovery */}
         <div style={panelStyle}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
@@ -2156,19 +2161,19 @@ function LogDay({data,persist,showToast}){
           </div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4, minmax(0,1fr))',gap:5}}>
             <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestHRV?.overnightHRV?`${latestHRV.overnightHRV}ms`:'—'}</div>
+              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestHRV?.overnightHRV?`${latestHRV.overnightHRV}ms`:'--'}</div>
               <div style={{fontSize:8,color:'var(--text-muted)'}}>HRV</div>
             </div>
             <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.durationMinutes?`${Math.floor(latestSleep.durationMinutes/60)}h ${latestSleep.durationMinutes%60}m`:'—'}</div>
-              <div style={{fontSize:8,color:'var(--text-muted)'}}>Sleep {latestSleep?.sleepScore?`· ${latestSleep.sleepScore}/100`:''}</div>
+              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.durationMinutes?`${Math.floor(latestSleep.durationMinutes/60)}h ${latestSleep.durationMinutes%60}m`:'--'}</div>
+              <div style={{fontSize:8,color:'var(--text-muted)'}}>Sleep {latestSleep?.sleepScore?`\u00b7 ${latestSleep.sleepScore}/100`:''}</div>
             </div>
             <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.restingHR?`${latestSleep.restingHR}`:'—'}</div>
+              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.restingHR?`${latestSleep.restingHR}`:'--'}</div>
               <div style={{fontSize:8,color:'var(--text-muted)'}}>Resting HR</div>
             </div>
             <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.bodyBattery?`${latestSleep.bodyBattery}`:'—'}</div>
+              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.bodyBattery?`${latestSleep.bodyBattery}`:'--'}</div>
               <div style={{fontSize:8,color:'var(--text-muted)'}}>Body battery</div>
             </div>
           </div>
@@ -2184,12 +2189,24 @@ function LogDay({data,persist,showToast}){
             placeholder="How did today feel? Energy, mood, reflection..."
             style={{...S.ta,minHeight:70,marginBottom:8}}/>
           <button style={{...S.sb,padding:'10px 14px',width:'100%'}} onClick={handleSave}>
-            {saveStatus==='saved'?'✓ Saved':'Save daily entry'}
+            {saveStatus==='saved'?'\u2713 Saved':'Save daily entry'}
           </button>
         </div>
-      </div>
+      </div>}
 
-      <StackCard dateStr={ts} showToast={showToast}/>
+      {/* ═══ Mobile Activity: compact notes + save ═══ */}
+      {mobileView==='activity'&&(
+        <div style={panelStyle}>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)}
+            placeholder="How did today feel? Energy, mood, reflection..."
+            style={{...S.ta,minHeight:50,marginBottom:8,fontSize:12}}/>
+          <button style={{...S.sb,padding:'10px 14px',width:'100%'}} onClick={handleSave}>
+            {saveStatus==='saved'?'\u2713 Saved':'Save daily entry'}
+          </button>
+        </div>
+      )}
+
+      {!mobileView&&<StackCard dateStr={ts} showToast={showToast}/>}
     </div>
   );
 }
@@ -2913,10 +2930,10 @@ Structure:
     }
     return(
       <div style={S.sec}>
-        <div style={S.st}>◈ Training Intelligence</div>
+        <div style={S.st}>◈ EdgeIQ</div>
         <div style={{...S.empty,display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
           <div style={{fontSize:"clamp(13px,0.8vw + 9px,16px)",color:C.t}}>No training data yet.</div>
-          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>Import your CSVs in the Daily tab to unlock Training intelligence.</div>
+          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>Import your CSVs in the Daily tab to unlock EdgeIQ.</div>
           <button style={{...S.sb,width:"auto",padding:"10px 24px"}} onClick={()=>setTab("daily")}>Go to Daily →</button>
         </div>
       </div>
@@ -3175,7 +3192,7 @@ Structure:
       {/* Section 1: Page header */}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
         <div>
-          <div style={{fontSize:14,fontWeight:500,color:'var(--text-primary)',letterSpacing:'0.02em'}}>◈ Training Intelligence</div>
+          <div style={{fontSize:14,fontWeight:500,color:'var(--text-primary)',letterSpacing:'0.02em'}}>◈ EdgeIQ</div>
           <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{yearLabel} · {yearStr}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'center'}}>

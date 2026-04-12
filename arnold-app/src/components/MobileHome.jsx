@@ -44,10 +44,10 @@ const GRADIENTS = {
 // ─── Bottom Nav Config ──────────────────────────────────────────────────────
 export const NAV_ITEMS = [
   { id: 'home',      icon: '⬡', label: 'Home' },
-  { id: 'training',  icon: '◇', label: 'Training', tab: 'weekly' },
-  { id: 'daily_tab', icon: '◎', label: 'Daily',    tab: 'daily' },
+  { id: 'training',  icon: '◇', label: 'EdgeIQ', tab: 'weekly' },
+  { id: 'activity',  icon: '◎', label: 'Activity', tab: 'activity' },
+  { id: 'nutrition', icon: '◈', label: 'Nutrition', tab: 'nutrition_mobile' },
   { id: 'body',      icon: '△', label: 'Body',     tab: 'clinical' },
-  { id: 'nutrition', icon: '◈', label: 'Nutrition', tab: 'daily' },
   { id: 'more',      icon: '⋯', label: 'More' },
 ];
 
@@ -76,7 +76,7 @@ export function useSwipeNav({ onSwipeLeft, onSwipeRight, threshold = 60 } = {}) 
 }
 
 // ─── Ordered nav ids for swipe cycling ──────────────────────────────────────
-const SWIPE_ORDER = ['home', 'training', 'daily_tab', 'body', 'nutrition'];
+const SWIPE_ORDER = ['home', 'training', 'activity', 'nutrition', 'body'];
 
 // ─── Micro-interaction: spring press ────────────────────────────────────────
 function usePress() {
@@ -337,12 +337,7 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
       setActiveNav('home');
       return;
     }
-    if (item.id === 'nutrition') {
-      // Stay in MobileHome — show inline nutrition panel
-      setActiveNav('nutrition');
-      return;
-    }
-    // Navigate to drill-down tab
+    // Navigate to drill-down tab (activity, nutrition, body, training)
     setActiveNav(item.id);
     onOpenTab?.(item.tab);
   };
@@ -660,16 +655,6 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
 
 
       </>}
-
-      {/* ═══ NUTRITION PANEL (inline when nav = nutrition) ═══════════════════ */}
-      {activeNav === 'nutrition' && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.1em', textTransform: 'uppercase', padding: '0 2px', marginBottom: 10 }}>
-            NUTRITION
-          </div>
-          <NutritionInput date={new Date().toISOString().slice(0, 10)} />
-        </div>
-      )}
 
       {/* ═══ DATA SYNC PANEL (inline when nav = sync) ═════════════════════ */}
       {activeNav === 'sync' && (
