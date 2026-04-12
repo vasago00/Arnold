@@ -422,7 +422,7 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
             </div>
           </div>
           {/* Race countdown pill (if exists) */}
-          {nextRace && raceDaysLeft != null && raceDaysLeft > 0 && (
+          {nextRace && raceDaysLeft != null && raceDaysLeft >= 0 && (
             <div
               onClick={() => onOpenTab?.('races')}
               style={{
@@ -433,7 +433,7 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
             >
               <span style={{ fontSize: 10, color: '#f97316' }}>🏁</span>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#f97316', lineHeight: 1 }}>{raceDaysLeft}d</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: raceDaysLeft === 0 ? '#ef4444' : '#f97316', lineHeight: 1 }}>{raceDaysLeft === 0 ? 'Today!' : `${raceDaysLeft}d`}</div>
                 <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.5)', marginTop: 1, maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {(() => {
                     const distKm = parseFloat(nextRace.distance_km || nextRace.distanceKm || 0);

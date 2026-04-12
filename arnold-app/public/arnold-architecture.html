@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Architecture Map</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0b10; color: #e2e8f0; font-family: 'Inter', -apple-system, system-ui, sans-serif; padding: 24px; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+  .subtitle { font-size: 13px; color: #64748b; margin-bottom: 32px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; flex-wrap: wrap; }
+  .tab { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; background: rgba(255,255,255,0.04); color: #94a3b8; transition: all 0.2s; }
+  .tab.active { background: rgba(96,165,250,0.15); color: #60a5fa; }
+  .tab:hover { background: rgba(255,255,255,0.08); }
+  .view { display: none; }
+  .view.active { display: block; }
+  .diagram { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 24px; margin-bottom: 24px; overflow-x: auto; }
+  .diagram h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #fff; }
+  .diagram h3 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 16px; background: rgba(255,255,255,0.02); border-radius: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 4px; }
+  .legend-line { width: 24px; height: 3px; border-radius: 2px; }
+
+  .stats { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat { text-align: center; }
+  .stat-val { font-size: 28px; font-weight: 700; color: #fff; }
+  .stat-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  /* Table */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .data-table th { text-align: left; padding: 8px 12px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .data-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); color: #cbd5e1; }
+  .data-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .key { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 10px; color: #60a5fa; }
+  .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 600; margin: 1px 2px; }
+  .tag-w { background: rgba(74,222,128,0.12); color: #4ade80; }
+  .tag-r { background: rgba(96,165,250,0.12); color: #60a5fa; }
+  .tag-red { background: rgba(239,68,68,0.12); color: #ef4444; }
+
+  /* Node styles */
+  .node-grid { display: grid; gap: 8px; }
+  .node-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .node-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .node { padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06); position: relative; }
+  .node .name { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+  .node .desc { font-size: 10px; color: #64748b; line-height: 1.4; }
+  .node .badge { position: absolute; top: 8px; right: 8px; font-size: 8px; font-weight: 700; padding: 2px 6px; border-radius: 6px; letter-spacing: 0.05em; }
+  .n-redundant { background: rgba(239,68,68,0.06); border-color: rgba(239,68,68,0.15); }
+  .n-redundant .badge { background: rgba(239,68,68,0.15); color: #ef4444; }
+
+  /* Flow */
+  .flow { display: flex; align-items: center; gap: 12px; padding: 10px 0; flex-wrap: wrap; }
+  .flow-box { padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .flow-arrow { color: #475569; font-size: 16px; }
+  .n-input { background: rgba(74,222,128,0.06); border-color: rgba(74,222,128,0.15); }
+  .n-store { background: rgba(96,165,250,0.06); border-color: rgba(96,165,250,0.15); }
+  .n-compute { background: rgba(251,191,36,0.06); border-color: rgba(251,191,36,0.15); }
+  .n-display { background: rgba(168,85,247,0.06); border-color: rgba(168,85,247,0.15); }
+  .n-ai { background: rgba(236,72,153,0.06); border-color: rgba(236,72,153,0.15); }
+  .n-shared { background: rgba(34,211,238,0.06); border-color: rgba(34,211,238,0.15); }
+
+  svg text { font-family: 'Inter', -apple-system, sans-serif; }
+  .svg-wrap { width: 100%; overflow-x: auto; }
+
+  @media (max-width: 768px) {
+    .node-grid.cols-3 { grid-template-columns: 1fr 1fr; }
+    .stats { gap: 16px; }
+    .stat-val { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>ARNOLD Architecture Map</h1>
+<div class="subtitle">Health Intelligence Dashboard &middot; ~13,000 lines &middot; Vite + React 19 &middot; localStorage + IndexedDB</div>
+
+<div class="stats">
+  <div class="stat"><div class="stat-val">21</div><div class="stat-label">Storage Keys</div></div>
+  <div class="stat"><div class="stat-val">19</div><div class="stat-label">Components</div></div>
+  <div class="stat"><div class="stat-val">14</div><div class="stat-label">Core Modules</div></div>
+  <div class="stat"><div class="stat-val">14</div><div class="stat-label">Data Inputs</div></div>
+  <div class="stat"><div class="stat-val" style="color:#4ade80">3</div><div class="stat-label">Remaining Debt</div></div>
+  <div class="stat"><div class="stat-val" style="color:#4ade80">8</div><div class="stat-label">Resolved</div></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showView('desktop')">Desktop Architecture</button>
+  <button class="tab" onclick="showView('mobile')">Mobile Architecture</button>
+  <button class="tab" onclick="showView('storage')">Storage Map</button>
+  <button class="tab" onclick="showView('dataflow')">Data Flow</button>
+  <button class="tab" onclick="showView('redundancies')">Redundancies</button>
+  <button class="tab" onclick="showView('security')">Security Audit</button>
+</div>
+
+<!-- ═══ DESKTOP ARCHITECTURE ═══ -->
+<div id="desktop" class="view active">
+  <div class="diagram">
+    <h2>Desktop Architecture — Component → Storage Dependencies</h2>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-line" style="background:#4ade80"></div>Write</div>
+      <div class="legend-item"><div class="legend-line" style="background:#60a5fa"></div>Read</div>
+      <div class="legend-item"><div class="legend-line" style="background:#ef4444;border:1px dashed #ef4444;background:transparent"></div>Direct localStorage (bypass)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#fbbf24"></div>Compute</div>
+      <div class="legend-item"><div class="legend-line" style="background:#ec4899"></div>AI call</div>
+    </div>
+    <div class="svg-wrap">
+    <svg viewBox="0 0 1100 820" style="width:100%;min-width:900px;">
+      <defs>
+        <marker id="aw" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4ade80"/></marker>
+        <marker id="ar" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#60a5fa"/></marker>
+        <marker id="ac" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#fbbf24"/></marker>
+        <marker id="ai" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ec4899"/></marker>
+        <marker id="ax" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ef4444"/></marker>
+      </defs>
+
+      <!-- ── LAYER LABELS ── -->
+      <text x="16" y="28" font-size="10" font-weight="700" fill="#4ade80" letter-spacing="0.1em">INPUT COMPONENTS</text>
+      <text x="16" y="218" font-size="10" font-weight="700" fill="#60a5fa" letter-spacing="0.1em">STORAGE KEYS (localStorage)</text>
+      <text x="16" y="438" font-size="10" font-weight="700" fill="#fbbf24" letter-spacing="0.1em">COMPUTE LAYER</text>
+      <text x="16" y="598" font-size="10" font-weight="700" fill="#a855f7" letter-spacing="0.1em">DISPLAY TABS</text>
+
+      <!-- ═══ ROW 1: Input Components (y=40) ═══ -->
+      <!-- ImportHub -->
+      <rect x="30" y="44" width="120" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="90" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">ImportHub</text>
+      <text x="90" y="74" text-anchor="middle" font-size="8" fill="#64748b">CSV/FIT bulk</text>
+
+      <!-- LogDay (input side) -->
+      <rect x="180" y="44" width="120" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="240" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">LogDay</text>
+      <text x="240" y="74" text-anchor="middle" font-size="8" fill="#64748b">Daily FIT + notes</text>
+
+      <!-- NutritionInput -->
+      <rect x="330" y="44" width="130" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="395" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">NutritionInput</text>
+      <text x="395" y="74" text-anchor="middle" font-size="8" fill="#64748b">Manual/Barcode/Voice/Photo</text>
+
+      <!-- GoalsHub -->
+      <rect x="490" y="44" width="110" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="545" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">GoalsHub</text>
+      <text x="545" y="74" text-anchor="middle" font-size="8" fill="#64748b">Goal CRUD</text>
+
+      <!-- WeeklyPlanner -->
+      <rect x="630" y="44" width="130" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="695" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">WeeklyPlanner</text>
+      <text x="695" y="74" text-anchor="middle" font-size="8" fill="#64748b">Mon-Sun plan grid</text>
+
+      <!-- ProfileSettings -->
+      <rect x="790" y="44" width="130" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="855" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">ProfileSettings</text>
+      <text x="855" y="74" text-anchor="middle" font-size="8" fill="#64748b">Profile + Backup + Sync</text>
+
+      <!-- SupplementsTab -->
+      <rect x="950" y="44" width="120" height="40" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="1010" y="60" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">Supplements</text>
+      <text x="1010" y="74" text-anchor="middle" font-size="8" fill="#64748b">Stack + adherence</text>
+
+      <!-- RacesTab input -->
+      <rect x="30" y="100" width="120" height="36" rx="8" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)" stroke-width="1.5"/>
+      <text x="90" y="118" text-anchor="middle" font-size="10" fill="#4ade80" font-weight="700">RacesTab</text>
+      <text x="90" y="130" text-anchor="middle" font-size="8" fill="#64748b">Race scheduling</text>
+
+      <!-- DataSync -->
+      <rect x="180" y="100" width="120" height="36" rx="8" fill="rgba(34,211,238,0.1)" stroke="rgba(34,211,238,0.3)" stroke-width="1.5"/>
+      <text x="240" y="118" text-anchor="middle" font-size="10" fill="#22d3ee" font-weight="700">DataSync</text>
+      <text x="240" y="130" text-anchor="middle" font-size="8" fill="#64748b">Export/Import JSON</text>
+
+      <!-- BackupPanel -->
+      <rect x="330" y="100" width="120" height="36" rx="8" fill="rgba(34,211,238,0.1)" stroke="rgba(34,211,238,0.3)" stroke-width="1.5"/>
+      <text x="390" y="118" text-anchor="middle" font-size="10" fill="#22d3ee" font-weight="700">BackupPanel</text>
+      <text x="390" y="130" text-anchor="middle" font-size="8" fill="#64748b">Auto-backup slots</text>
+
+      <!-- ═══ ROW 2: Storage Keys (y=230) ═══ -->
+      <rect x="30" y="234" width="130" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="95" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">garmin-activities</text>
+
+      <rect x="170" y="234" width="70" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="205" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">hrv</text>
+
+      <rect x="250" y="234" width="70" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="285" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">sleep</text>
+
+      <rect x="330" y="234" width="80" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="370" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">weight</text>
+
+      <rect x="420" y="234" width="95" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="467" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">cronometer</text>
+
+      <rect x="525" y="234" width="90" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="570" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">workouts</text>
+
+      <rect x="625" y="234" width="90" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="670" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">daily-logs</text>
+
+      <rect x="725" y="234" width="100" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="775" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">nutrition-log</text>
+
+      <rect x="835" y="234" width="70" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="870" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">goals</text>
+
+      <rect x="915" y="234" width="80" height="34" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="955" y="256" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">planner</text>
+
+      <!-- Row 2b -->
+      <rect x="30" y="280" width="70" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="65" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">races</text>
+
+      <rect x="110" y="280" width="75" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="147" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">profile</text>
+
+      <rect x="195" y="280" width="60" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="225" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">logs</text>
+
+      <rect x="265" y="280" width="115" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="322" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">supplements-*</text>
+
+      <rect x="390" y="280" width="100" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="440" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">import-history</text>
+
+      <rect x="500" y="280" width="100" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="550" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">backup:slot-*</text>
+
+      <rect x="610" y="280" width="80" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="650" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">ai-cache</text>
+
+      <rect x="700" y="280" width="80" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1"/>
+      <text x="740" y="300" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">events</text>
+
+      <!-- ═══ WRITE LINES: Input → Storage (green) ═══ -->
+      <!-- ImportHub → garmin-activities, hrv, sleep, weight, cronometer -->
+      <path d="M90 84 L90 170 L95 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+      <path d="M75 84 L75 190 L205 190 L205 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+      <path d="M100 84 L100 195 L285 195 L285 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+      <path d="M110 84 L110 200 L370 200 L370 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+      <path d="M120 84 L120 205 L467 205 L467 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- LogDay → daily-logs, workouts, cronometer -->
+      <path d="M220 84 L220 180 L670 180 L670 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+      <path d="M250 84 L250 175 L570 175 L570 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+      <!-- LogDay → daily-logs (now via storage.get) -->
+      <path d="M230 84 L230 170 L660 170 L660 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- NutritionInput → nutrition-log -->
+      <path d="M395 84 L395 180 L775 180 L775 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- GoalsHub → goals -->
+      <path d="M545 84 L545 185 L870 185 L870 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- WeeklyPlanner → planner -->
+      <path d="M695 84 L695 190 L955 190 L955 234" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- ProfileSettings → profile -->
+      <path d="M855 84 L855 210 L147 210 L147 280" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- Supplements → supplements-* -->
+      <path d="M1010 84 L1010 160 L322 160 L322 280" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- RacesTab → races -->
+      <path d="M90 136 L90 155 L65 155 L65 280" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.7"/>
+
+      <!-- DataSync → all keys (cyan) -->
+      <path d="M240 136 L240 155" stroke="#22d3ee" stroke-width="2" fill="none" opacity="0.5"/>
+      <text x="248" y="155" font-size="8" fill="#22d3ee" font-weight="600">R/W all arnold:* keys</text>
+
+      <!-- BackupPanel → backup:slot-* -->
+      <path d="M390 136 L390 165 L550 165 L550 280" stroke="#22d3ee" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- ═══ ROW 3: Compute (y=450) ═══ -->
+      <rect x="30" y="450" width="160" height="40" rx="8" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.25)" stroke-width="1.5"/>
+      <text x="110" y="466" text-anchor="middle" font-size="10" fill="#fbbf24" font-weight="700">trainingIntelligence</text>
+      <text x="110" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">load, readiness, monotony</text>
+
+      <rect x="210" y="450" width="140" height="40" rx="8" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.25)" stroke-width="1.5"/>
+      <text x="280" y="466" text-anchor="middle" font-size="10" fill="#fbbf24" font-weight="700">principles.js</text>
+      <text x="280" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">12 training scores</text>
+
+      <rect x="370" y="450" width="130" height="40" rx="8" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.25)" stroke-width="1.5"/>
+      <text x="435" y="466" text-anchor="middle" font-size="10" fill="#fbbf24" font-weight="700">nutrition.js</text>
+      <text x="435" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">dailyTotals, macros</text>
+
+      <rect x="520" y="450" width="130" height="40" rx="8" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.25)" stroke-width="1.5"/>
+      <text x="585" y="466" text-anchor="middle" font-size="10" fill="#fbbf24" font-weight="700">planner.js</text>
+      <text x="585" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">todayPlanned, completion</text>
+
+      <rect x="670" y="450" width="140" height="40" rx="8" fill="rgba(236,72,153,0.08)" stroke="rgba(236,72,153,0.25)" stroke-width="1.5"/>
+      <text x="740" y="466" text-anchor="middle" font-size="10" fill="#ec4899" font-weight="700">aiAnnotations.js</text>
+      <text x="740" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">Claude API → summaries</text>
+
+      <rect x="830" y="450" width="120" height="40" rx="8" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.25)" stroke-width="1.5"/>
+      <text x="890" y="466" text-anchor="middle" font-size="10" fill="#fbbf24" font-weight="700">derive/*</text>
+      <text x="890" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">pace, HR, volume</text>
+
+      <rect x="970" y="450" width="110" height="40" rx="8" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.25)" stroke-width="1.5"/>
+      <text x="1025" y="466" text-anchor="middle" font-size="10" fill="#fbbf24" font-weight="700">activityNeeds.js</text>
+      <text x="1025" y="480" text-anchor="middle" font-size="8" fill="#94a3b8">replenish targets</text>
+
+      <!-- Storage → Compute arrows (blue read lines) -->
+      <!-- garmin-activities → trainingIntelligence -->
+      <path d="M95 268 L95 340 L80 340 L80 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+      <!-- hrv, sleep → trainingIntelligence -->
+      <path d="M205 268 L205 350 L120 350 L120 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+      <path d="M285 268 L285 355 L140 355 L140 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- garmin-activities → principles -->
+      <path d="M120 268 L120 345 L250 345 L250 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- cronometer + nutrition-log → nutrition.js -->
+      <path d="M467 268 L467 380 L420 380 L420 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+      <path d="M775 268 L775 370 L450 370 L450 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- planner → planner.js -->
+      <path d="M955 268 L955 380 L600 380 L600 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+      <!-- 3 activity stores → planner.js completion check -->
+      <path d="M95 268 L95 395 L560 395 L560 450" stroke="#60a5fa" stroke-width="1.2" fill="none" marker-end="url(#ar)" opacity="0.35"/>
+      <path d="M570 268 L570 390 L575 390 L575 450" stroke="#60a5fa" stroke-width="1.2" fill="none" marker-end="url(#ar)" opacity="0.35"/>
+      <path d="M670 268 L670 385 L590 385 L590 450" stroke="#60a5fa" stroke-width="1.2" fill="none" marker-end="url(#ar)" opacity="0.35"/>
+
+      <!-- hrv, sleep → aiAnnotations -->
+      <path d="M205 268 L205 400 L720 400 L720 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+      <path d="M285 268 L285 405 L740 405 L740 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- garmin-activities → derive -->
+      <path d="M130 268 L130 410 L880 410 L880 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- ═══ ROW 4: Display Tabs (y=610) ═══ -->
+      <rect x="30" y="610" width="120" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="90" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">Dashboard</text>
+      <text x="90" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Weekly overview</text>
+
+      <rect x="170" y="610" width="120" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="230" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">TrainingTab</text>
+      <text x="230" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Intelligence dashboard</text>
+
+      <rect x="310" y="610" width="100" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="360" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">LogDay</text>
+      <text x="360" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Today's log</text>
+
+      <rect x="430" y="610" width="120" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="490" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">ClinicalModule</text>
+      <text x="490" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">DEXA/VO2/RMR</text>
+
+      <rect x="570" y="610" width="110" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="625" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">LabsModule</text>
+      <text x="625" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Blood panels</text>
+
+      <rect x="700" y="610" width="100" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="750" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">RacesTab</text>
+      <text x="750" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Race calendar</text>
+
+      <rect x="820" y="610" width="110" height="44" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="875" y="628" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">ProfileSettings</text>
+      <text x="875" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Profile + sync</text>
+
+      <rect x="950" y="610" width="110" height="44" rx="8" fill="rgba(236,72,153,0.1)" stroke="rgba(236,72,153,0.3)" stroke-width="1.5"/>
+      <text x="1005" y="628" text-anchor="middle" font-size="10" fill="#ec4899" font-weight="700">AICoach</text>
+      <text x="1005" y="642" text-anchor="middle" font-size="8" fill="#94a3b8">Q&A with Claude</text>
+
+      <!-- Compute → Display arrows (yellow) -->
+      <!-- trainingIntelligence → Dashboard, TrainingTab -->
+      <path d="M80 490 L80 520 L90 520 L90 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+      <path d="M140 490 L140 530 L230 530 L230 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+
+      <!-- principles → TrainingTab -->
+      <path d="M280 490 L280 540 L240 540 L240 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+
+      <!-- nutrition.js → LogDay display, Dashboard -->
+      <path d="M435 490 L435 545 L360 545 L360 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+      <path d="M420 490 L420 555 L100 555 L100 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+
+      <!-- planner.js → Dashboard, TrainingTab -->
+      <path d="M570 490 L570 535 L85 535 L85 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+      <path d="M600 490 L600 540 L250 540 L250 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+
+      <!-- aiAnnotations → Dashboard, LogDay -->
+      <path d="M720 490 L720 550 L95 550 L95 610" stroke="#ec4899" stroke-width="1.5" fill="none" marker-end="url(#ai)" opacity="0.5"/>
+      <path d="M740 490 L740 560 L365 560 L365 610" stroke="#ec4899" stroke-width="1.5" fill="none" marker-end="url(#ai)" opacity="0.5"/>
+
+      <!-- derive → TrainingTab -->
+      <path d="M890 490 L890 565 L260 565 L260 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.6"/>
+
+      <!-- daily-logs, garmin-activities → activityNeeds -->
+      <path d="M670 268 L670 415 L1010 415 L1010 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+      <path d="M95 268 L95 420 L1000 420 L1000 450" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#ar)" opacity="0.5"/>
+
+      <!-- activityNeeds → nutrition-log (writes replenish targets) -->
+      <path d="M1025 490 L1025 530 L775 530 L775 268" stroke="#4ade80" stroke-width="1.5" fill="none" marker-end="url(#aw)" opacity="0.5"/>
+
+      <!-- activityNeeds output to LogDay -->
+      <path d="M1000 490 L1000 575 L365 575 L365 610" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#ac)" opacity="0.5"/>
+
+      <!-- aiAnnotations → AICoach -->
+      <path d="M760 490 L760 570 L1005 570 L1005 610" stroke="#ec4899" stroke-width="1.5" fill="none" marker-end="url(#ai)" opacity="0.5"/>
+
+      <!-- Direct storage → display reads (some bypass compute) -->
+      <!-- weight → ClinicalModule (direct read) -->
+      <path d="M370 268 L370 380 L490 560 L490 610" stroke="#60a5fa" stroke-width="1" fill="none" marker-end="url(#ar)" opacity="0.3"/>
+
+      <!-- Note: red dashed keys not in KEYS map -->
+      <text x="625" y="225" font-size="8" fill="#4ade80" font-weight="600">Phase 1: All keys now in KEYS map — all access via storage.get/set</text>
+
+      <!-- Title box for the 3-store merge -->
+      <rect x="520" y="500" width="190" height="24" rx="4" fill="rgba(74,222,128,0.08)" stroke="rgba(74,222,128,0.2)" stroke-width="1"/>
+      <text x="615" y="516" text-anchor="middle" font-size="8" fill="#4ade80" font-weight="600">Phase 2a: checkTodayCompletion() in planner.js</text>
+
+    </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MOBILE ARCHITECTURE ═══ -->
+<div id="mobile" class="view">
+  <div class="diagram">
+    <h2>Mobile Architecture — MobileHome.jsx Component Tree</h2>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-line" style="background:#22d3ee"></div>Inline render (stays in MobileHome)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#a855f7"></div>Navigation (drill-down tab, nav persists)</div>
+      <div class="legend-item"><div class="legend-line" style="background:#60a5fa"></div>Storage read</div>
+      <div class="legend-item"><div class="legend-line" style="background:#4ade80"></div>Swipe L/R navigation (Phase A)</div>
+    </div>
+    <div class="svg-wrap">
+    <svg viewBox="0 0 1000 700" style="width:100%;min-width:800px;">
+      <defs>
+        <marker id="mc" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#22d3ee"/></marker>
+        <marker id="mn" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#a855f7"/></marker>
+        <marker id="mr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#60a5fa"/></marker>
+        <marker id="md" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ef4444"/></marker>
+      </defs>
+
+      <!-- MobileHome root -->
+      <rect x="350" y="20" width="200" height="50" rx="12" fill="rgba(168,85,247,0.12)" stroke="rgba(168,85,247,0.4)" stroke-width="2"/>
+      <text x="450" y="42" text-anchor="middle" font-size="13" fill="#a855f7" font-weight="700">MobileHome.jsx</text>
+      <text x="450" y="58" text-anchor="middle" font-size="9" fill="#94a3b8">Bottom nav: Home | Train | Body | Nutrition | More</text>
+
+      <!-- Bottom nav items -->
+      <rect x="40" y="110" width="110" height="40" rx="8" fill="rgba(22,211,238,0.1)" stroke="rgba(22,211,238,0.3)" stroke-width="1.5"/>
+      <text x="95" y="128" text-anchor="middle" font-size="10" fill="#22d3ee" font-weight="700">Home</text>
+      <text x="95" y="142" text-anchor="middle" font-size="8" fill="#64748b">Inline dashboard</text>
+
+      <rect x="180" y="110" width="110" height="40" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="235" y="128" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">Training</text>
+      <text x="235" y="142" text-anchor="middle" font-size="8" fill="#64748b">→ TrainingTab</text>
+
+      <rect x="320" y="110" width="110" height="40" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="375" y="128" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">Daily</text>
+      <text x="375" y="142" text-anchor="middle" font-size="8" fill="#64748b">→ LogDay</text>
+
+      <rect x="460" y="110" width="110" height="40" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="515" y="128" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">Body</text>
+      <text x="515" y="142" text-anchor="middle" font-size="8" fill="#64748b">→ ClinicalModule</text>
+
+      <rect x="600" y="110" width="120" height="40" rx="8" fill="rgba(22,211,238,0.1)" stroke="rgba(22,211,238,0.3)" stroke-width="1.5"/>
+      <text x="660" y="128" text-anchor="middle" font-size="10" fill="#22d3ee" font-weight="700">Nutrition</text>
+      <text x="660" y="142" text-anchor="middle" font-size="8" fill="#64748b">Inline NutritionInput</text>
+
+      <rect x="750" y="110" width="110" height="40" rx="8" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.3)" stroke-width="1.5"/>
+      <text x="805" y="128" text-anchor="middle" font-size="10" fill="#a855f7" font-weight="700">More</text>
+      <text x="805" y="142" text-anchor="middle" font-size="8" fill="#64748b">Menu → tabs</text>
+
+      <!-- Lines from MobileHome to nav items -->
+      <path d="M400 70 L95 110" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.3"/>
+      <path d="M420 70 L235 110" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.3"/>
+      <path d="M440 70 L375 110" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.3"/>
+      <path d="M460 70 L515 110" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.3"/>
+      <path d="M480 70 L660 110" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.3"/>
+      <path d="M500 70 L805 110" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.3"/>
+
+      <!-- ═══ HOME TAB — inline components ═══ -->
+      <text x="40" y="185" font-size="10" font-weight="700" fill="#22d3ee" letter-spacing="0.08em">HOME TAB (INLINE COMPONENTS)</text>
+
+      <rect x="20" y="200" width="130" height="36" rx="7" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="85" y="216" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Readiness Ring</text>
+      <text x="85" y="228" text-anchor="middle" font-size="7" fill="#64748b">60px hero arc dial</text>
+
+      <rect x="160" y="200" width="130" height="36" rx="7" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="225" y="216" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Metric Grid</text>
+      <text x="225" y="228" text-anchor="middle" font-size="7" fill="#64748b">2x3 compact tiles</text>
+
+      <rect x="300" y="200" width="130" height="36" rx="7" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="365" y="216" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Today Plan Card</text>
+      <text x="365" y="228" text-anchor="middle" font-size="7" fill="#64748b">Plan + completion check</text>
+
+      <rect x="440" y="200" width="130" height="36" rx="7" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="505" y="216" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Status Pills</text>
+      <text x="505" y="228" text-anchor="middle" font-size="7" fill="#64748b">Horizontal scroll</text>
+
+      <rect x="580" y="200" width="130" height="36" rx="7" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="645" y="216" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Race Countdown</text>
+      <text x="645" y="228" text-anchor="middle" font-size="7" fill="#64748b">Shows same-day &quot;Today!&quot; label</text>
+
+      <!-- MORE MENU destinations -->
+      <text x="750" y="185" font-size="10" font-weight="700" fill="#a855f7" letter-spacing="0.08em">MORE MENU</text>
+
+      <rect x="750" y="200" width="100" height="26" rx="5" fill="rgba(168,85,247,0.06)" stroke="rgba(168,85,247,0.15)" stroke-width="1"/>
+      <text x="800" y="218" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">Goals</text>
+
+      <rect x="860" y="200" width="100" height="26" rx="5" fill="rgba(168,85,247,0.06)" stroke="rgba(168,85,247,0.15)" stroke-width="1"/>
+      <text x="910" y="218" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">Planner</text>
+
+      <rect x="750" y="232" width="100" height="26" rx="5" fill="rgba(168,85,247,0.06)" stroke="rgba(168,85,247,0.15)" stroke-width="1"/>
+      <text x="800" y="250" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">Races</text>
+
+      <rect x="860" y="232" width="100" height="26" rx="5" fill="rgba(168,85,247,0.06)" stroke="rgba(168,85,247,0.15)" stroke-width="1"/>
+      <text x="910" y="250" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">Stack</text>
+
+      <rect x="750" y="264" width="100" height="26" rx="5" fill="rgba(34,211,238,0.06)" stroke="rgba(34,211,238,0.15)" stroke-width="1"/>
+      <text x="800" y="282" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Sync</text>
+
+      <rect x="860" y="264" width="100" height="26" rx="5" fill="rgba(168,85,247,0.06)" stroke="rgba(168,85,247,0.15)" stroke-width="1"/>
+      <text x="910" y="282" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">Labs</text>
+
+      <!-- More menu lines -->
+      <path d="M805 150 L800 200" stroke="#a855f7" stroke-width="1" fill="none" marker-end="url(#mn)" opacity="0.4"/>
+
+      <!-- ═══ STORAGE KEYS ═══ -->
+      <text x="40" y="310" font-size="10" font-weight="700" fill="#60a5fa" letter-spacing="0.08em">STORAGE KEYS READ BY MOBILE HOME</text>
+
+      <rect x="20" y="325" width="120" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="80" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">garmin-activities</text>
+
+      <rect x="150" y="325" width="65" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="182" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">hrv</text>
+
+      <rect x="225" y="325" width="65" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="257" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">sleep</text>
+
+      <rect x="300" y="325" width="75" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="337" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">weight</text>
+
+      <rect x="385" y="325" width="80" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="425" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">planner</text>
+
+      <rect x="475" y="325" width="70" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="510" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">goals</text>
+
+      <rect x="555" y="325" width="70" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="590" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">races</text>
+
+      <rect x="635" y="325" width="80" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="675" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">workouts</text>
+
+      <rect x="725" y="325" width="85" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="767" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">daily-logs</text>
+
+      <rect x="820" y="325" width="100" height="30" rx="6" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="870" y="345" text-anchor="middle" font-size="9" fill="#60a5fa" font-weight="600">nutrition-log</text>
+
+      <!-- ═══ CONNECTION LINES: Home components → Storage ═══ -->
+      <!-- Readiness Ring reads: garmin-activities, hrv, sleep, weight -->
+      <path d="M60 236 L60 265 L80 265 L80 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+      <path d="M70 236 L70 270 L182 270 L182 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+      <path d="M80 236 L80 275 L257 275 L257 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+      <path d="M90 236 L90 280 L337 280 L337 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+
+      <!-- Metric Grid reads: garmin-activities, hrv, sleep, weight, goals -->
+      <path d="M200 236 L200 285 L80 285 L80 325" stroke="#60a5fa" stroke-width="1.3" fill="none" marker-end="url(#mr)" opacity="0.45"/>
+      <path d="M215 236 L215 290 L510 290 L510 325" stroke="#60a5fa" stroke-width="1.3" fill="none" marker-end="url(#mr)" opacity="0.45"/>
+
+      <!-- Today Plan Card reads: planner, activities, workouts, daily-logs via checkTodayCompletion() -->
+      <path d="M340 236 L340 295 L425 295 L425 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+      <path d="M350 236 L350 300 L80 300 L80 325" stroke="#60a5fa" stroke-width="1.3" fill="none" marker-end="url(#mr)" opacity="0.4"/>
+      <path d="M360 236 L360 302 L675 302 L675 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.5"/>
+      <path d="M370 236 L370 306 L767 306 L767 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.5"/>
+
+      <!-- Race Countdown reads: races -->
+      <path d="M645 236 L645 290 L590 290 L590 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+
+      <!-- Nutrition tab (inline) reads: nutrition-log via storage.get -->
+      <path d="M660 150 L660 290 L870 290 L870 325" stroke="#60a5fa" stroke-width="1.5" fill="none" marker-end="url(#mr)" opacity="0.6"/>
+
+      <!-- Sync tab reads/writes: all keys (cyan) -->
+      <path d="M800 290 L800 310" stroke="#22d3ee" stroke-width="2" fill="none" opacity="0.6"/>
+      <text x="810" y="318" font-size="8" fill="#22d3ee" font-weight="600">R/W all arnold:* keys</text>
+
+      <!-- Navigation notes -->
+      <text x="20" y="370" font-size="10" font-weight="700" fill="#4ade80" letter-spacing="0.08em">NAVIGATION PATTERNS</text>
+      <rect x="20" y="380" width="900" height="60" rx="6" fill="rgba(74,222,128,0.04)" stroke="rgba(74,222,128,0.15)" stroke-width="1"/>
+      <text x="30" y="397" font-size="9" fill="#4ade80" font-weight="600">• Race data computed for both empty-state and data-state MobileHome paths</text>
+      <text x="30" y="412" font-size="9" fill="#4ade80" font-weight="600">• Same-day races show &quot;Today!&quot; label in countdown pill</text>
+      <text x="30" y="427" font-size="9" fill="#4ade80" font-weight="600">• Swipe navigation: L/R gestures cycle through tabs; Persistent bottom nav bar across drill-down tabs</text>
+
+      <!-- ═══ SHARED COMPONENT CALLOUT ═══ -->
+      <text x="40" y="410" font-size="10" font-weight="700" fill="#22d3ee" letter-spacing="0.08em">SHARED WITH DESKTOP (reused components)</text>
+
+      <rect x="20" y="425" width="130" height="32" rx="6" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="85" y="446" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">NutritionInput</text>
+
+      <rect x="160" y="425" width="100" height="32" rx="6" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="210" y="446" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">DataSync</text>
+
+      <rect x="270" y="425" width="100" height="32" rx="6" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="320" y="446" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">Sparkline</text>
+
+      <rect x="380" y="425" width="100" height="32" rx="6" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="430" y="446" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">ArcDial</text>
+
+      <rect x="490" y="425" width="100" height="32" rx="6" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="540" y="446" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">TrendBadge</text>
+
+      <rect x="600" y="425" width="100" height="32" rx="6" fill="rgba(22,211,238,0.08)" stroke="rgba(22,211,238,0.2)" stroke-width="1"/>
+      <text x="650" y="446" text-anchor="middle" font-size="9" fill="#22d3ee" font-weight="600">FocusCard</text>
+
+      <!-- ═══ COMPUTE STATUS CALLOUT ═══ -->
+      <text x="40" y="500" font-size="10" font-weight="700" fill="#94a3b8" letter-spacing="0.08em">SHARED COMPUTE (Phase 2 extractions)</text>
+
+      <rect x="20" y="515" width="180" height="40" rx="6" fill="rgba(74,222,128,0.06)" stroke="rgba(74,222,128,0.2)" stroke-width="1.5"/>
+      <text x="110" y="533" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Readiness Score ✓</text>
+      <text x="110" y="547" text-anchor="middle" font-size="7" fill="#4ade80" opacity="0.7">computeReadiness() in trainingIntelligence</text>
+
+      <rect x="210" y="515" width="200" height="40" rx="6" fill="rgba(74,222,128,0.06)" stroke="rgba(74,222,128,0.2)" stroke-width="1.5"/>
+      <text x="310" y="533" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Plan Completion ✓</text>
+      <text x="310" y="547" text-anchor="middle" font-size="7" fill="#4ade80" opacity="0.7">checkTodayCompletion() in planner.js</text>
+
+      <rect x="420" y="515" width="180" height="40" rx="6" fill="rgba(239,68,68,0.06)" stroke="rgba(239,68,68,0.2)" stroke-width="1.5"/>
+      <text x="510" y="533" text-anchor="middle" font-size="9" fill="#ef4444" font-weight="600">Weekly Metrics</text>
+      <text x="510" y="547" text-anchor="middle" font-size="7" fill="#ef4444" opacity="0.6">Still computed independently (Phase 2c)</text>
+
+      <!-- NOT AVAILABLE ON MOBILE -->
+      <text x="40" y="595" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.08em">NOT AVAILABLE ON MOBILE</text>
+
+      <rect x="20" y="608" width="120" height="28" rx="5" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <text x="80" y="628" text-anchor="middle" font-size="9" fill="#64748b" font-weight="600">AI Coach</text>
+
+      <rect x="150" y="608" width="120" height="28" rx="5" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <text x="210" y="628" text-anchor="middle" font-size="9" fill="#64748b" font-weight="600">Bulk CSV Import</text>
+
+      <rect x="280" y="608" width="140" height="28" rx="5" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <text x="350" y="628" text-anchor="middle" font-size="9" fill="#64748b" font-weight="600">AI Annotations Strip</text>
+
+    </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ STORAGE MAP ═══ -->
+<div id="storage" class="view">
+  <div class="diagram">
+    <h2>Storage Key Map — Who Reads &amp; Writes Each Key</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Key</th><th>Purpose</th><th>Writers</th><th>Readers</th><th>In KEYS Map?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="key">arnold:garmin-activities</span></td><td>Garmin exported activities</td><td><span class="tag tag-w">ImportHub</span><span class="tag tag-w">activitiesParser</span></td><td><span class="tag tag-r">TrainingTab</span><span class="tag tag-r">Dashboard</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">LogDay</span><span class="tag tag-r">planner.js</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:garmin-hrv</span></td><td>Heart Rate Variability</td><td><span class="tag tag-w">ImportHub</span></td><td><span class="tag tag-r">Dashboard</span><span class="tag tag-r">LogDay</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">trainingIntelligence</span><span class="tag tag-r">aiAnnotations</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:garmin-sleep</span></td><td>Sleep metrics</td><td><span class="tag tag-w">ImportHub</span></td><td><span class="tag tag-r">Dashboard</span><span class="tag tag-r">LogDay</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">trainingIntelligence</span><span class="tag tag-r">aiAnnotations</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:garmin-weight</span></td><td>Weight tracking</td><td><span class="tag tag-w">ImportHub</span></td><td><span class="tag tag-r">ClinicalModule</span><span class="tag tag-r">Dashboard</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">LogDay</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:cronometer</span></td><td>Cronometer nutrition (CSV)</td><td><span class="tag tag-w">ImportHub</span><span class="tag tag-w">LogDay</span></td><td><span class="tag tag-r">Dashboard</span><span class="tag tag-r">LogDay</span><span class="tag tag-r">nutrition.js</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:workouts</span></td><td>Manual workout logs</td><td><span class="tag tag-w">LogDay</span></td><td><span class="tag tag-r">TrainingTab</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">planner.js</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:daily-logs</span></td><td>Today's FIT + nutrition</td><td><span class="tag tag-w">LogDay</span></td><td><span class="tag tag-r">LogDay</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">planner.js</span><span class="tag tag-r">checkTodayCompletion</span></td><td><span class="tag tag-w">Yes (Phase 1)</span></td></tr>
+        <tr><td><span class="key">arnold:nutrition-log</span></td><td>Food entries (new system)</td><td><span class="tag tag-w">NutritionInput</span></td><td><span class="tag tag-r">NutritionInput</span><span class="tag tag-r">nutrition.js</span><span class="tag tag-r">Arnold.jsx</span></td><td><span class="tag tag-w">Yes (Phase 1)</span></td></tr>
+        <tr><td><span class="key">arnold:goals</span></td><td>Training/nutrition/body goals</td><td><span class="tag tag-w">GoalsHub</span></td><td><span class="tag tag-r">Every metric tile</span><span class="tag tag-r">MobileHome</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:planner</span></td><td>Weekly plan templates</td><td><span class="tag tag-w">WeeklyPlanner</span></td><td><span class="tag tag-r">planner.js</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">TrainingTab</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:races</span></td><td>Race schedule</td><td><span class="tag tag-w">RacesTab</span></td><td><span class="tag tag-r">RaceFocusCard</span><span class="tag tag-r">TrainingTab</span><span class="tag tag-r">MobileHome</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:profile</span></td><td>User profile</td><td><span class="tag tag-w">ProfileSettings</span></td><td><span class="tag tag-r">Header</span><span class="tag tag-r">MobileHome</span><span class="tag tag-r">getGoals()</span></td><td><span class="tag tag-w">Yes (bypass fixed)</span></td></tr>
+        <tr><td><span class="key">arnold:logs</span></td><td>Legacy daily logs</td><td><span class="tag tag-w">LogDay</span></td><td><span class="tag tag-r">data.logs (state)</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:supplements-catalog</span></td><td>Supplement product catalog</td><td><span class="tag tag-w">supplements.js</span></td><td><span class="tag tag-r">SupplementsTab</span><span class="tag tag-r">StackCard</span></td><td><span class="tag tag-w">Yes (Phase 1)</span></td></tr>
+        <tr><td><span class="key">arnold:supplements-stack</span></td><td>Your daily routine</td><td><span class="tag tag-w">supplements.js</span></td><td><span class="tag tag-r">StackCard</span><span class="tag tag-r">SupplementsTab</span></td><td><span class="tag tag-w">Yes (Phase 1)</span></td></tr>
+        <tr><td><span class="key">arnold:supplements-log</span></td><td>Daily intake tracking</td><td><span class="tag tag-w">supplements.js</span></td><td><span class="tag tag-r">SupplementsTab</span><span class="tag tag-r">StackCard</span></td><td><span class="tag tag-w">Yes (Phase 1)</span></td></tr>
+        <tr><td><span class="key">arnold:import-history</span></td><td>Import audit log</td><td><span class="tag tag-w">storage.set()</span></td><td><span class="tag tag-r">ImportDiagnostics</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:ai-cache</span></td><td>Cached AI responses</td><td><span class="tag tag-w">aiAnnotations</span></td><td><span class="tag tag-r">aiAnnotations</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:events</span></td><td>Calendar events (ICS)</td><td><span class="tag tag-w">icsParser</span></td><td><span class="tag tag-r">Dashboard</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:diagnostics</span></td><td>System diagnostics</td><td><span class="tag tag-w">system</span></td><td><span class="tag tag-r">ImportDiagnostics</span></td><td>Yes</td></tr>
+        <tr><td><span class="key">arnold:backup:slot-*</span></td><td>Auto-backup snapshots</td><td><span class="tag tag-w">backup.js</span></td><td><span class="tag tag-r">BackupPanel</span></td><td>N/A (dynamic)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══ DATA FLOW ═══ -->
+<div id="dataflow" class="view">
+  <div class="diagram">
+    <h2>Data Flow: Input to Display</h2>
+
+    <h3>Training Data Flow</h3>
+    <div class="flow">
+      <div class="flow-box n-input">Garmin CSV / FIT</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">activitiesParser / fitParser</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-store">arnold:garmin-activities</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">trainingIntelligence</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">TrainingTab / Dashboard / MobileHome</div>
+    </div>
+
+    <h3>Daily Activity Flow</h3>
+    <div class="flow">
+      <div class="flow-box n-input">FIT Upload (Daily tab)</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">fitParser</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-store">arnold:daily-logs</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">LogDay Dashboard</div>
+    </div>
+    <div class="flow">
+      <span style="width:24px"></span><span class="flow-arrow">↳</span>
+      <div class="flow-box n-store">arnold:workouts</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">TrainingTab (manual logs)</div>
+    </div>
+
+    <h3>Nutrition Data Flow (Two Parallel Systems)</h3>
+    <div class="flow">
+      <div class="flow-box n-input">Cronometer CSV</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">cronometerParser</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-store">arnold:cronometer</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">Dashboard Nutrition Panel</div>
+    </div>
+    <div class="flow">
+      <div class="flow-box n-input">Manual / Barcode / Voice / Photo</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">nutrition.js</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-store">arnold:nutrition-log</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">NutritionInput / MobileHome</div>
+    </div>
+
+    <h3>Recovery Data Flow</h3>
+    <div class="flow">
+      <div class="flow-box n-input">Garmin CSVs</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">hrvParser / sleepParser</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-store">arnold:garmin-hrv + sleep</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">aiAnnotations</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">AnnotationStrip / LogDay trends</div>
+    </div>
+
+    <h3>Planner Completion Check (3-store merge)</h3>
+    <div class="flow">
+      <div class="flow-box n-store">arnold:garmin-activities</div><span class="flow-arrow">+</span>
+      <div class="flow-box n-store">arnold:workouts</div><span class="flow-arrow">+</span>
+      <div class="flow-box n-store">arnold:daily-logs</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">regex match vs planner type</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display" style="background:rgba(74,222,128,0.1);border-color:rgba(74,222,128,0.3);">✓ Green completion</div>
+    </div>
+
+    <h3>Activity → Nutrition Needs Flow</h3>
+    <div class="flow">
+      <div class="flow-box n-input">Activity (FIT/CSV)</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">activityNeeds.js</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">computeActivityNeeds()</div>
+    </div>
+    <div style="padding: 8px 12px; margin: 8px 0; font-size: 10px; color: #94a3b8;">
+      <div style="margin-bottom: 4px;"><strong>Outputs:</strong> calories burned, duration, HR avg</div>
+    </div>
+    <div class="flow">
+      <span style="width:24px"></span><span class="flow-arrow">↳</span>
+      <div class="flow-box n-compute">hydration.js</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">sweat loss estimate</div>
+    </div>
+    <div style="padding: 8px 12px; margin: 8px 0; font-size: 10px; color: #94a3b8;">
+      <div style="margin-bottom: 4px;"><strong>Micro-Goals Generated:</strong></div>
+      <div>Pre-Workout: carbs target (g)</div>
+      <div>During: carbs + water (if &gt;45min)</div>
+      <div>Post: protein + carbs + water targets</div>
+    </div>
+    <div class="flow">
+      <span style="width:24px"></span><span class="flow-arrow">↳</span>
+      <div class="flow-box n-store">nutrition-log entries</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">trackReplenishment()</div>
+    </div>
+    <div class="flow">
+      <span style="width:24px"></span><span class="flow-arrow">↳</span>
+      <div class="flow-box n-display">ReplenishTracker UI (Daily tab)</div>
+    </div>
+
+    <h3>AI Integration Flow</h3>
+    <div class="flow">
+      <div class="flow-box n-store">All data stores</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">buildFullPrompt()</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-ai">Claude API (sonnet)</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-display">AI Summary / Coach / Analysis</div>
+    </div>
+
+    <h3>Cross-Device Sync Flow</h3>
+    <div class="flow">
+      <div class="flow-box n-store">All arnold:* keys</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">DataSync export</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-input">JSON file transfer</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-compute">DataSync import</div><span class="flow-arrow">→</span>
+      <div class="flow-box n-store">Target device localStorage</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ REDUNDANCIES ═══ -->
+<div id="redundancies" class="view">
+  <div class="diagram">
+    <h2>Technical Debt — Resolved &amp; Remaining</h2>
+
+    <h3 style="color:#4ade80">✓ Resolved — Phase 1: Storage Layer Unified</h3>
+    <div class="node-grid cols-2">
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">Storage Bypasses Eliminated</div><div class="desc">All 4 bypass families fixed: profile, daily-logs, nutrition-log, supplements. 16 direct localStorage calls replaced with storage.get/set. All 20 keys now in KEYS map.</div></div>
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">Supplements Namespace + Sync</div><div class="desc">Supplements migrated from unprefixed keys to arnold:* namespace. DataSync key list corrected — supplements now sync between devices for the first time.</div></div>
+    </div>
+
+    <h3 style="color:#4ade80">✓ Resolved — Phase 2a: Plan Completion Extracted</h3>
+    <div class="node-grid cols-2">
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">checkTodayCompletion() in planner.js</div><div class="desc">3-store merge (garmin-activities + workouts + daily-logs) extracted from Arnold.jsx and MobileHome.jsx into a single shared function. ~40 duplicate lines removed.</div></div>
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">computeReadiness() in trainingIntelligence.js</div><div class="desc">General wellness readiness score (volume/pace/sleep/HRV/protein/bodyFat) extracted from MobileHome.jsx. Weighted formula now shared, available to Desktop too.</div></div>
+    </div>
+
+    <h3 style="color:#4ade80">✓ Resolved — Phase A: Mobile Navigation</h3>
+    <div class="node-grid cols-2">
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">Persistent Bottom Nav Bar</div><div class="desc">Bottom nav now stays visible when drilling into Training, Daily, and Body tabs. App-level nav renders when MobileHome is not active. "Recovery" renamed to "Daily".</div></div>
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">Swipe Gesture Navigation</div><div class="desc">useSwipeNav() hook added — horizontal swipe (>60px threshold) cycles through Home → Training → Daily → Body → Nutrition. Works both in MobileHome and drill-down tabs.</div></div>
+    </div>
+
+    <h3 style="color:#4ade80">✓ Resolved — Phase B: Barcode Scanner</h3>
+    <div class="node-grid cols-2">
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">Camera-Based Barcode Scanning</div><div class="desc">NutritionInput barcode mode now uses BarcodeDetector API with rear camera video feed. Detects EAN-13, UPC-A, Code 128 barcodes in real-time. Falls back to manual text input on unsupported browsers.</div></div>
+    </div>
+
+    <h3 style="color:#4ade80">✓ Resolved — Phase C: Race Calendar Parity</h3>
+    <div class="node-grid cols-2">
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">Race Countdown — Empty & Data States</div><div class="desc">Race countdown pill now renders in both empty-state and data-state MobileHome paths. Same-day races display "Today!" label. Race data computed consistently across all views.</div></div>
+    </div>
+
+    <h3 style="color:#4ade80">✓ Resolved — Phase D: Activity → Nutrition Needs Engine</h3>
+    <div class="node-grid cols-2">
+      <div class="node" style="background:rgba(74,222,128,0.04);border-color:rgba(74,222,128,0.15)"><div class="badge" style="background:rgba(74,222,128,0.15);color:#4ade80">FIXED</div><div class="name" style="color:#4ade80">activityNeeds.js Micro-Goals</div><div class="desc">New module computes replenishment targets (carbs pre/during/post, protein post, hydration) from activity stats (calories, duration, HR). Tracked against arnold:nutrition-log entries in ReplenishTracker component on LogDay tab.</div></div>
+    </div>
+
+    <h3 style="color:#ef4444">Remaining — Phase 3 (Future)</h3>
+
+    <div class="node n-redundant" style="max-width:600px;margin-bottom:8px">
+      <div class="badge">DUPLICATE</div>
+      <div class="name">Weekly Metrics (Phase 2c — parked)</div>
+      <div class="desc">Dashboard, LogDay, and TrainingTab each compute weekly miles/pace/volume independently. Logic varies slightly per context (some include strength, different time windows). Lower priority extraction.</div>
+    </div>
+
+    <div class="node n-redundant" style="max-width:600px;margin-bottom:8px">
+      <div class="badge">SPLIT</div>
+      <div class="name">Two Parallel Nutrition Systems</div>
+      <div class="desc">
+        <strong>Old:</strong> arnold:cronometer (CSV import) → Dashboard nutrition panel<br>
+        <strong>New:</strong> arnold:nutrition-log (manual/barcode/voice/photo) → NutritionInput display<br>
+        dailyTotals() in nutrition.js falls back to Cronometer data, but they're displayed separately. Desktop LogDay shows both side by side. Fix: merge into a unified daily nutrition view.
+      </div>
+    </div>
+
+    <div class="node n-redundant" style="max-width:600px;margin-bottom:8px">
+      <div class="badge">TRIPLE</div>
+      <div class="name">Three Activity Stores</div>
+      <div class="desc">
+        <strong>arnold:garmin-activities</strong> — CSV bulk imports (historical)<br>
+        <strong>arnold:workouts</strong> — Daily tab manual workout saves<br>
+        <strong>arnold:daily-logs</strong> — FIT auto-persist (fitData nested object)<br>
+        checkTodayCompletion() handles the merge, but no unified activity timeline exists yet. Fix: create getUnifiedTimeline(date) read-path consolidation.
+      </div>
+    </div>
+
+    <h3 style="color:#fbbf24">Discovered During Phase 1 (Minor)</h3>
+    <div class="node-grid cols-2">
+      <div class="node n-redundant"><div class="badge">BYPASS</div><div class="name">arnold:races — still 3 direct localStorage reads</div><div class="desc">TrainingTab lines 1012, 3038, 3115 in Arnold.jsx read localStorage directly despite races being in KEYS map.</div></div>
+      <div class="node n-redundant"><div class="badge">MISSING</div><div class="name">arnold:calendar-url, arnold:calendar-last-sync</div><div class="desc">Calendar URL and last sync timestamp stored directly in localStorage. Not in KEYS map. Low impact (RacesTab only).</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SECURITY AUDIT ═══ -->
+<div id="security" class="view">
+  <div class="diagram">
+    <h2>Security Audit — localStorage Key Sensitivity Analysis</h2>
+
+    <h3>Sensitivity Summary</h3>
+    <div class="stats" style="margin-bottom: 24px;">
+      <div class="stat"><div class="stat-val" style="color:#ef4444">3</div><div class="stat-label">CRITICAL Keys</div></div>
+      <div class="stat"><div class="stat-val" style="color:#ec4899">5</div><div class="stat-label">HIGH Keys</div></div>
+      <div class="stat"><div class="stat-val" style="color:#fbbf24">4</div><div class="stat-label">MEDIUM Keys</div></div>
+      <div class="stat"><div class="stat-val" style="color:#60a5fa">9</div><div class="stat-label">LOW Keys</div></div>
+    </div>
+
+    <div style="background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); border-radius: 10px; padding: 16px; margin-bottom: 24px;">
+      <div style="color: #ef4444; font-weight: 600; margin-bottom: 8px; font-size: 12px;">⚠ Security Warning</div>
+      <div style="color: #cbd5e1; font-size: 11px; line-height: 1.5;">All localStorage data is accessible to any JavaScript running on the same origin. Browser extensions and XSS vulnerabilities can read all keys. Consider implementing encryption-at-rest for HIGH and CRITICAL sensitivity data.</div>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr><th>Key</th><th>Data Type</th><th>Sensitivity</th><th>Risk</th><th>Mitigation</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="key">arnold:garmin-activities</span></td>
+          <td>Activity data (HR, pace, location)</td>
+          <td><span class="tag" style="background:rgba(251,191,36,0.12);color:#fbbf24">MEDIUM</span></td>
+          <td>Health data visible in browser DevTools, extensions</td>
+          <td>Consider encryption at rest</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:hrv</span></td>
+          <td>Heart rate variability data</td>
+          <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
+          <td>Protected health info (PHI), accessible via JS</td>
+          <td>Encrypt; add auth gate</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:sleep</span></td>
+          <td>Sleep duration, scores</td>
+          <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
+          <td>PHI, browser-accessible</td>
+          <td>Encrypt; add auth gate</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:weight</span></td>
+          <td>Body weight, body fat %</td>
+          <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
+          <td>PHI, body composition data</td>
+          <td>Encrypt; add auth gate</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:cronometer</span></td>
+          <td>Detailed nutrition intake</td>
+          <td><span class="tag" style="background:rgba(251,191,36,0.12);color:#fbbf24">MEDIUM</span></td>
+          <td>Dietary data, browsable</td>
+          <td>Consider encryption</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:workouts</span></td>
+          <td>Exercise logs</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>General fitness data</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:daily-logs</span></td>
+          <td>Daily FIT + nutrition combined</td>
+          <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
+          <td>Contains HR, calories, macros</td>
+          <td>Encrypt; add auth gate</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:nutrition-log</span></td>
+          <td>Food entries with macros</td>
+          <td><span class="tag" style="background:rgba(251,191,36,0.12);color:#fbbf24">MEDIUM</span></td>
+          <td>Dietary patterns</td>
+          <td>Consider encryption</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:goals</span></td>
+          <td>Fitness targets</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Non-sensitive preferences</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:planner</span></td>
+          <td>Weekly training plan</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Training schedule</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:races</span></td>
+          <td>Race calendar events</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Public event data</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:profile</span></td>
+          <td>Name, birth date, height, avatar</td>
+          <td><span class="tag" style="background:rgba(236,72,153,0.12);color:#ec4899">HIGH</span></td>
+          <td>PII - directly identifies user</td>
+          <td>Encrypt; never expose in URLs</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:logs</span></td>
+          <td>Legacy daily notes</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Text notes</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:supplements-stack</span></td>
+          <td>Supplement list</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Supplement preferences</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:supplements-log</span></td>
+          <td>Supplement intake log</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Usage patterns</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:import-history</span></td>
+          <td>Import timestamps</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Metadata only</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">backup:slot-0/1/2</span></td>
+          <td>Full data snapshots</td>
+          <td><span class="tag" style="background:rgba(239,68,68,0.12);color:#ef4444">CRITICAL</span></td>
+          <td>Contains ALL above data</td>
+          <td>Encrypt backup blobs</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:ai-cache</span></td>
+          <td>AI coach responses</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Generated text</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:events</span></td>
+          <td>System event log</td>
+          <td><span class="tag" style="background:rgba(96,165,250,0.12);color:#60a5fa">LOW</span></td>
+          <td>Timestamps</td>
+          <td>OK</td>
+        </tr>
+        <tr>
+          <td><span class="key">arnold:calendar-url</span></td>
+          <td>Garmin ICS URL</td>
+          <td><span class="tag" style="background:rgba(251,191,36,0.12);color:#fbbf24">MEDIUM</span></td>
+          <td>Could expose account info</td>
+          <td>Don't log or share</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

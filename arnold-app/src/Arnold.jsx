@@ -22,6 +22,7 @@ import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronomet
 import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine } from "./core/storage.js";
 import * as dbEngine from "./core/db.js";
 import { fmtHMS, fmtHM, hydrationFor, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
+import { computeActivityNeeds, trackReplenishment, replenishmentSummary } from "./core/activityNeeds.js";
 import { ImportDiagnostics } from "./components/ImportDiagnostics.jsx";
 import { GoalsHub } from "./components/GoalsHub.jsx";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
@@ -1495,6 +1496,64 @@ function LogDay({data,persist,showToast}){
     </>;
   };
 
+  // ── Replenishment Tracker: micro-goals from activity needs engine ──
+  const ReplenishTracker=({fd,dateStr})=>{
+    const needs=computeActivityNeeds(fd,profile);
+    if(!needs)return null;
+    const progress=trackReplenishment(needs,dateStr);
+    const summary=replenishmentSummary(progress);
+    if(!progress.length)return null;
+    const phaseOrder=['pre_workout','during_workout','post_workout'];
+    const phaseLabels={pre_workout:'Pre-Workout',during_workout:'During Workout',post_workout:'Post-Workout'};
+    const phaseColors={pre_workout:'#fbbf24',during_workout:'#60a5fa',post_workout:'#4ade80'};
+    return<>
+      <div style={divider}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+        <div style={{...subHdr,marginBottom:0}}>Replenishment Goals</div>
+        <div style={{
+          padding:'2px 8px',borderRadius:10,fontSize:9,fontWeight:600,
+          background:summary.status==='complete'?'rgba(74,222,128,0.12)':summary.status==='partial'?'rgba(251,191,36,0.12)':'rgba(248,113,113,0.12)',
+          color:summary.status==='complete'?'#4ade80':summary.status==='partial'?'#fbbf24':'#f87171',
+        }}>{summary.met}/{summary.total} met {'\u00b7'} {summary.pct}%</div>
+      </div>
+      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:8,marginTop:4}}>
+        Burned <span style={{fontWeight:600,color:'var(--text-primary)'}}>{needs.caloriesBurned} kcal</span> {'\u2014'} replenish with targeted pre/during/post meals
+      </div>
+      {phaseOrder.map(phase=>{
+        const items=progress.filter(g=>g.phase===phase);
+        if(!items.length)return null;
+        const color=phaseColors[phase]||'#60a5fa';
+        return<div key={phase} style={{marginBottom:8}}>
+          <div style={{fontSize:9,fontWeight:600,color,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:4}}>
+            {phaseLabels[phase]}
+          </div>
+          {items.map(g=>(
+            <div key={g.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+              <div style={{
+                width:16,height:16,borderRadius:4,flexShrink:0,
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,
+                background:g.met?`${color}20`:'rgba(255,255,255,0.04)',
+                border:g.met?`1px solid ${color}40`:'1px solid rgba(255,255,255,0.08)',
+                color:g.met?color:'rgba(255,255,255,0.2)',
+              }}>{g.met?'\u2713':'\u25CB'}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:10,color:g.met?color:'var(--text-primary)',fontWeight:g.met?600:400}}>
+                  {g.label}
+                </div>
+                <div style={{height:3,borderRadius:2,background:'rgba(255,255,255,0.06)',marginTop:2,overflow:'hidden'}}>
+                  <div style={{height:'100%',borderRadius:2,background:color,width:`${Math.round(g.pct*100)}%`,transition:'width 0.3s ease'}}/>
+                </div>
+              </div>
+              <div style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,minWidth:44,textAlign:'right'}}>
+                {g.consumed}/{g.target}{g.unit==='ml'?'ml':'g'}
+              </div>
+            </div>
+          ))}
+        </div>;
+      })}
+    </>;
+  };
+
   const todayStr=td();
   const fitData=(todayFIT&&(!todayFIT.date||todayFIT.date===todayStr))?todayFIT:(()=>{
     const acts=storage.get('activities')||[];
@@ -1803,6 +1862,7 @@ function LogDay({data,persist,showToast}){
                 </div>
 
                 <HydrationRow fd={fitData}/>
+                <ReplenishTracker fd={fitData} dateStr={todayStr}/>
 
                 {/* Vs goal MiniBars */}
                 <div style={divider}/>
@@ -1860,6 +1920,7 @@ function LogDay({data,persist,showToast}){
                 })()}
 
                 <HydrationRow fd={fitData}/>
+                <ReplenishTracker fd={fitData} dateStr={todayStr}/>
 
                 {/* Vs goal MiniBars */}
                 {(()=>{
@@ -2838,6 +2899,7 @@ Structure:
   },[]);
 
   // Empty state — on mobile, show MobileHome even without data (with sync prompt)
+  const nextRaceEmpty=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
   if(!activities.length&&!cronometer.length&&!weightData.length){
     if(isMobile){
       return <MobileHome
@@ -2846,7 +2908,7 @@ Structure:
         totalMi={0} annualRunTarget={800} totalSessions={0}
         sortedSleep={[]} hrvData={[]} sortedW={[]} currentWeight={null} currentBF={null}
         latestSleepScore={null} avgHRV30={null} recentNut={[]} avgProtein={null} latestRHR={null}
-        nextRace={null} onOpenTab={setTab} initialView={mobileInitView}
+        nextRace={nextRaceEmpty} onOpenTab={setTab} initialView={mobileInitView}
       />;
     }
     return(
@@ -3077,7 +3139,7 @@ Structure:
   const targetWt=parseFloat(profile?.targetWeight)||175;
 
   // Next race for mobile home
-  const nextRaceMobile=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
+  const nextRaceMobile=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
 
   if(isMobile){
     return <MobileHome
@@ -3961,14 +4023,38 @@ function ProfileSettings({data,persist,showToast}){
 
       <button style={S.sb} onClick={handleSave}>{saved?'✓ Saved':'Save Profile'}</button>
 
-      <BackupPanel showToast={showToast}/>
+      {/* ═══ ADMIN SECTION ═══════════════════════════════════════════════════ */}
+      <div style={{marginTop:16}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+          <div style={{fontSize:"clamp(12px,0.5vw+10px,14px)",fontWeight:600,color:'var(--text-primary)',letterSpacing:'0.02em'}}>Admin</div>
+          <div style={{flex:1,height:'0.5px',background:'var(--border-subtle)'}}/>
+        </div>
 
-      <div style={{height:1,background:C.b,margin:"8px 0"}}/>
-      <SyncPanel showToast={showToast}/>
+        {/* Architecture Map link */}
+        <div style={{...S.lg,marginBottom:8,cursor:'pointer'}} onClick={()=>{
+          const base=window.location.pathname.replace(/\/index\.html$/,'').replace(/\/$/,'');
+          window.open(base+'/arnold-architecture.html','_blank');
+        }}>
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:'var(--bg-elevated)',borderRadius:'var(--radius-md)',border:'0.5px solid var(--border-default)'}}>
+            <span style={{fontSize:16}}>&#9783;</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:500,color:'var(--text-primary)'}}>Architecture Map</div>
+              <div style={{fontSize:10,color:'var(--text-muted)'}}>Component dependencies, storage keys, data flow, security audit</div>
+            </div>
+            <span style={{fontSize:11,color:'var(--text-muted)'}}>&#8599;</span>
+          </div>
+        </div>
 
-      <div style={{height:1,background:C.b,margin:"4px 0"}}/>
-      <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Reset Arnold</div>
-      <button style={S.db} onClick={()=>{if(window.confirm("This will permanently delete all your data. Are you sure?"))persist(DD).then(()=>showToast("✓ Arnold reset"));}}>Reset All Data</button>
+        {/* Backup & Restore */}
+        <BackupPanel showToast={showToast}/>
+
+        <div style={{height:1,background:C.b,margin:"8px 0"}}/>
+        <SyncPanel showToast={showToast}/>
+
+        <div style={{height:1,background:C.b,margin:"4px 0"}}/>
+        <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Reset Arnold</div>
+        <button style={S.db} onClick={()=>{if(window.confirm("This will permanently delete all your data. Are you sure?"))persist(DD).then(()=>showToast("\u2713 Arnold reset"));}}>Reset All Data</button>
+      </div>
 
       {/* legacy block hidden */}
       {false&&<>
