@@ -216,6 +216,48 @@ export function goalImpact(entry, goals = {}) {
   return { score: Math.max(-1, Math.min(1, score)), reasons };
 }
 
+// ─── Portion size conversion ────────────────────────────────────────────────
+// Standard unit → grams conversion factors
+const UNIT_TO_GRAMS = {
+  g:    1,
+  oz:   28.3495,
+  ml:   1,        // approximate for water-density foods; adjusted by density if known
+  cup:  240,      // US cup = ~240ml ≈ 240g for liquids, varies for solids
+  tbsp: 15,       // US tablespoon
+  tsp:  5,        // US teaspoon
+};
+
+// Parse a serving size string like "30g", "1 cup (240ml)", "2 tbsp (30g)"
+function parseServingWeight(servingStr) {
+  if (!servingStr) return null;
+  // Try to find grams directly: "30g", "30 g", "(30g)"
+  const gMatch = servingStr.match(/(\d+(?:\.\d+)?)\s*g(?:\b|$)/i);
+  if (gMatch) return parseFloat(gMatch[1]);
+  // Try ml: "240ml"
+  const mlMatch = servingStr.match(/(\d+(?:\.\d+)?)\s*ml/i);
+  if (mlMatch) return parseFloat(mlMatch[1]); // ~1:1 for liquids
+  // Try oz: "1 oz", "1.5oz"
+  const ozMatch = servingStr.match(/(\d+(?:\.\d+)?)\s*oz/i);
+  if (ozMatch) return parseFloat(ozMatch[1]) * UNIT_TO_GRAMS.oz;
+  return null;
+}
+
+// Calculate macros for a given portion from per-100g data
+export function calculatePortion(per100g, amount, unit) {
+  if (!per100g || !amount) return per100g || {};
+  const grams = amount * (UNIT_TO_GRAMS[unit] || 1);
+  const factor = grams / 100;
+  return {
+    calories: Math.round((per100g.calories || 0) * factor),
+    protein:  Math.round(((per100g.protein || 0) * factor) * 10) / 10,
+    carbs:    Math.round(((per100g.carbs || 0) * factor) * 10) / 10,
+    fat:      Math.round(((per100g.fat || 0) * factor) * 10) / 10,
+    fiber:    Math.round(((per100g.fiber || 0) * factor) * 10) / 10,
+    sugar:    Math.round(((per100g.sugar || 0) * factor) * 10) / 10,
+    water:    Math.round(((per100g.water || 0) * factor) * 10) / 10,
+  };
+}
+
 // ─── Open Food Facts barcode lookup ─────────────────────────────────────────
 
 export async function lookupBarcode(barcode) {
@@ -226,20 +268,38 @@ export async function lookupBarcode(barcode) {
     if (data.status !== 1 || !data.product) return null;
     const p = data.product;
     const nut = p.nutriments || {};
+    const servingWeightG = parseServingWeight(p.serving_size) ||
+      (nut.serving_quantity ? parseFloat(nut.serving_quantity) : null);
+    // Per-100g macros (canonical base for portion calculations)
+    const per100g = {
+      calories: Math.round(nut['energy-kcal_100g'] || 0),
+      protein:  Math.round((nut.proteins_100g || 0) * 10) / 10,
+      carbs:    Math.round((nut.carbohydrates_100g || 0) * 10) / 10,
+      fat:      Math.round((nut.fat_100g || 0) * 10) / 10,
+      fiber:    Math.round((nut.fiber_100g || 0) * 10) / 10,
+      sugar:    Math.round((nut.sugars_100g || 0) * 10) / 10,
+      water:    0,
+    };
+    // Per-serving macros (for display default)
+    const macros = servingWeightG
+      ? calculatePortion(per100g, servingWeightG, 'g')
+      : {
+          calories: Math.round(nut['energy-kcal_serving'] || per100g.calories),
+          protein:  Math.round((nut.proteins_serving || per100g.protein) * 10) / 10,
+          carbs:    Math.round((nut.carbohydrates_serving || per100g.carbs) * 10) / 10,
+          fat:      Math.round((nut.fat_serving || per100g.fat) * 10) / 10,
+          fiber:    Math.round((nut.fiber_serving || per100g.fiber) * 10) / 10,
+          sugar:    Math.round((nut.sugars_serving || per100g.sugar) * 10) / 10,
+          water:    0,
+        };
     return {
       name: p.product_name || p.product_name_en || 'Unknown product',
       brand: p.brands || '',
       servingSize: p.serving_size || '',
+      servingWeightG,
+      per100g,
       imageUrl: p.image_front_small_url || p.image_url || null,
-      macros: {
-        calories: Math.round(nut['energy-kcal_serving'] || nut['energy-kcal_100g'] || 0),
-        protein:  Math.round((nut.proteins_serving || nut.proteins_100g || 0) * 10) / 10,
-        carbs:    Math.round((nut.carbohydrates_serving || nut.carbohydrates_100g || 0) * 10) / 10,
-        fat:      Math.round((nut.fat_serving || nut.fat_100g || 0) * 10) / 10,
-        fiber:    Math.round((nut.fiber_serving || nut.fiber_100g || 0) * 10) / 10,
-        sugar:    Math.round((nut.sugars_serving || nut.sugars_100g || 0) * 10) / 10,
-        water:    0,
-      },
+      macros,
       barcode,
       rawApiData: { product_name: p.product_name, brands: p.brands, serving_size: p.serving_size, nutriments: nut },
     };
@@ -280,5 +340,70 @@ export async function searchFood(query, page = 1) {
   } catch (e) {
     console.warn('Food search failed:', e);
     return [];
+  }
+}
+
+// ─── AI Food Recognition (Claude Vision) ───────────────────────────────────
+// Takes a base64-encoded image and asks Claude to identify the food and macros.
+
+export async function recognizeFoodPhoto(imageBase64, mediaType = 'image/jpeg') {
+  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY || '';
+  if (!apiKey) return { error: 'API key not configured — add VITE_ANTHROPIC_API_KEY to .env' };
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-allow-browser': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 800,
+        system: `You are a nutrition analysis assistant. When shown a photo of food, identify the dish or product and estimate its nutritional content. Respond with ONLY valid JSON in this exact format (no markdown, no backticks):
+{"name":"Dish name","items":[{"ingredient":"Name","estimatedGrams":100}],"servingSize":"estimated portion description","macros":{"calories":0,"protein":0,"carbs":0,"fat":0,"fiber":0,"sugar":0,"water":0},"confidence":"high|medium|low","notes":"any relevant notes about the estimate"}
+For packaged products, read the label if visible. For home-cooked or restaurant meals, estimate based on visible portion size. All macro values should be numbers (grams except calories in kcal). Be as accurate as possible.`,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+            { type: 'text', text: 'Identify this food and estimate its nutritional content per the visible portion.' },
+          ],
+        }],
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { error: `API error ${res.status}: ${err.error?.message || 'Unknown'}` };
+    }
+
+    const data = await res.json();
+    const text = data.content?.[0]?.text || '';
+
+    // Parse JSON response — handle possible markdown wrapping
+    const jsonStr = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    const parsed = JSON.parse(jsonStr);
+    return {
+      name: parsed.name || 'Unknown food',
+      items: parsed.items || [],
+      servingSize: parsed.servingSize || 'estimated portion',
+      macros: {
+        calories: Math.round(parsed.macros?.calories || 0),
+        protein:  Math.round((parsed.macros?.protein || 0) * 10) / 10,
+        carbs:    Math.round((parsed.macros?.carbs || 0) * 10) / 10,
+        fat:      Math.round((parsed.macros?.fat || 0) * 10) / 10,
+        fiber:    Math.round((parsed.macros?.fiber || 0) * 10) / 10,
+        sugar:    Math.round((parsed.macros?.sugar || 0) * 10) / 10,
+        water:    Math.round((parsed.macros?.water || 0) * 10) / 10,
+      },
+      confidence: parsed.confidence || 'medium',
+      notes: parsed.notes || '',
+    };
+  } catch (e) {
+    console.warn('Food recognition failed:', e);
+    return { error: `Recognition failed: ${e.message}` };
   }
 }

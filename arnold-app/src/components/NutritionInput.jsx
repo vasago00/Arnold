@@ -10,7 +10,7 @@ import { getGoals } from '../core/goals.js';
 import {
   MEAL_CATEGORIES, createEntry, saveEntry, deleteEntry,
   getEntriesForDate, dailyTotals, goalImpact,
-  lookupBarcode, searchFood,
+  lookupBarcode, searchFood, calculatePortion, recognizeFoodPhoto,
 } from '../core/nutrition.js';
 
 // ─── Glassmorphism ──────────────────────────────────────────────────────────
@@ -61,6 +61,105 @@ function ImpactBadge({ score, reasons }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 12, background: `${color}15`, border: `1px solid ${color}25` }}>
       <span style={{ fontSize: 11, color }}>{arrow}</span>
       <span style={{ fontSize: 9, color, fontWeight: 600 }}>{reasons?.[0]?.text || 'Neutral'}</span>
+    </div>
+  );
+}
+
+// ─── Portion Selector (reusable) ────────────────────────────────────────────
+// `baseMacros` = macros for 1 serving (what the user entered or what the API returned)
+// `per100g`    = per-100g macros (only available for barcode lookups)
+// `servingLabel` = label for 1 serving (e.g. "30g" from barcode, or "1 portion")
+// `onChange(adjustedMacros, portionLabel)` fires on every change
+const PORTION_UNITS_FULL = [
+  { id: 'serving', label: 'Serving' },
+  { id: 'g',       label: 'Grams' },
+  { id: 'oz',      label: 'Oz' },
+  { id: 'ml',      label: 'mL' },
+  { id: 'cup',     label: 'Cup' },
+  { id: 'tbsp',    label: 'Tbsp' },
+  { id: 'tsp',     label: 'Tsp' },
+];
+// When we only have per-serving data (manual, photo, voice), gram/oz/ml units
+// don't apply — we can only scale by serving count.
+const PORTION_UNITS_SERVING_ONLY = [
+  { id: 'serving', label: 'Serving' },
+];
+
+function PortionSelector({ baseMacros, per100g, servingLabel, onChange }) {
+  const [unit, setUnit] = useState('serving');
+  const [amount, setAmount] = useState('1');
+  const hasWeight = !!per100g;
+  const units = hasWeight ? PORTION_UNITS_FULL : PORTION_UNITS_SERVING_ONLY;
+
+  const recalc = useCallback((u, amt) => {
+    const n = parseFloat(amt);
+    if (!n || n <= 0 || !baseMacros) { onChange?.(baseMacros, '1 serving'); return; }
+    if (u === 'serving') {
+      const scaled = {};
+      for (const k of Object.keys(baseMacros)) {
+        scaled[k] = k === 'calories' ? Math.round((baseMacros[k] || 0) * n)
+          : Math.round(((baseMacros[k] || 0) * n) * 10) / 10;
+      }
+      onChange?.(scaled, n === 1 ? '1 serving' : `${amt} servings`);
+    } else if (per100g) {
+      const adj = calculatePortion(per100g, n, u);
+      onChange?.(adj, `${amt} ${u}`);
+    }
+  }, [baseMacros, per100g, onChange]);
+
+  // Recalc on mount with defaults
+  useEffect(() => { recalc('serving', '1'); }, [baseMacros]);
+
+  return (
+    <div style={{ padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>How much?</div>
+      {/* Unit buttons */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
+        {units.map(u => (
+          <button key={u.id} onClick={() => { setUnit(u.id); recalc(u.id, amount); }}
+            style={{
+              padding: '4px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+              border: unit === u.id ? '1px solid rgba(96,165,250,0.5)' : '1px solid rgba(255,255,255,0.08)',
+              background: unit === u.id ? 'rgba(96,165,250,0.15)' : 'rgba(255,255,255,0.04)',
+              color: unit === u.id ? '#60a5fa' : 'rgba(255,255,255,0.5)',
+            }}>{u.label}</button>
+        ))}
+      </div>
+      {/* Amount input */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {/* Quick buttons */}
+        {[0.5, 1, 1.5, 2].map(v => (
+          <button key={v} onClick={() => { setAmount(String(v)); recalc(unit, String(v)); }}
+            style={{
+              padding: '4px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+              border: amount === String(v) ? '1px solid rgba(96,165,250,0.4)' : '1px solid rgba(255,255,255,0.06)',
+              background: amount === String(v) ? 'rgba(96,165,250,0.1)' : 'rgba(255,255,255,0.03)',
+              color: amount === String(v) ? '#60a5fa' : 'rgba(255,255,255,0.4)',
+              minWidth: 32,
+            }}>{v}</button>
+        ))}
+        <input value={amount}
+          onChange={e => { setAmount(e.target.value); recalc(unit, e.target.value); }}
+          type="number" min="0" step="any"
+          style={{ width: 50, padding: '5px 6px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 12, textAlign: 'center' }} />
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)' }}>
+          {unit === 'serving' ? (servingLabel || 'serving') : unit}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Macro Summary Line ─────────────────────────────────────────────────────
+function MacroLine({ macros }) {
+  if (!macros) return null;
+  return (
+    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', padding: '6px 0', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+      <span style={{ fontWeight: 600, color: '#fff', fontSize: 12 }}>{macros.calories || 0}</span> cal
+      {' · '}<span style={{ color: '#60a5fa' }}>{macros.protein || 0}g</span> P
+      {' · '}<span style={{ color: '#fbbf24' }}>{macros.carbs || 0}g</span> C
+      {' · '}<span style={{ color: '#f87171' }}>{macros.fat || 0}g</span> F
+      {macros.fiber ? <span> · {macros.fiber}g fiber</span> : null}
     </div>
   );
 }
@@ -141,6 +240,20 @@ export function NutritionInput({ date, onUpdate }) {
   const streamRef = useRef(null);
   const scanLoopRef = useRef(null);
 
+  // ── Portion size state (shared across all modes) ──
+  const [portionMacros, setPortionMacros] = useState(null);
+  const [portionLabel, setPortionLabel] = useState('1 serving');
+  const handlePortionChange = useCallback((macros, label) => {
+    setPortionMacros(macros);
+    setPortionLabel(label || '1 serving');
+  }, []);
+
+  // ── Photo AI state ──
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoResult, setPhotoResult] = useState(null);
+  const [photoError, setPhotoError] = useState('');
+  const [photoPreview, setPhotoPreview] = useState(null);
+
   // ── Search state ──
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -174,6 +287,8 @@ export function NutritionInput({ date, onUpdate }) {
   const resetForm = () => {
     setManualName(''); setManualCal(''); setManualPro(''); setManualCarb(''); setManualFat(''); setManualWater('');
     setBarcodeInput(''); setBarcodeResult(null); setSearchQuery(''); setSearchResults([]);
+    setPortionMacros(null); setPortionLabel('1 serving');
+    setPhotoResult(null); setPhotoError(''); setPhotoPreview(null);
   };
 
   const handleDelete = (id) => {
@@ -190,7 +305,36 @@ export function NutritionInput({ date, onUpdate }) {
     const result = await lookupBarcode(barcode);
     setBarcodeResult(result);
     setBarcodeLoading(false);
+    setPortionMacros(null);
+    setPortionLabel('1 serving');
   };
+
+  // ── Photo analysis handler ──
+  const handlePhotoAnalysis = useCallback(async (file) => {
+    setPhotoLoading(true);
+    setPhotoError('');
+    setPhotoResult(null);
+    try {
+      const reader = new FileReader();
+      const base64 = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result.split(',')[1]); // strip data:... prefix
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      setPhotoPreview(URL.createObjectURL(file));
+      const mediaType = file.type || 'image/jpeg';
+      const result = await recognizeFoodPhoto(base64, mediaType);
+      if (result.error) {
+        setPhotoError(result.error);
+      } else {
+        setPhotoResult(result);
+      }
+    } catch (e) {
+      setPhotoError(`Analysis failed: ${e.message}`);
+    } finally {
+      setPhotoLoading(false);
+    }
+  }, []);
 
   // ── Camera barcode scanner ──
   const stopScanner = useCallback(() => {
@@ -402,18 +546,40 @@ export function NutritionInput({ date, onUpdate }) {
               <input value={manualWater} onChange={e => setManualWater(e.target.value)} placeholder="Water (ml)" type="number"
                 style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: 13 }} />
 
-              <button onClick={() => {
-                if (!manualName.trim() && !manualCal && !manualWater) return;
-                addEntry({
-                  name: manualName.trim() || (manualWater ? 'Water' : 'Food'),
-                  source: 'manual',
-                  macros: {
+              {/* ── Portion selector (serving multiplier for manual mode) ── */}
+              {(manualCal || manualPro || manualCarb || manualFat) && (
+                <PortionSelector
+                  baseMacros={{
                     calories: parseFloat(manualCal) || 0,
                     protein: parseFloat(manualPro) || 0,
                     carbs: parseFloat(manualCarb) || 0,
                     fat: parseFloat(manualFat) || 0,
-                    water: parseFloat(manualWater) || 0,
-                  },
+                  }}
+                  onChange={handlePortionChange} />
+              )}
+
+              {/* ── Calculated macros preview ── */}
+              {portionMacros && (manualCal || manualPro || manualCarb || manualFat) && (
+                <MacroLine macros={{ ...portionMacros, water: parseFloat(manualWater) || 0 }} />
+              )}
+
+              <button onClick={() => {
+                if (!manualName.trim() && !manualCal && !manualWater) return;
+                const baseMacros = {
+                  calories: parseFloat(manualCal) || 0,
+                  protein: parseFloat(manualPro) || 0,
+                  carbs: parseFloat(manualCarb) || 0,
+                  fat: parseFloat(manualFat) || 0,
+                  water: parseFloat(manualWater) || 0,
+                };
+                const finalMacros = portionMacros
+                  ? { ...portionMacros, water: baseMacros.water }
+                  : baseMacros;
+                addEntry({
+                  name: manualName.trim() || (manualWater ? 'Water' : 'Food'),
+                  source: 'manual',
+                  macros: finalMacros,
+                  ...(portionMacros && portionLabel !== '1 serving' ? { portion: portionLabel } : {}),
                 });
               }} style={{
                 padding: '12px', borderRadius: 10, border: 'none', cursor: 'pointer',
@@ -483,27 +649,38 @@ export function NutritionInput({ date, onUpdate }) {
                 </div>
               )}
 
-              {/* Barcode result */}
+              {/* Barcode result with portion selector */}
               {barcodeResult && (
                 <div style={{ padding: '12px', borderRadius: 12, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
                     {barcodeResult.imageUrl && <img src={barcodeResult.imageUrl} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: 'cover' }} />}
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>{barcodeResult.name}</div>
-                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{barcodeResult.brand} · {barcodeResult.servingSize}</div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>{barcodeResult.brand}{barcodeResult.servingSize ? ` · ${barcodeResult.servingSize}` : ''}</div>
                     </div>
                   </div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>
-                    {barcodeResult.macros.calories} cal · {barcodeResult.macros.protein}g P · {barcodeResult.macros.carbs}g C · {barcodeResult.macros.fat}g F
+
+                  {/* ── Portion selector (with full unit support for barcode) ── */}
+                  <div style={{ marginBottom: 8 }}>
+                    <PortionSelector
+                      baseMacros={barcodeResult.macros}
+                      per100g={barcodeResult.per100g}
+                      servingLabel={barcodeResult.servingSize}
+                      onChange={handlePortionChange} />
                   </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
+
+                  {/* ── Calculated macros ── */}
+                  <MacroLine macros={portionMacros || barcodeResult.macros} />
+
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                     <button onClick={() => {
-                      addEntry({ name: barcodeResult.name, source: 'barcode', macros: barcodeResult.macros, barcode: barcodeResult.barcode, imageUrl: barcodeResult.imageUrl });
+                      const m = portionMacros || barcodeResult.macros;
+                      addEntry({ name: `${barcodeResult.name} (${portionLabel})`, source: 'barcode', macros: m, barcode: barcodeResult.barcode, imageUrl: barcodeResult.imageUrl });
                     }} style={{
                       flex: 1, padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer',
                       background: 'rgba(74,222,128,0.15)', color: '#4ade80', fontSize: 12, fontWeight: 600,
                     }}>Add this food</button>
-                    <button onClick={() => { setBarcodeResult(null); setBarcodeInput(''); }} style={{
+                    <button onClick={() => { setBarcodeResult(null); setBarcodeInput(''); setPortionMacros(null); }} style={{
                       padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
                       background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', fontSize: 12,
                     }}>Scan another</button>
@@ -516,36 +693,110 @@ export function NutritionInput({ date, onUpdate }) {
             </div>
           )}
 
-          {/* ── PHOTO MODE ───────────────────────────────────────────── */}
+          {/* ── PHOTO MODE (AI Vision) ─────────────────────────────── */}
           {mode === 'photo' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center' }}>
-                Take a photo of your food for auto-detection
-              </div>
-              <label style={{
-                width: '100%', padding: '30px 16px', borderRadius: 14,
-                border: '2px dashed rgba(255,255,255,0.1)', textAlign: 'center',
-                cursor: 'pointer', color: 'rgba(255,255,255,0.3)', fontSize: 12,
-              }}>
-                📷 Tap to take photo
-                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    // For now, switch to manual mode with the photo attached
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      setMode('manual');
-                      setManualName('Photo food (edit name)');
-                      // TODO: integrate food recognition API
-                    };
-                    reader.readAsDataURL(file);
-                  }}
-                />
-              </label>
-              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.2)' }}>
-                Food recognition coming soon — photo will be saved with manual entry
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+              {/* Photo capture (when no result yet) */}
+              {!photoResult && !photoLoading && (
+                <>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center' }}>
+                    Take a photo of your food — AI will identify ingredients and estimate macros
+                  </div>
+                  <label style={{
+                    width: '100%', padding: '24px 16px', borderRadius: 14,
+                    border: '2px dashed rgba(236,72,153,0.3)', textAlign: 'center',
+                    cursor: 'pointer', color: '#ec4899', fontSize: 13, fontWeight: 600,
+                    background: 'rgba(236,72,153,0.06)',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                  }}>
+                    <span style={{ fontSize: 28 }}>◉</span>
+                    Take Photo or Choose Image
+                    <span style={{ fontSize: 10, fontWeight: 400, color: 'rgba(255,255,255,0.35)' }}>
+                      Works with dishes, ingredients, or packaged products
+                    </span>
+                    <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handlePhotoAnalysis(file);
+                      }} />
+                  </label>
+                </>
+              )}
+
+              {/* Loading state */}
+              {photoLoading && (
+                <div style={{ textAlign: 'center', padding: '20px 12px' }}>
+                  {photoPreview && <img src={photoPreview} alt="" style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 12, marginBottom: 10, opacity: 0.7 }} />}
+                  <div style={{ fontSize: 12, color: '#ec4899', fontWeight: 600, marginBottom: 4 }}>Analyzing food...</div>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>Claude Vision is identifying ingredients and estimating macros</div>
+                </div>
+              )}
+
+              {/* Error */}
+              {photoError && (
+                <div style={{ fontSize: 11, color: '#f87171', textAlign: 'center', padding: '8px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.08)' }}>
+                  {photoError}
+                  <button onClick={() => { setPhotoError(''); setPhotoPreview(null); }} style={{
+                    display: 'block', margin: '8px auto 0', padding: '6px 14px', borderRadius: 8,
+                    border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', fontSize: 11,
+                  }}>Try again</button>
+                </div>
+              )}
+
+              {/* AI Result */}
+              {photoResult && (
+                <div style={{ padding: '12px', borderRadius: 12, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(236,72,153,0.15)' }}>
+                  {photoPreview && <img src={photoPreview} alt="" style={{ width: '100%', maxHeight: 150, objectFit: 'cover', borderRadius: 10, marginBottom: 8 }} />}
+
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginBottom: 4 }}>{photoResult.name}</div>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 6 }}>
+                    {photoResult.servingSize}
+                    {photoResult.confidence && <span style={{
+                      marginLeft: 6, padding: '1px 6px', borderRadius: 4, fontSize: 8, fontWeight: 600,
+                      background: photoResult.confidence === 'high' ? 'rgba(74,222,128,0.15)' : photoResult.confidence === 'medium' ? 'rgba(251,191,36,0.15)' : 'rgba(239,68,68,0.15)',
+                      color: photoResult.confidence === 'high' ? '#4ade80' : photoResult.confidence === 'medium' ? '#fbbf24' : '#ef4444',
+                    }}>{photoResult.confidence} confidence</span>}
+                  </div>
+
+                  {/* Detected ingredients */}
+                  {photoResult.items?.length > 0 && (
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 8 }}>
+                      {photoResult.items.map((item, i) => (
+                        <span key={i}>{i > 0 ? ', ' : ''}{item.ingredient} (~{item.estimatedGrams}g)</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ── Portion selector (serving multiplier for AI photo) ── */}
+                  <div style={{ marginBottom: 8 }}>
+                    <PortionSelector
+                      baseMacros={photoResult.macros}
+                      onChange={handlePortionChange} />
+                  </div>
+
+                  {/* Calculated macros */}
+                  <MacroLine macros={portionMacros || photoResult.macros} />
+
+                  {photoResult.notes && (
+                    <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginBottom: 8, fontStyle: 'italic' }}>{photoResult.notes}</div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => {
+                      const m = portionMacros || photoResult.macros;
+                      addEntry({ name: `${photoResult.name}${portionLabel !== '1 serving' ? ` (${portionLabel})` : ''}`, source: 'photo', macros: m });
+                    }} style={{
+                      flex: 1, padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                      background: 'rgba(74,222,128,0.15)', color: '#4ade80', fontSize: 12, fontWeight: 600,
+                    }}>Add this food</button>
+                    <button onClick={() => { setPhotoResult(null); setPhotoPreview(null); }} style={{
+                      padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                      background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', fontSize: 12,
+                    }}>Retake</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
