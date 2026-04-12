@@ -9,6 +9,7 @@ import { Sparkline } from "./Sparkline.jsx";
 import { STATUS, statusFromPct } from "../core/semantics.js";
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
+import { computeReadiness } from "../core/trainingIntelligence.js";
 import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
@@ -268,19 +269,11 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
   const bfPct = G.targetBodyFat && currentBF ? G.targetBodyFat / currentBF : null;
   const proteinPct = G.dailyProteinTarget ? avgProtein / G.dailyProteinTarget : null;
 
-  // Composite readiness score (weighted average of available metrics)
-  const readinessScore = (() => {
-    const metrics = [];
-    if (volPct != null)    metrics.push({ val: Math.min(volPct, 1.2), w: 2.5 });
-    if (pacePct != null)   metrics.push({ val: Math.min(pacePct, 1.2), w: 2 });
-    if (sleepPct != null)  metrics.push({ val: Math.min(sleepPct, 1.2), w: 2 });
-    if (hrvPct != null)    metrics.push({ val: Math.min(hrvPct, 1.2), w: 1.5 });
-    if (proteinPct != null)metrics.push({ val: Math.min(proteinPct, 1.2), w: 1.5 });
-    if (bfPct != null)     metrics.push({ val: Math.min(bfPct, 1.2), w: 1 });
-    if (!metrics.length) return 0;
-    const totalW = metrics.reduce((a, m) => a + m.w, 0);
-    return Math.round(metrics.reduce((a, m) => a + m.val * m.w, 0) / totalW * 100);
-  })();
+  // Composite readiness score — shared formula from trainingIntelligence.js
+  const readinessScore = computeReadiness({
+    volume: volPct, pace: pacePct, sleep: sleepPct,
+    hrv: hrvPct, protein: proteinPct, bodyFat: bfPct,
+  });
 
   // Greeting
   const hour = new Date().getHours();

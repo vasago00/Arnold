@@ -388,3 +388,32 @@ export function buildTrainingContext(activities, races = [], workouts = []) {
   lines.push('[END ARNOLD CONTEXT]');
   return lines.join('\n');
 }
+
+// ─── General Readiness Score ────────────────────────────────────────────────
+// Composite wellness/training readiness as a weighted average of metric %s.
+// Each metric is a fraction (0–1+) representing how close to goal.
+// Capped at 1.2 per metric to avoid a single outlier inflating the score.
+// Returns 0–100 integer. Used by MobileHome hero ring; available for Desktop.
+//
+// metrics: { volume?, pace?, sleep?, hrv?, protein?, bodyFat? } — each 0..1+
+// All fields optional; only non-null metrics contribute.
+
+const READINESS_WEIGHTS = {
+  volume:  2.5,
+  pace:    2.0,
+  sleep:   2.0,
+  hrv:     1.5,
+  protein: 1.5,
+  bodyFat: 1.0,
+};
+
+export function computeReadiness(metrics = {}) {
+  const entries = [];
+  for (const [key, weight] of Object.entries(READINESS_WEIGHTS)) {
+    const val = metrics[key];
+    if (val != null) entries.push({ val: Math.min(val, 1.2), w: weight });
+  }
+  if (!entries.length) return 0;
+  const totalW = entries.reduce((a, m) => a + m.w, 0);
+  return Math.round(entries.reduce((a, m) => a + m.val * m.w, 0) / totalW * 100);
+}
