@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Mobile — Health Connect Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0b10; color: #e2e8f0; font-family: 'Inter', -apple-system, system-ui, sans-serif; padding: 24px; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+  .subtitle { font-size: 13px; color: #64748b; margin-bottom: 32px; }
+  .motto { display: inline-block; padding: 4px 12px; border-radius: 6px; background: rgba(96,165,250,0.12); color: #60a5fa; font-size: 12px; font-weight: 600; margin-bottom: 24px; letter-spacing: 0.04em; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; flex-wrap: wrap; }
+  .tab { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; background: rgba(255,255,255,0.04); color: #94a3b8; transition: all 0.2s; }
+  .tab.active { background: rgba(96,165,250,0.15); color: #60a5fa; }
+  .tab:hover { background: rgba(255,255,255,0.08); }
+  .view { display: none; }
+  .view.active { display: block; }
+  .diagram { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 24px; margin-bottom: 24px; overflow-x: auto; }
+  .diagram h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #fff; }
+  .diagram h3 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 16px; background: rgba(255,255,255,0.02); border-radius: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 4px; }
+  .legend-line { width: 24px; height: 3px; border-radius: 2px; }
+
+  .stats { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat { text-align: center; }
+  .stat-val { font-size: 28px; font-weight: 700; color: #fff; }
+  .stat-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .data-table th { text-align: left; padding: 8px 12px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .data-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); color: #cbd5e1; }
+  .data-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .key { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 10px; color: #60a5fa; }
+  .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 600; margin: 1px 2px; }
+  .tag-g { background: rgba(74,222,128,0.12); color: #4ade80; }
+  .tag-b { background: rgba(96,165,250,0.12); color: #60a5fa; }
+  .tag-y { background: rgba(251,191,36,0.12); color: #fbbf24; }
+  .tag-p { background: rgba(168,85,247,0.12); color: #a855f7; }
+  .tag-r { background: rgba(239,68,68,0.12); color: #ef4444; }
+  .tag-c { background: rgba(34,211,238,0.12); color: #22d3ee; }
+  .tag-pk { background: rgba(236,72,153,0.12); color: #ec4899; }
+
+  .node-grid { display: grid; gap: 8px; }
+  .node-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .node-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .node-grid.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .node { padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06); position: relative; }
+  .node .name { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+  .node .desc { font-size: 10px; color: #64748b; line-height: 1.4; }
+  .node .badge { position: absolute; top: 8px; right: 8px; font-size: 8px; font-weight: 700; padding: 2px 6px; border-radius: 6px; letter-spacing: 0.05em; }
+
+  .n-garmin { background: rgba(96,165,250,0.06); border-color: rgba(96,165,250,0.2); }
+  .n-hc { background: rgba(74,222,128,0.06); border-color: rgba(74,222,128,0.2); }
+  .n-bridge { background: rgba(251,191,36,0.06); border-color: rgba(251,191,36,0.2); }
+  .n-arnold { background: rgba(168,85,247,0.06); border-color: rgba(168,85,247,0.2); }
+  .n-crono { background: rgba(236,72,153,0.06); border-color: rgba(236,72,153,0.2); }
+  .n-web { background: rgba(34,211,238,0.06); border-color: rgba(34,211,238,0.2); }
+  .n-store { background: rgba(96,165,250,0.06); border-color: rgba(96,165,250,0.15); }
+  .n-warn { background: rgba(239,68,68,0.06); border-color: rgba(239,68,68,0.15); }
+  .n-ok { background: rgba(74,222,128,0.06); border-color: rgba(74,222,128,0.15); }
+  .n-partial { background: rgba(251,191,36,0.06); border-color: rgba(251,191,36,0.15); }
+
+  .flow { display: flex; align-items: center; gap: 10px; padding: 8px 0; flex-wrap: wrap; }
+  .flow-box { padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; white-space: nowrap; border: 1px solid; }
+  .flow-arrow { color: #475569; font-size: 16px; }
+  .fb-garmin { background: rgba(96,165,250,0.08); border-color: rgba(96,165,250,0.3); color: #60a5fa; }
+  .fb-hc { background: rgba(74,222,128,0.08); border-color: rgba(74,222,128,0.3); color: #4ade80; }
+  .fb-bridge { background: rgba(251,191,36,0.08); border-color: rgba(251,191,36,0.3); color: #fbbf24; }
+  .fb-arnold { background: rgba(168,85,247,0.08); border-color: rgba(168,85,247,0.3); color: #a855f7; }
+  .fb-crono { background: rgba(236,72,153,0.08); border-color: rgba(236,72,153,0.3); color: #ec4899; }
+  .fb-web { background: rgba(34,211,238,0.08); border-color: rgba(34,211,238,0.3); color: #22d3ee; }
+
+  .callout { padding: 14px 18px; border-radius: 10px; margin: 12px 0; font-size: 12px; line-height: 1.6; }
+  .callout-info { background: rgba(96,165,250,0.06); border: 1px solid rgba(96,165,250,0.15); color: #93c5fd; }
+  .callout-warn { background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.15); color: #fcd34d; }
+  .callout-good { background: rgba(74,222,128,0.06); border: 1px solid rgba(74,222,128,0.15); color: #86efac; }
+  .callout strong { color: #fff; }
+
+  .phase-header { display: flex; align-items: center; gap: 10px; margin: 20px 0 10px; }
+  .phase-num { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .phase-title { font-size: 14px; font-weight: 600; color: #fff; }
+
+  svg text { font-family: 'Inter', -apple-system, sans-serif; }
+  .svg-wrap { width: 100%; overflow-x: auto; }
+
+  @media (max-width: 768px) {
+    .node-grid.cols-3 { grid-template-columns: 1fr 1fr; }
+    .node-grid.cols-4 { grid-template-columns: 1fr 1fr; }
+    .stats { gap: 16px; }
+    .stat-val { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>ARNOLD Mobile Architecture</h1>
+<div class="subtitle">Health Connect Integration Blueprint &middot; Native Wrapper &middot; "One Body in One Place"</div>
+<div class="motto">⬡ One Body &middot; One Place &middot; Zero Manual Uploads</div>
+
+<div class="stats">
+  <div class="stat"><div class="stat-val">6</div><div class="stat-label">HC Data Types</div></div>
+  <div class="stat"><div class="stat-val">2</div><div class="stat-label">Food Sources</div></div>
+  <div class="stat"><div class="stat-val">3</div><div class="stat-label">Build Phases</div></div>
+  <div class="stat"><div class="stat-val" style="color:#fbbf24">3</div><div class="stat-label">Garmin Gaps</div></div>
+  <div class="stat"><div class="stat-val" style="color:#4ade80">0</div><div class="stat-label">Manual Uploads</div></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showView('overview')">System Overview</button>
+  <button class="tab" onclick="showView('dataflow')">Data Flow</button>
+  <button class="tab" onclick="showView('hcmap')">Health Connect Map</button>
+  <button class="tab" onclick="showView('food')">Food Architecture</button>
+  <button class="tab" onclick="showView('wrapper')">Native Wrapper</button>
+  <button class="tab" onclick="showView('gaps')">Garmin Gaps</button>
+  <button class="tab" onclick="showView('phases')">Build Phases</button>
+</div>
+
+<!-- ═══ SYSTEM OVERVIEW ═══ -->
+<div id="overview" class="view active">
+  <div class="diagram">
+    <h2>System Overview — From Watch to Dashboard</h2>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div>Garmin Ecosystem</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div>Health Connect (Android)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div>Native Bridge (Capacitor)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div>Arnold Web App</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Cronometer</div>
+    </div>
+
+    <div class="svg-wrap">
+    <svg viewBox="0 0 1050 640" style="width:100%;min-width:850px;">
+      <defs>
+        <marker id="ag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#60a5fa"/></marker>
+        <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4ade80"/></marker>
+        <marker id="ab" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#fbbf24"/></marker>
+        <marker id="aa" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#a855f7"/></marker>
+        <marker id="ap" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ec4899"/></marker>
+      </defs>
+
+      <!-- ── LAYER: Wearable ── -->
+      <text x="20" y="28" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.1em">WEARABLE LAYER</text>
+      <rect x="30" y="40" width="180" height="56" rx="10" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="120" y="62" text-anchor="middle" font-size="13" fill="#60a5fa" font-weight="700">⌚ Garmin Watch</text>
+      <text x="120" y="80" text-anchor="middle" font-size="9" fill="#64748b">Forerunner / Fenix / Venu</text>
+
+      <!-- ── LAYER: Phone Sync ── -->
+      <text x="20" y="130" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.1em">PHONE SYNC LAYER</text>
+      <rect x="30" y="142" width="200" height="56" rx="10" fill="rgba(96,165,250,0.08)" stroke="rgba(96,165,250,0.25)" stroke-width="1.5"/>
+      <text x="130" y="164" text-anchor="middle" font-size="12" fill="#60a5fa" font-weight="700">Garmin Connect (Android)</text>
+      <text x="130" y="180" text-anchor="middle" font-size="9" fill="#64748b">BLE auto-sync → local DB</text>
+
+      <rect x="280" y="142" width="200" height="56" rx="10" fill="rgba(236,72,153,0.08)" stroke="rgba(236,72,153,0.25)" stroke-width="1.5"/>
+      <text x="380" y="164" text-anchor="middle" font-size="12" fill="#ec4899" font-weight="700">Cronometer (Android)</text>
+      <text x="380" y="180" text-anchor="middle" font-size="9" fill="#64748b">Food log → macro tracking</text>
+
+      <!-- Arrow: Watch → Garmin Connect -->
+      <line x1="120" y1="96" x2="120" y2="140" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#ag)"/>
+
+      <!-- ── LAYER: Health Connect ── -->
+      <text x="20" y="235" font-size="10" font-weight="700" fill="#4ade80" letter-spacing="0.1em">HEALTH CONNECT (ANDROID OS)</text>
+      <rect x="30" y="248" width="540" height="80" rx="12" fill="rgba(74,222,128,0.05)" stroke="rgba(74,222,128,0.2)" stroke-width="2" stroke-dasharray="6,3"/>
+
+      <!-- HC data type boxes -->
+      <rect x="42" y="258" width="80" height="32" rx="6" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)"/>
+      <text x="82" y="278" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Exercise</text>
+
+      <rect x="130" y="258" width="60" height="32" rx="6" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)"/>
+      <text x="160" y="278" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Sleep</text>
+
+      <rect x="198" y="258" width="62" height="32" rx="6" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)"/>
+      <text x="229" y="278" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Weight</text>
+
+      <rect x="268" y="258" width="82" height="32" rx="6" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)"/>
+      <text x="309" y="278" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Heart Rate</text>
+
+      <rect x="358" y="258" width="72" height="32" rx="6" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)"/>
+      <text x="394" y="278" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Nutrition</text>
+
+      <rect x="438" y="258" width="62" height="32" rx="6" fill="rgba(74,222,128,0.1)" stroke="rgba(74,222,128,0.3)"/>
+      <text x="469" y="278" text-anchor="middle" font-size="9" fill="#4ade80" font-weight="600">Hydration</text>
+
+      <text x="300" y="316" text-anchor="middle" font-size="9" fill="#64748b">Centralized health data store — reads require user permission grant</text>
+
+      <!-- Arrows: Garmin Connect → HC, Cronometer → HC -->
+      <line x1="130" y1="198" x2="130" y2="246" stroke="#4ade80" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="140" y="228" font-size="8" fill="#64748b">writes activities,</text>
+      <text x="140" y="237" font-size="8" fill="#64748b">sleep, weight, HR</text>
+
+      <line x1="380" y1="198" x2="380" y2="246" stroke="#4ade80" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="390" y="228" font-size="8" fill="#64748b">writes NutritionRecord</text>
+
+      <!-- ── LAYER: Native Bridge ── -->
+      <text x="20" y="365" font-size="10" font-weight="700" fill="#fbbf24" letter-spacing="0.1em">NATIVE BRIDGE (CAPACITOR PLUGIN)</text>
+      <rect x="30" y="378" width="540" height="60" rx="10" fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.2)" stroke-width="1.5"/>
+      <text x="300" y="400" text-anchor="middle" font-size="11" fill="#fbbf24" font-weight="700">HealthConnectBridge — Kotlin Capacitor Plugin</text>
+      <text x="300" y="418" text-anchor="middle" font-size="9" fill="#64748b">requestPermissions() · readExercise() · readSleep() · readWeight() · readHR() · readNutrition() · writeNutrition()</text>
+
+      <!-- Arrow: HC → Bridge -->
+      <line x1="300" y1="328" x2="300" y2="376" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ab)"/>
+      <text x="310" y="356" font-size="8" fill="#64748b">Android SDK calls</text>
+
+      <!-- ── LAYER: Arnold Web App ── -->
+      <text x="20" y="475" font-size="10" font-weight="700" fill="#a855f7" letter-spacing="0.1em">ARNOLD WEB APP (WEBVIEW)</text>
+      <rect x="30" y="488" width="540" height="130" rx="12" fill="rgba(168,85,247,0.05)" stroke="rgba(168,85,247,0.2)" stroke-width="1.5"/>
+
+      <!-- Inner modules -->
+      <rect x="42" y="498" width="110" height="36" rx="6" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.25)"/>
+      <text x="97" y="514" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">hc-sync.js</text>
+      <text x="97" y="526" text-anchor="middle" font-size="7" fill="#64748b">HC → storage mapper</text>
+
+      <rect x="162" y="498" width="100" height="36" rx="6" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.25)"/>
+      <text x="212" y="514" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">storage.js</text>
+      <text x="212" y="526" text-anchor="middle" font-size="7" fill="#64748b">AES-256 encrypted</text>
+
+      <rect x="272" y="498" width="120" height="36" rx="6" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.25)"/>
+      <text x="332" y="514" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">activityNeeds.js</text>
+      <text x="332" y="526" text-anchor="middle" font-size="7" fill="#64748b">workout → nutrition</text>
+
+      <rect x="402" y="498" width="110" height="36" rx="6" fill="rgba(168,85,247,0.1)" stroke="rgba(168,85,247,0.25)"/>
+      <text x="457" y="514" text-anchor="middle" font-size="9" fill="#a855f7" font-weight="600">NutritionInput</text>
+      <text x="457" y="526" text-anchor="middle" font-size="7" fill="#64748b">built-in food log</text>
+
+      <!-- Display row -->
+      <rect x="42" y="546" width="76" height="30" rx="6" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.15)"/>
+      <text x="80" y="565" text-anchor="middle" font-size="8" fill="#c084fc" font-weight="600">Home</text>
+
+      <rect x="126" y="546" width="76" height="30" rx="6" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.15)"/>
+      <text x="164" y="565" text-anchor="middle" font-size="8" fill="#c084fc" font-weight="600">EdgeIQ</text>
+
+      <rect x="210" y="546" width="76" height="30" rx="6" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.15)"/>
+      <text x="248" y="565" text-anchor="middle" font-size="8" fill="#c084fc" font-weight="600">Activity</text>
+
+      <rect x="294" y="546" width="76" height="30" rx="6" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.15)"/>
+      <text x="332" y="565" text-anchor="middle" font-size="8" fill="#c084fc" font-weight="600">Nutrition</text>
+
+      <rect x="378" y="546" width="76" height="30" rx="6" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.15)"/>
+      <text x="416" y="565" text-anchor="middle" font-size="8" fill="#c084fc" font-weight="600">Body</text>
+
+      <rect x="462" y="546" width="76" height="30" rx="6" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.15)"/>
+      <text x="500" y="565" text-anchor="middle" font-size="8" fill="#c084fc" font-weight="600">More</text>
+
+      <!-- Arrow: Bridge → Arnold -->
+      <line x1="300" y1="438" x2="300" y2="486" stroke="#a855f7" stroke-width="1.5" marker-end="url(#aa)"/>
+      <text x="310" y="466" font-size="8" fill="#64748b">Capacitor.Plugins.HealthConnect</text>
+
+      <!-- ── Side panel: What disappears ── -->
+      <rect x="620" y="40" width="400" height="580" rx="12" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"/>
+      <text x="640" y="68" font-size="12" font-weight="700" fill="#fff">What Changes with Health Connect</text>
+
+      <text x="640" y="100" font-size="10" font-weight="600" fill="#ef4444">✕ ELIMINATED (manual uploads)</text>
+      <text x="660" y="120" font-size="10" fill="#94a3b8">• Daily FIT file upload for activities</text>
+      <text x="660" y="138" font-size="10" fill="#94a3b8">• Weekly Garmin CSV bulk import</text>
+      <text x="660" y="156" font-size="10" fill="#94a3b8">• Manual weight entry (comes from scale→Garmin)</text>
+      <text x="660" y="174" font-size="10" fill="#94a3b8">• Manual sleep entry (comes from watch)</text>
+
+      <text x="640" y="210" font-size="10" font-weight="600" fill="#4ade80">✓ AUTOMATED (via Health Connect)</text>
+      <text x="660" y="230" font-size="10" fill="#94a3b8">• Activities: run stats, pace, HR, calories</text>
+      <text x="660" y="248" font-size="10" fill="#94a3b8">• Sleep: duration, stages, sleep score</text>
+      <text x="660" y="266" font-size="10" fill="#94a3b8">• Weight: from smart scale via Garmin</text>
+      <text x="660" y="284" font-size="10" fill="#94a3b8">• Heart rate: resting HR, zones</text>
+      <text x="660" y="302" font-size="10" fill="#94a3b8">• Nutrition: Cronometer → HC → Arnold</text>
+
+      <text x="640" y="338" font-size="10" font-weight="600" fill="#fbbf24">⚠ STILL MANUAL (Garmin-exclusive data)</text>
+      <text x="660" y="358" font-size="10" fill="#94a3b8">• HRV (not in Health Connect from Garmin)</text>
+      <text x="660" y="376" font-size="10" fill="#94a3b8">• Body Battery (Garmin proprietary)</text>
+      <text x="660" y="394" font-size="10" fill="#94a3b8">• Training Effect (Garmin proprietary)</text>
+      <text x="660" y="412" font-size="10" fill="#94a3b8">→ Workaround: Garmin Connect IQ widget</text>
+      <text x="660" y="430" font-size="10" fill="#94a3b8">   or periodic CSV import from Garmin web</text>
+
+      <text x="640" y="466" font-size="10" font-weight="600" fill="#60a5fa">◎ KEPT (Arnold-native features)</text>
+      <text x="660" y="486" font-size="10" fill="#94a3b8">• Arnold food logger (Manual/Photo/Voice/Barcode)</text>
+      <text x="660" y="504" font-size="10" fill="#94a3b8">• Activity → Nutrition micro-goals (activityNeeds)</text>
+      <text x="660" y="522" font-size="10" fill="#94a3b8">• EdgeIQ training intelligence</text>
+      <text x="660" y="540" font-size="10" fill="#94a3b8">• Race calendar + weekly planner</text>
+      <text x="660" y="558" font-size="10" fill="#94a3b8">• Clinical markers + body composition</text>
+      <text x="660" y="576" font-size="10" fill="#94a3b8">• Notes, readiness scoring, trends</text>
+      <text x="660" y="594" font-size="10" fill="#94a3b8">• AES-256-GCM encryption at rest</text>
+    </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DATA FLOW ═══ -->
+<div id="dataflow" class="view">
+  <div class="diagram">
+    <h2>End-to-End Data Flow</h2>
+
+    <h3>Activity Data Flow</h3>
+    <div class="flow">
+      <div class="flow-box fb-garmin">⌚ Garmin Watch</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-garmin">Garmin Connect</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-hc">Health Connect<br><span style="font-size:9px;opacity:0.7">ExerciseSessionRecord</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-bridge">HC Bridge<br><span style="font-size:9px;opacity:0.7">readExercise()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">hc-sync.js<br><span style="font-size:9px;opacity:0.7">mapToArnold()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">storage.js<br><span style="font-size:9px;opacity:0.7">dailyLogs[date]</span></div>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>ExerciseSessionRecord</strong> includes: activity type, start/end time, calories, distance, HR samples (avg, max, zones), pace/speed, route (lat/lng). This replaces FIT file upload entirely.
+    </div>
+
+    <h3>Sleep Data Flow</h3>
+    <div class="flow">
+      <div class="flow-box fb-garmin">⌚ Garmin Watch</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-garmin">Garmin Connect</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-hc">Health Connect<br><span style="font-size:9px;opacity:0.7">SleepSessionRecord</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-bridge">HC Bridge<br><span style="font-size:9px;opacity:0.7">readSleep()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">hc-sync.js</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">storage.js<br><span style="font-size:9px;opacity:0.7">sleep[date]</span></div>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>SleepSessionRecord</strong> includes: total duration, stages (awake, light, deep, REM), start/end times. Garmin does NOT write sleep score to HC — Arnold's existing sleep scoring algorithm handles that.
+    </div>
+
+    <h3>Weight & Body Composition Flow</h3>
+    <div class="flow">
+      <div class="flow-box fb-garmin">Smart Scale</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-garmin">Garmin Connect</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-hc">Health Connect<br><span style="font-size:9px;opacity:0.7">WeightRecord</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-bridge">HC Bridge<br><span style="font-size:9px;opacity:0.7">readWeight()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">storage.js<br><span style="font-size:9px;opacity:0.7">weight[date]</span></div>
+    </div>
+
+    <h3>Heart Rate Flow</h3>
+    <div class="flow">
+      <div class="flow-box fb-garmin">⌚ Garmin Watch</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-garmin">Garmin Connect</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-hc">Health Connect<br><span style="font-size:9px;opacity:0.7">HeartRateRecord</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-bridge">HC Bridge<br><span style="font-size:9px;opacity:0.7">readHR()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">storage.js<br><span style="font-size:9px;opacity:0.7">hrv[date].restingHR</span></div>
+    </div>
+
+    <h3>Nutrition Data Flow (Dual Source)</h3>
+    <div class="flow">
+      <div class="flow-box fb-crono">Cronometer</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-hc">Health Connect<br><span style="font-size:9px;opacity:0.7">NutritionRecord</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-bridge">HC Bridge<br><span style="font-size:9px;opacity:0.7">readNutrition()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">hc-sync.js<br><span style="font-size:9px;opacity:0.7">mergeNutrition()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">nutritionLog</div>
+    </div>
+    <div class="flow">
+      <div class="flow-box fb-arnold">Arnold Food Logger</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-arnold">nutritionLog</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-bridge">HC Bridge<br><span style="font-size:9px;opacity:0.7">writeNutrition()</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box fb-hc">Health Connect<br><span style="font-size:9px;opacity:0.7">NutritionRecord</span></div>
+    </div>
+
+    <div class="callout callout-good">
+      <strong>Bidirectional nutrition sync:</strong> Arnold reads Cronometer meals from Health Connect AND writes Arnold-logged meals back to Health Connect. The <code>mergeNutrition()</code> function deduplicates by timestamp + source to prevent double-counting.
+    </div>
+  </div>
+</div>
+
+<!-- ═══ HEALTH CONNECT MAP ═══ -->
+<div id="hcmap" class="view">
+  <div class="diagram">
+    <h2>Health Connect Data Type → Arnold Storage Mapping</h2>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>HC Record Type</th>
+          <th>Source App</th>
+          <th>Key Fields</th>
+          <th>Arnold Storage Key</th>
+          <th>Arnold Field Mapping</th>
+          <th>Replaces</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="tag tag-g">ExerciseSessionRecord</span></td>
+          <td>Garmin Connect</td>
+          <td><span class="key">exerciseType, startTime, endTime, title</span></td>
+          <td><span class="key">dailyLogs[date]</span></td>
+          <td>activityType, durationSecs, activityName</td>
+          <td><span class="tag tag-r">FIT file upload</span></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td></td>
+          <td><span class="key">+ HeartRateRecord (in-exercise)</span></td>
+          <td><span class="key">dailyLogs[date]</span></td>
+          <td>avgHR, maxHR, hrZones[]</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td></td>
+          <td><span class="key">+ ExerciseRoute, DistanceRecord</span></td>
+          <td><span class="key">dailyLogs[date]</span></td>
+          <td>distance, pace, route (if needed)</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td></td>
+          <td><span class="key">+ ActiveCaloriesBurnedRecord</span></td>
+          <td><span class="key">dailyLogs[date]</span></td>
+          <td>calories, activeCalories</td>
+          <td></td>
+        </tr>
+        <tr style="border-top: 1px solid rgba(255,255,255,0.08);">
+          <td><span class="tag tag-g">SleepSessionRecord</span></td>
+          <td>Garmin Connect</td>
+          <td><span class="key">startTime, endTime, stages[]</span></td>
+          <td><span class="key">sleep[date]</span></td>
+          <td>totalSleep, deepSleep, remSleep, lightSleep, awakeTime</td>
+          <td><span class="tag tag-r">CSV sleep import</span></td>
+        </tr>
+        <tr style="border-top: 1px solid rgba(255,255,255,0.08);">
+          <td><span class="tag tag-g">WeightRecord</span></td>
+          <td>Garmin Connect</td>
+          <td><span class="key">weight, time</span></td>
+          <td><span class="key">weight[date]</span></td>
+          <td>weight (converted to lbs)</td>
+          <td><span class="tag tag-r">Manual entry</span></td>
+        </tr>
+        <tr style="border-top: 1px solid rgba(255,255,255,0.08);">
+          <td><span class="tag tag-g">HeartRateRecord</span></td>
+          <td>Garmin Connect</td>
+          <td><span class="key">bpm, time (resting samples)</span></td>
+          <td><span class="key">hrv[date]</span></td>
+          <td>restingHR (min daily bpm)</td>
+          <td><span class="tag tag-r">CSV HR import</span></td>
+        </tr>
+        <tr style="border-top: 1px solid rgba(255,255,255,0.08);">
+          <td><span class="tag tag-g">NutritionRecord</span></td>
+          <td>Cronometer</td>
+          <td><span class="key">name, mealType, energy, protein, carbs, fat, ...</span></td>
+          <td><span class="key">nutritionLog[]</span></td>
+          <td>food name, meal, calories, protein, carbs, fat, micros</td>
+          <td><span class="tag tag-r">Cronometer CSV</span></td>
+        </tr>
+        <tr>
+          <td><span class="tag tag-g">NutritionRecord</span></td>
+          <td>Arnold (write-back)</td>
+          <td><span class="key">same fields</span></td>
+          <td>—</td>
+          <td>Arnold food log entries → HC (other apps can see them)</td>
+          <td>—</td>
+        </tr>
+        <tr style="border-top: 1px solid rgba(255,255,255,0.08);">
+          <td><span class="tag tag-g">HydrationRecord</span></td>
+          <td>Cronometer / Arnold</td>
+          <td><span class="key">volume, time</span></td>
+          <td><span class="key">nutritionLog[] (water)</span></td>
+          <td>water intake (ml)</td>
+          <td><span class="tag tag-r">Manual water entry</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-warn">
+      <strong>NutritionRecord detail level:</strong> Health Connect's NutritionRecord supports 40+ nutrient fields including all macros, vitamins, and minerals. Cronometer writes comprehensive micronutrient data. Arnold's food logger writes macros only — future enhancement: add micronutrient fields to Arnold's logger.
+    </div>
+  </div>
+
+  <div class="diagram">
+    <h2>HC Bridge API — Kotlin Plugin Interface</h2>
+    <table class="data-table">
+      <thead>
+        <tr><th>Method</th><th>Direction</th><th>Parameters</th><th>Returns</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="key">requestPermissions()</span></td>
+          <td><span class="tag tag-y">→ Android</span></td>
+          <td>dataTypes: string[]</td>
+          <td>{ granted: boolean, denied: string[] }</td>
+        </tr>
+        <tr>
+          <td><span class="key">readExerciseSessions(startDate, endDate)</span></td>
+          <td><span class="tag tag-b">← HC</span></td>
+          <td>ISO date range</td>
+          <td>ExerciseSession[] with HR, calories, route</td>
+        </tr>
+        <tr>
+          <td><span class="key">readSleepSessions(startDate, endDate)</span></td>
+          <td><span class="tag tag-b">← HC</span></td>
+          <td>ISO date range</td>
+          <td>SleepSession[] with stages</td>
+        </tr>
+        <tr>
+          <td><span class="key">readWeight(startDate, endDate)</span></td>
+          <td><span class="tag tag-b">← HC</span></td>
+          <td>ISO date range</td>
+          <td>WeightRecord[] { weight, time }</td>
+        </tr>
+        <tr>
+          <td><span class="key">readHeartRate(startDate, endDate)</span></td>
+          <td><span class="tag tag-b">← HC</span></td>
+          <td>ISO date range</td>
+          <td>HeartRateRecord[] { bpm, time }</td>
+        </tr>
+        <tr>
+          <td><span class="key">readNutrition(startDate, endDate)</span></td>
+          <td><span class="tag tag-b">← HC</span></td>
+          <td>ISO date range</td>
+          <td>NutritionRecord[] with macros + micros</td>
+        </tr>
+        <tr>
+          <td><span class="key">writeNutrition(record)</span></td>
+          <td><span class="tag tag-g">→ HC</span></td>
+          <td>NutritionRecord object</td>
+          <td>{ success: boolean }</td>
+        </tr>
+        <tr>
+          <td><span class="key">getLastSyncTime(dataType)</span></td>
+          <td><span class="tag tag-b">← local</span></td>
+          <td>data type string</td>
+          <td>ISO timestamp</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══ FOOD ARCHITECTURE ═══ -->
+<div id="food" class="view">
+  <div class="diagram">
+    <h2>Dual Food Logging Architecture</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-bottom:16px;">Arnold keeps its own food logger while also reading Cronometer data via Health Connect. Both sources merge into a unified nutrition view.</p>
+
+    <div class="svg-wrap">
+    <svg viewBox="0 0 900 520" style="width:100%;min-width:750px;">
+      <defs>
+        <marker id="fa" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#a855f7"/></marker>
+        <marker id="fc" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ec4899"/></marker>
+        <marker id="fh" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4ade80"/></marker>
+        <marker id="fy" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#fbbf24"/></marker>
+      </defs>
+
+      <!-- Source A: Cronometer -->
+      <rect x="30" y="30" width="250" height="110" rx="12" fill="rgba(236,72,153,0.06)" stroke="rgba(236,72,153,0.2)" stroke-width="1.5"/>
+      <text x="155" y="55" text-anchor="middle" font-size="13" fill="#ec4899" font-weight="700">Cronometer</text>
+      <text x="155" y="75" text-anchor="middle" font-size="10" fill="#94a3b8">Primary food logger (established habit)</text>
+      <text x="155" y="95" text-anchor="middle" font-size="9" fill="#64748b">Barcode scan · Recipe builder · 400K+ foods</text>
+      <text x="155" y="112" text-anchor="middle" font-size="9" fill="#64748b">Full micronutrients · Custom foods</text>
+
+      <!-- Source B: Arnold Food Logger -->
+      <rect x="340" y="30" width="250" height="110" rx="12" fill="rgba(168,85,247,0.06)" stroke="rgba(168,85,247,0.2)" stroke-width="1.5"/>
+      <text x="465" y="55" text-anchor="middle" font-size="13" fill="#a855f7" font-weight="700">Arnold Food Logger</text>
+      <text x="465" y="75" text-anchor="middle" font-size="10" fill="#94a3b8">Built-in: the future "One Body" path</text>
+      <text x="465" y="95" text-anchor="middle" font-size="9" fill="#64748b">Manual entry · Photo AI · Voice · Barcode</text>
+      <text x="465" y="112" text-anchor="middle" font-size="9" fill="#64748b">Portion selector · Pre/during/post tags</text>
+
+      <!-- Health Connect -->
+      <rect x="30" y="200" width="340" height="60" rx="10" fill="rgba(74,222,128,0.06)" stroke="rgba(74,222,128,0.2)" stroke-width="2" stroke-dasharray="6,3"/>
+      <text x="200" y="225" text-anchor="middle" font-size="12" fill="#4ade80" font-weight="700">Health Connect — NutritionRecord</text>
+      <text x="200" y="243" text-anchor="middle" font-size="9" fill="#64748b">40+ nutrient fields per record · timestamped · source-tagged</text>
+
+      <!-- Arrows: Crono → HC, Arnold → HC -->
+      <line x1="155" y1="140" x2="155" y2="198" stroke="#ec4899" stroke-width="1.5" marker-end="url(#fc)"/>
+      <text x="165" y="175" font-size="8" fill="#64748b">writes NutritionRecord</text>
+
+      <line x1="465" y1="140" x2="320" y2="198" stroke="#a855f7" stroke-width="1.5" marker-end="url(#fa)"/>
+      <text x="400" y="165" font-size="8" fill="#64748b">write-back via bridge</text>
+
+      <!-- Merge Layer -->
+      <rect x="30" y="320" width="560" height="70" rx="10" fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.2)" stroke-width="1.5"/>
+      <text x="310" y="345" text-anchor="middle" font-size="12" fill="#fbbf24" font-weight="700">hc-sync.js → mergeNutrition()</text>
+      <text x="310" y="365" text-anchor="middle" font-size="10" fill="#94a3b8">Dedup: match by timestamp ± 2min + food name similarity</text>
+      <text x="310" y="380" text-anchor="middle" font-size="9" fill="#64748b">source field: "cronometer" | "arnold" | "arnold+hc" — prevents double-counting</text>
+
+      <!-- Arrow: HC → Merge -->
+      <line x1="200" y1="260" x2="200" y2="318" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#fy)"/>
+
+      <!-- Arnold direct entry → Merge -->
+      <line x1="465" y1="140" x2="465" y2="318" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#fa)"/>
+      <text x="475" y="240" font-size="8" fill="#64748b">also direct to</text>
+      <text x="475" y="250" font-size="8" fill="#64748b">nutritionLog</text>
+
+      <!-- Unified Store -->
+      <rect x="130" y="440" width="360" height="55" rx="10" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.25)" stroke-width="1.5"/>
+      <text x="310" y="465" text-anchor="middle" font-size="13" fill="#a855f7" font-weight="700">Unified nutritionLog[]</text>
+      <text x="310" y="483" text-anchor="middle" font-size="10" fill="#94a3b8">One truth · feeds Nutrition tab, ReplenishTracker, activityNeeds</text>
+
+      <line x1="310" y1="390" x2="310" y2="438" stroke="#a855f7" stroke-width="1.5" marker-end="url(#fa)"/>
+
+      <!-- Side notes -->
+      <rect x="640" y="30" width="240" height="200" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"/>
+      <text x="660" y="55" font-size="11" font-weight="700" fill="#fff">Dedup Strategy</text>
+      <text x="660" y="78" font-size="10" fill="#94a3b8">1. Each entry tagged with</text>
+      <text x="673" y="93" font-size="10" fill="#60a5fa">source: "cronometer"|"arnold"</text>
+      <text x="660" y="115" font-size="10" fill="#94a3b8">2. On HC sync, check existing</text>
+      <text x="673" y="130" font-size="10" fill="#94a3b8">entries ±2min window</text>
+      <text x="660" y="152" font-size="10" fill="#94a3b8">3. If Arnold entry matches HC</text>
+      <text x="673" y="167" font-size="10" fill="#94a3b8">record → mark "arnold+hc"</text>
+      <text x="673" y="182" font-size="10" fill="#94a3b8">(already synced, skip)</text>
+      <text x="660" y="204" font-size="10" fill="#94a3b8">4. New HC records → add with</text>
+      <text x="673" y="219" font-size="10" fill="#94a3b8">source: "cronometer"</text>
+
+      <rect x="640" y="260" width="240" height="120" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"/>
+      <text x="660" y="285" font-size="11" font-weight="700" fill="#fff">Meal Phase Tagging</text>
+      <text x="660" y="308" font-size="10" fill="#94a3b8">Arnold entries: user selects</text>
+      <text x="673" y="323" font-size="10" fill="#94a3b8">pre/during/post workout</text>
+      <text x="660" y="345" font-size="10" fill="#94a3b8">Cronometer entries: auto-tag by</text>
+      <text x="673" y="360" font-size="10" fill="#94a3b8">timestamp vs. activity window</text>
+    </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ NATIVE WRAPPER ═══ -->
+<div id="wrapper" class="view">
+  <div class="diagram">
+    <h2>Native Wrapper — Capacitor Architecture</h2>
+
+    <div class="callout callout-info">
+      <strong>Why Capacitor?</strong> Arnold is already a Vite + React web app. Capacitor wraps the existing web build in an Android WebView with zero code rewrite. Kotlin plugins provide the native bridge to Health Connect. React Native would require a full rewrite; Capacitor keeps the existing ~13,000 lines of code intact.
+    </div>
+
+    <h3>Project Structure</h3>
+    <div style="font-family:'SF Mono','Fira Code',monospace;font-size:11px;color:#94a3b8;line-height:1.8;padding:16px;background:rgba(255,255,255,0.02);border-radius:10px;margin-bottom:16px;">
+      <span style="color:#fff">arnold-mobile/</span><br>
+      ├── <span style="color:#60a5fa">android/</span>                          <span style="color:#475569"># Generated Capacitor Android project</span><br>
+      │   ├── app/src/main/java/.../          <span style="color:#475569"># Kotlin source</span><br>
+      │   │   ├── <span style="color:#fbbf24">HealthConnectPlugin.kt</span>     <span style="color:#475569"># Capacitor plugin — HC bridge</span><br>
+      │   │   └── <span style="color:#fbbf24">MainActivity.kt</span>            <span style="color:#475569"># Standard Capacitor activity</span><br>
+      │   ├── app/src/main/res/              <span style="color:#475569"># Icons, splash, theme</span><br>
+      │   └── app/build.gradle               <span style="color:#475569"># HC SDK dependency</span><br>
+      ├── <span style="color:#a855f7">src/</span>                               <span style="color:#475569"># Existing arnold-app/src (symlink or copy)</span><br>
+      │   ├── Arnold.jsx                     <span style="color:#475569"># Main app — unchanged</span><br>
+      │   ├── core/<br>
+      │   │   ├── storage.js                 <span style="color:#475569"># Encrypted localStorage — unchanged</span><br>
+      │   │   ├── activityNeeds.js           <span style="color:#475569"># Workout → nutrition — unchanged</span><br>
+      │   │   └── <span style="color:#4ade80">hc-sync.js</span>                <span style="color:#475569"># NEW: Health Connect sync orchestrator</span><br>
+      │   │   └── <span style="color:#4ade80">hc-bridge.js</span>              <span style="color:#475569"># NEW: JS ↔ Kotlin bridge wrapper</span><br>
+      │   └── components/                    <span style="color:#475569"># All existing components</span><br>
+      ├── <span style="color:#22d3ee">capacitor.config.ts</span>               <span style="color:#475569"># WebView settings, plugins</span><br>
+      ├── package.json                       <span style="color:#475569"># + @capacitor/core, @capacitor/android</span><br>
+      └── vite.config.js                     <span style="color:#475569"># Existing — builds to dist/</span>
+    </div>
+
+    <h3>Key New Files</h3>
+    <div class="node-grid cols-2">
+      <div class="node n-bridge">
+        <div class="name">hc-bridge.js</div>
+        <div class="desc">
+          JavaScript wrapper around <code>Capacitor.Plugins.HealthConnect</code>. Detects web vs native environment — in browser, returns mock data or falls back to FIT upload. In Capacitor, calls the Kotlin plugin via the bridge.
+          <br><br>
+          <code style="font-size:9px;color:#fbbf24">
+          import { Capacitor } from '@capacitor/core';<br>
+          const isNative = Capacitor.isNativePlatform();<br>
+          export const hcBridge = isNative ? Capacitor.Plugins.HealthConnect : mockHC;
+          </code>
+        </div>
+      </div>
+      <div class="node n-hc">
+        <div class="name">hc-sync.js</div>
+        <div class="desc">
+          Orchestrates periodic Health Connect reads. Runs on app open + every 15 minutes. Reads all data types since last sync timestamp, maps HC records to Arnold's storage format, merges nutrition (dedup), and writes to storage.js.
+          <br><br>
+          Key functions:<br>
+          <code style="font-size:9px;color:#4ade80">
+          syncAll() · syncExercise() · syncSleep()<br>
+          syncWeight() · syncHR() · syncNutrition()<br>
+          mergeNutrition() · writeBackToHC()
+          </code>
+        </div>
+      </div>
+      <div class="node n-garmin">
+        <div class="name">HealthConnectPlugin.kt</div>
+        <div class="desc">
+          Kotlin Capacitor plugin implementing <code>@CapacitorPlugin</code>. Uses <code>androidx.health.connect.client</code> SDK to read/write HC records. Handles permission requests, date range queries, and data type serialization to JSON for the JS bridge.
+          <br><br>
+          Dependency: <code style="font-size:9px;color:#60a5fa">androidx.health.connect:connect-client:1.1.0-alpha</code>
+        </div>
+      </div>
+      <div class="node n-arnold">
+        <div class="name">capacitor.config.ts</div>
+        <div class="desc">
+          Capacitor configuration. Points WebView to the Vite build output. Registers the HealthConnect plugin. Sets Android minimum SDK 26 (required for Health Connect).
+          <br><br>
+          <code style="font-size:9px;color:#a855f7">
+          { appId: 'com.arnold.health',<br>
+          &nbsp; webDir: 'dist',<br>
+          &nbsp; plugins: { HealthConnect: {} } }
+          </code>
+        </div>
+      </div>
+    </div>
+
+    <h3>Web vs. Native — Graceful Degradation</h3>
+    <div class="callout callout-good">
+      <strong>Same codebase, two modes.</strong> The <code>hc-bridge.js</code> module detects the runtime environment. On the web (GitHub Pages), Arnold works exactly as today — FIT uploads, CSV imports, manual entry. On Android (Capacitor), Health Connect takes over as the data source. All existing features (EdgeIQ, race calendar, encryption, AI food log) work identically in both modes. No code duplication.
+    </div>
+
+    <table class="data-table" style="margin-top:12px;">
+      <thead>
+        <tr><th>Feature</th><th>Web (GitHub Pages)</th><th>Native (Capacitor)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Activity data</td><td>FIT file upload</td><td><span class="tag tag-g">Auto from HC</span></td></tr>
+        <tr><td>Sleep data</td><td>CSV import</td><td><span class="tag tag-g">Auto from HC</span></td></tr>
+        <tr><td>Weight</td><td>Manual entry</td><td><span class="tag tag-g">Auto from HC</span></td></tr>
+        <tr><td>Heart rate</td><td>CSV import / FIT</td><td><span class="tag tag-g">Auto from HC</span></td></tr>
+        <tr><td>Nutrition (Cronometer)</td><td>CSV export/import</td><td><span class="tag tag-g">Auto from HC</span></td></tr>
+        <tr><td>Nutrition (Arnold)</td><td>Manual/Photo/Voice/Barcode</td><td>Same + <span class="tag tag-g">write to HC</span></td></tr>
+        <tr><td>HRV</td><td>CSV import</td><td><span class="tag tag-y">CSV import (gap)</span></td></tr>
+        <tr><td>Body Battery</td><td>CSV import</td><td><span class="tag tag-y">CSV import (gap)</span></td></tr>
+        <tr><td>Training Effect</td><td>FIT file</td><td><span class="tag tag-y">FIT or Connect IQ</span></td></tr>
+        <tr><td>EdgeIQ / Race cal</td><td>Full</td><td>Full</td></tr>
+        <tr><td>Encryption</td><td>AES-256-GCM</td><td>AES-256-GCM</td></tr>
+        <tr><td>Storage</td><td>localStorage + IndexedDB</td><td>Same (WebView)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══ GARMIN GAPS ═══ -->
+<div id="gaps" class="view">
+  <div class="diagram">
+    <h2>Garmin → Health Connect Data Gaps</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-bottom:16px;">Garmin does not write all of its proprietary metrics to Health Connect. These three data types require workarounds.</p>
+
+    <div class="node-grid cols-3">
+      <div class="node n-warn">
+        <div class="name">HRV (Heart Rate Variability)</div>
+        <div class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444">GAP</div>
+        <div class="desc">
+          <strong>Status:</strong> Garmin measures HRV nightly but does NOT write it to Health Connect.<br><br>
+          <strong>HC Type:</strong> <code>HeartRateVariabilityRmssdRecord</code> exists in HC, but Garmin doesn't populate it.<br><br>
+          <strong>Workarounds:</strong><br>
+          1. <span style="color:#fbbf24">Garmin Connect API</span> — OAuth app, rate-limited, requires developer access<br>
+          2. <span style="color:#fbbf24">Connect IQ widget</span> — push HRV from watch → phone → Arnold via intent<br>
+          3. <span style="color:#94a3b8">Periodic CSV export</span> — current approach, still works as fallback<br><br>
+          <strong>Recommendation:</strong> Start with CSV fallback, then build Connect IQ widget for Phase 3.
+        </div>
+      </div>
+
+      <div class="node n-warn">
+        <div class="name">Body Battery</div>
+        <div class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444">GAP</div>
+        <div class="desc">
+          <strong>Status:</strong> Garmin proprietary metric. NO Health Connect equivalent exists.<br><br>
+          <strong>HC Type:</strong> None — no standard body battery / energy concept in HC.<br><br>
+          <strong>Workarounds:</strong><br>
+          1. <span style="color:#fbbf24">Garmin Connect API</span> — has body battery endpoint<br>
+          2. <span style="color:#fbbf24">Arnold can approximate</span> using HRV + sleep + activity load (EdgeIQ already does readiness scoring)<br>
+          3. <span style="color:#94a3b8">CSV export</span> — current approach<br><br>
+          <strong>Recommendation:</strong> Enhance Arnold's readiness score to approximate Body Battery; use CSV as supplement.
+        </div>
+      </div>
+
+      <div class="node n-warn">
+        <div class="name">Training Effect</div>
+        <div class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444">GAP</div>
+        <div class="desc">
+          <strong>Status:</strong> Garmin proprietary (Firstbeat). Aerobic/Anaerobic TE scores not in HC.<br><br>
+          <strong>HC Type:</strong> None — HC has <code>ExerciseSessionRecord</code> but no TE fields.<br><br>
+          <strong>Workarounds:</strong><br>
+          1. <span style="color:#fbbf24">FIT file parsing</span> — TE is embedded in FIT activity files (keep FIT upload as option in native)<br>
+          2. <span style="color:#fbbf24">Arnold can estimate</span> using TRIMP/EPOC from HR data (EdgeIQ already computes training load)<br>
+          3. <span style="color:#fbbf24">Connect IQ data field</span> — push TE after each activity<br><br>
+          <strong>Recommendation:</strong> Use Arnold's existing TRIMP calculation as proxy; keep FIT upload available for detailed analysis.
+        </div>
+      </div>
+    </div>
+
+    <div class="callout callout-warn" style="margin-top:16px;">
+      <strong>Long-term strategy:</strong> All three gaps are solvable via the <strong>Garmin Connect API</strong> (OAuth2 + REST endpoints for daily summaries, activities, body battery). This would be a Phase 3 server component — a lightweight cloud function that polls Garmin's API daily and pushes data to Arnold via push notification or background sync. Until then, Arnold's own algorithms (readiness scoring, TRIMP) provide good approximations.
+    </div>
+  </div>
+</div>
+
+<!-- ═══ BUILD PHASES ═══ -->
+<div id="phases" class="view">
+  <div class="diagram">
+    <h2>Implementation Phases</h2>
+
+    <div class="phase-header">
+      <div class="phase-num" style="background:rgba(96,165,250,0.15);color:#60a5fa;">1</div>
+      <div class="phase-title">Capacitor Shell + HC Read (Est. 2–3 weeks)</div>
+    </div>
+    <div class="node n-store" style="margin-bottom:16px;">
+      <div class="desc" style="line-height:1.8;">
+        <strong style="color:#fff">Goal:</strong> Arnold runs as an Android app, reading activity/sleep/weight/HR from Health Connect automatically.<br>
+        <strong style="color:#fff">Tasks:</strong><br>
+        • Initialize Capacitor project wrapping existing Vite build<br>
+        • Write <code>HealthConnectPlugin.kt</code> — read-only for Exercise, Sleep, Weight, HeartRate<br>
+        • Write <code>hc-bridge.js</code> — environment detection + native/web fallback<br>
+        • Write <code>hc-sync.js</code> — sync orchestrator with last-sync timestamps<br>
+        • Update Arnold.jsx boot sequence: call <code>hcSync.syncAll()</code> if native<br>
+        • Modify LogDay: hide FIT upload on native, show "Last synced" indicator<br>
+        • Android permissions manifest: ACTIVITY_RECOGNITION, HEALTH_CONNECT<br>
+        • Test with Garmin Forerunner data via Health Connect on physical device<br>
+        <strong style="color:#fff">Outcome:</strong> Zero daily uploads for activities, sleep, weight, resting HR
+      </div>
+    </div>
+
+    <div class="phase-header">
+      <div class="phase-num" style="background:rgba(74,222,128,0.15);color:#4ade80;">2</div>
+      <div class="phase-title">Nutrition Sync + Write-back (Est. 2 weeks)</div>
+    </div>
+    <div class="node n-hc" style="margin-bottom:16px;">
+      <div class="desc" style="line-height:1.8;">
+        <strong style="color:#fff">Goal:</strong> Cronometer food data flows into Arnold automatically. Arnold food log entries flow back to Health Connect.<br>
+        <strong style="color:#fff">Tasks:</strong><br>
+        • Add <code>readNutrition()</code> + <code>writeNutrition()</code> to Kotlin plugin<br>
+        • Implement <code>mergeNutrition()</code> — dedup by timestamp + food name<br>
+        • Source tagging: each nutritionLog entry gets <code>source</code> field<br>
+        • Auto-tag Cronometer meals as pre/during/post workout by activity time window<br>
+        • Write-back: when user logs food in Arnold, push to HC as NutritionRecord<br>
+        • Update Nutrition tab to show source badges (🅒 Cronometer, 🅐 Arnold)<br>
+        • Test bidirectional sync: log in Cronometer → see in Arnold → log in Arnold → see in Cronometer<br>
+        <strong style="color:#fff">Outcome:</strong> "One Body in one place" — all food from both sources visible in Arnold
+      </div>
+    </div>
+
+    <div class="phase-header">
+      <div class="phase-num" style="background:rgba(251,191,36,0.15);color:#fbbf24;">3</div>
+      <div class="phase-title">Gap Closers + Background Sync (Est. 3–4 weeks)</div>
+    </div>
+    <div class="node n-bridge" style="margin-bottom:16px;">
+      <div class="desc" style="line-height:1.8;">
+        <strong style="color:#fff">Goal:</strong> Close the three Garmin gaps (HRV, Body Battery, Training Effect) and enable background sync.<br>
+        <strong style="color:#fff">Tasks:</strong><br>
+        • <strong>Option A: Connect IQ Widget</strong> — Garmin watch data field that pushes HRV + Body Battery + TE to phone after each activity sync. Requires Garmin SDK (Monkey C).<br>
+        • <strong>Option B: Garmin Connect API</strong> — lightweight cloud function (Cloudflare Worker / Deno Deploy) that polls Garmin's REST API daily via OAuth2, pushes data to Arnold via Web Push notification.<br>
+        • Implement Android <code>WorkManager</code> for periodic background HC sync (every 30 min)<br>
+        • Add push notification: "New activity synced — 5.2 mi run, 485 cal"<br>
+        • Enhanced readiness scoring using all three metrics natively<br>
+        <strong style="color:#fff">Outcome:</strong> True zero-touch — all data flows automatically, no manual intervention
+      </div>
+    </div>
+
+    <h3>Timeline</h3>
+    <div style="padding:16px;background:rgba(255,255,255,0.02);border-radius:10px;font-size:12px;">
+      <div style="display:flex;gap:4px;height:32px;margin-bottom:8px;">
+        <div style="flex:3;background:rgba(96,165,250,0.15);border-radius:6px;display:flex;align-items:center;padding:0 10px;color:#60a5fa;font-weight:600;font-size:11px;">Phase 1: Capacitor + HC Read</div>
+        <div style="flex:2;background:rgba(74,222,128,0.15);border-radius:6px;display:flex;align-items:center;padding:0 10px;color:#4ade80;font-weight:600;font-size:11px;">Phase 2: Nutrition</div>
+        <div style="flex:4;background:rgba(251,191,36,0.15);border-radius:6px;display:flex;align-items:center;padding:0 10px;color:#fbbf24;font-weight:600;font-size:11px;">Phase 3: Gap Closers + Background</div>
+      </div>
+      <div style="display:flex;gap:4px;color:#64748b;font-size:10px;">
+        <div style="flex:3;text-align:center;">Weeks 1–3</div>
+        <div style="flex:2;text-align:center;">Weeks 4–5</div>
+        <div style="flex:4;text-align:center;">Weeks 6–9</div>
+      </div>
+    </div>
+
+    <div class="callout callout-good" style="margin-top:16px;">
+      <strong>Web version stays alive.</strong> The GitHub Pages deployment continues to work as-is — it's the same codebase. The native wrapper is additive. Users without Android can still use Arnold via the web with FIT/CSV uploads. The "One Body in One Place" vision is fully realized on Android while maintaining desktop access.
+    </div>
+  </div>
+</div>
+
+<script>
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>
