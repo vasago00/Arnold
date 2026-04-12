@@ -116,3 +116,42 @@ export function todayPlanned(date = new Date()) {
   const idx = dow === 0 ? 6 : dow - 1; // Mon=0, Sun=6
   return wk.days?.[idx] || null;
 }
+
+// ─── Plan completion check (3-store merge) ──────────────────────────────────
+// Checks garmin-activities, workouts, and daily-logs to determine if today's
+// planned session was completed. Returns { completed: bool, hasAny: bool }.
+// Previously duplicated in Arnold.jsx (~line 2917) and MobileHome.jsx (~line 542).
+export function checkTodayCompletion(dateStr, planned) {
+  if (!planned) return { completed: false, hasAny: false };
+
+  const activities = storage.get('activities') || [];
+  const workouts = storage.get('workouts') || [];
+  const dailyLogs = storage.get('dailyLogs') || [];
+
+  const todayActs = activities.filter(a => a.date === dateStr);
+  const todayWkts = workouts.filter(w => w.date === dateStr);
+  const todayLogs = dailyLogs.filter(l => l.date === dateStr);
+
+  const todayHasLog = todayLogs.some(l => l.fitData || l.workout || l.distanceMi || l.duration);
+  const hasAny = todayActs.length > 0 || todayWkts.length > 0 || todayHasLog;
+
+  const isRest = planned.type === 'rest';
+  if (isRest) return { completed: !hasAny, hasAny };
+  if (!hasAny) return { completed: false, hasAny: false };
+
+  const logType = l => (l.fitData?.activityType || l.workout || l.type || '');
+  const pt = planned.type || '';
+
+  const hasRun = todayActs.some(a => /run/i.test(a.activityType || ''))
+    || todayWkts.some(w => /run/i.test(w.type || ''))
+    || todayLogs.some(l => /run/i.test(logType(l)));
+  const hasStrength = todayActs.some(a => /strength|weight/i.test(a.activityType || ''))
+    || todayWkts.some(w => /strength/i.test(w.type || ''))
+    || todayLogs.some(l => /strength/i.test(logType(l)));
+
+  if (/run|tempo|interval|long/.test(pt) && hasRun) return { completed: true, hasAny };
+  if (/strength/.test(pt) && hasStrength) return { completed: true, hasAny };
+
+  // Fallback: any activity counts as completion for non-specific plan types
+  return { completed: hasAny, hasAny };
+}

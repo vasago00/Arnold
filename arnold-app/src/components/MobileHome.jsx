@@ -9,7 +9,7 @@ import { Sparkline } from "./Sparkline.jsx";
 import { STATUS, statusFromPct } from "../core/semantics.js";
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
-import { todayPlanned, DAY_TYPES } from "../core/planner.js";
+import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
 
@@ -537,35 +537,9 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
         const typeInfo = DAY_TYPES.find(t => t.id === plan?.type) || DAY_TYPES.find(t => t.id === 'rest');
         const isRest = plan?.type === 'rest';
 
-        // Check ALL stores for a matching completed activity
+        // Check completion via shared 3-store merge in planner.js
         const todayStr = new Date().toISOString().slice(0, 10);
-        let completed = false;
-        try {
-          // 3 stores: garmin-activities, workouts, daily-logs
-          const acts = storage.get('activities') || [];
-          const wkts = storage.get('workouts') || [];
-          const logs = storage.get('dailyLogs') || [];
-          const todayActs = acts.filter(a => a.date === todayStr);
-          const todayWkts = wkts.filter(w => w.date === todayStr);
-          const todayLogs = logs.filter(l => l.date === todayStr);
-          // FIT uploads stored as fitData.activityType inside daily-logs
-          const todayHasLog = todayLogs.some(l => l.fitData || l.workout || l.distanceMi || l.duration);
-          const logType = l => (l.fitData?.activityType || l.workout || l.type || '');
-          const hasAny = todayActs.length > 0 || todayWkts.length > 0 || todayHasLog;
-          if (hasAny && !isRest) {
-            const planType = plan?.type || '';
-            const hasRun = todayActs.some(a => /run/i.test(a.activityType || ''))
-                        || todayWkts.some(w => /run/i.test(w.type || ''))
-                        || todayLogs.some(l => /run/i.test(logType(l)));
-            const hasStrength = todayActs.some(a => /strength|weight/i.test(a.activityType || ''))
-                             || todayWkts.some(w => /strength/i.test(w.type || ''))
-                             || todayLogs.some(l => /strength/i.test(logType(l)));
-            if (/run|tempo|interval|long/.test(planType) && hasRun) completed = true;
-            else if (/strength/.test(planType) && hasStrength) completed = true;
-            else if (hasAny) completed = true;
-          }
-          if (isRest && !hasAny) completed = true;
-        } catch {}
+        const { completed } = checkTodayCompletion(todayStr, plan);
 
         const planLabel = typeInfo?.label || 'Rest';
         const planColor = completed ? STATUS.ok.color : (typeInfo?.color || '#6b7280');

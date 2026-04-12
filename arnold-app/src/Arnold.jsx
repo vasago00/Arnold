@@ -35,7 +35,7 @@ import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as g
 import { AVATAR_LIBRARY } from "./core/avatars.js";
 import { getGoals } from "./core/goals.js";
 import { WeeklyPlanner } from "./components/WeeklyPlanner.jsx";
-import { todayPlanned } from "./core/planner.js";
+import { todayPlanned, checkTodayCompletion } from "./core/planner.js";
 import { trainingAnnotations, dailyAnnotations } from "./core/aiAnnotations.js";
 import { AnnotationStrip } from "./components/AnnotationStrip.jsx";
 import { CockpitRail } from "./components/CockpitRail.jsx";
@@ -2903,36 +2903,9 @@ Structure:
   // already shows state; these tiles surface action. If everything is green
   // we collapse to a single "all systems nominal" tile.
   const attention=[];
-  // Today's planned session — check ALL stores for completed activity
+  // Today's planned session — check completion via shared 3-store merge
   const todayDateStr=td();
-  // 1. Garmin CSV activities (storage.get('activities') → arnold:garmin-activities)
-  const todayActs=activities.filter(a=>a.date===todayDateStr);
-  // 2. Daily-tab saved workouts (arnold:workouts)
-  const todayWorkouts=(storage.get('workouts')||[]).filter(w=>w.date===todayDateStr);
-  // 3. Daily logs (arnold:daily-logs) — FIT uploads stored as fitData nested object
-  // Phase 1: daily-logs now in KEYS map as 'dailyLogs'
-  const allDailyLogs=storage.get('dailyLogs')||[];
-  const todayDailyLogs=allDailyLogs.filter(l=>l.date===todayDateStr);
-  const todayHasLog=todayDailyLogs.some(l=>l.fitData||l.workout||l.distanceMi||l.duration);
-  const planCompleted=(()=>{
-    if(!planned)return false;
-    const pt=planned.type||'';
-    const anyDone=todayActs.length>0||todayWorkouts.length>0||todayHasLog;
-    if(pt==='rest')return !anyDone;
-    if(!anyDone)return false;
-    // Check all stores for run/strength match
-    // Daily logs store FIT data as fitData.activityType (e.g. "Running")
-    const logType=l=>(l.fitData?.activityType||l.workout||l.type||'');
-    const hasRun=todayActs.some(a=>/run/i.test(a.activityType||''))
-      ||todayWorkouts.some(w=>/run/i.test(w.type||''))
-      ||todayDailyLogs.some(l=>/run/i.test(logType(l)));
-    const hasStr=todayActs.some(a=>/strength|weight/i.test(a.activityType||''))
-      ||todayWorkouts.some(w=>/strength/i.test(w.type||''))
-      ||todayDailyLogs.some(l=>/strength/i.test(logType(l)));
-    if(/run|tempo|interval|long/.test(pt)&&hasRun)return true;
-    if(/strength/.test(pt)&&hasStr)return true;
-    return anyDone;
-  })();
+  const{completed:planCompleted}=checkTodayCompletion(todayDateStr,planned);
   if(planned&&plannedTypeLabel){
     attention.push({
       label:'Today',value:plannedTypeLabel,unit:'',
