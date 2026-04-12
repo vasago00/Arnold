@@ -42,14 +42,41 @@ const GRADIENTS = {
 };
 
 // ─── Bottom Nav Config ──────────────────────────────────────────────────────
-const NAV_ITEMS = [
+export const NAV_ITEMS = [
   { id: 'home',      icon: '⬡', label: 'Home' },
   { id: 'training',  icon: '◇', label: 'Training', tab: 'weekly' },
-  { id: 'recovery',  icon: '◎', label: 'Recovery', tab: 'daily' },
+  { id: 'daily_tab', icon: '◎', label: 'Daily',    tab: 'daily' },
   { id: 'body',      icon: '△', label: 'Body',     tab: 'clinical' },
   { id: 'nutrition', icon: '◈', label: 'Nutrition', tab: 'daily' },
   { id: 'more',      icon: '⋯', label: 'More' },
 ];
+
+// ─── Swipe navigation hook ──────────────────────────────────────────────────
+// Returns touch handlers: bind to the scrollable container.
+// onSwipeLeft/onSwipeRight fire when horizontal swipe exceeds threshold.
+export function useSwipeNav({ onSwipeLeft, onSwipeRight, threshold = 60 } = {}) {
+  const touchRef = useCallback(() => {}, []);
+  const startX = { current: 0 };
+  const startY = { current: 0 };
+  return {
+    onTouchStart: (e) => {
+      startX.current = e.touches[0].clientX;
+      startY.current = e.touches[0].clientY;
+    },
+    onTouchEnd: (e) => {
+      const dx = e.changedTouches[0].clientX - startX.current;
+      const dy = e.changedTouches[0].clientY - startY.current;
+      // Only trigger if horizontal swipe > threshold and more horizontal than vertical
+      if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        if (dx < 0) onSwipeLeft?.();
+        else onSwipeRight?.();
+      }
+    },
+  };
+}
+
+// ─── Ordered nav ids for swipe cycling ──────────────────────────────────────
+const SWIPE_ORDER = ['home', 'training', 'daily_tab', 'body', 'nutrition'];
 
 // ─── Micro-interaction: spring press ────────────────────────────────────────
 function usePress() {
@@ -250,10 +277,15 @@ function MoreMenu({ onSelect, onClose }) {
 export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeeklyHrsTotal,
   avgPaceSecs, goalPaceSecs, fmtPace, totalMi, annualRunTarget, totalSessions,
   sortedSleep, hrvData, sortedW, currentWeight, currentBF, latestSleepScore,
-  avgHRV30, recentNut, avgProtein, latestRHR, nextRace, onOpenTab }) {
+  avgHRV30, recentNut, avgProtein, latestRHR, nextRace, onOpenTab, initialView }) {
 
   const [moreOpen, setMoreOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState('home');
+  const [activeNav, setActiveNav] = useState(initialView || 'home');
+
+  // Respond to parent signalling a view change (e.g. returning from drill-down to nutrition)
+  useEffect(() => {
+    if (initialView && initialView !== activeNav) setActiveNav(initialView);
+  }, [initialView]);
   const G = getGoals();
 
   // Derived data
@@ -315,8 +347,27 @@ export function MobileHome({ data, focusItems, weeklyStats, avgWeeklyMi, avgWeek
     onOpenTab?.(item.tab);
   };
 
+  // ── Swipe navigation ──
+  const navigateTo = useCallback((navId) => {
+    const item = NAV_ITEMS.find(n => n.id === navId);
+    if (item) handleNav(item);
+  }, []);
+
+  const swipeHandlers = useSwipeNav({
+    onSwipeLeft: () => {
+      const idx = SWIPE_ORDER.indexOf(activeNav);
+      const next = SWIPE_ORDER[Math.min(idx + 1, SWIPE_ORDER.length - 1)];
+      if (next && next !== activeNav) navigateTo(next);
+    },
+    onSwipeRight: () => {
+      const idx = SWIPE_ORDER.indexOf(activeNav);
+      const prev = SWIPE_ORDER[Math.max(idx - 1, 0)];
+      if (prev && prev !== activeNav) navigateTo(prev);
+    },
+  });
+
   return (
-    <div style={{
+    <div {...swipeHandlers} style={{
       minHeight: '100vh',
       background: 'linear-gradient(180deg, #0a0b10 0%, #111318 40%, #0d0e14 100%)',
       padding: '0 16px 90px', // 90px bottom for nav bar

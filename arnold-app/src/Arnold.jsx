@@ -27,7 +27,7 @@ import { GoalsHub } from "./components/GoalsHub.jsx";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
-import { MobileHome } from "./components/MobileHome.jsx";
+import { MobileHome, NAV_ITEMS, useSwipeNav } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import { startAutoBackup } from "./core/backup.js";
@@ -318,6 +318,45 @@ export default function App(){
     return()=>mq.removeEventListener('change',h);
   },[]);
   const mobileHomeActive=isMobileApp&&tab==='training';
+  const [mobileInitView,setMobileInitView]=useState('home');
+  const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
+
+  // ── Mobile nav handler (for drill-down tabs — when MobileHome is NOT active) ──
+  const handleMobileNav=(item)=>{
+    const tabMap={training:'weekly',daily_tab:'daily',body:'clinical'};
+    if(item.id==='more'){setMobileMoreOpen(true);return;}
+    if(tabMap[item.id]){setTab(tabMap[item.id]);return;}
+    // home, nutrition, sync → go back to MobileHome
+    setMobileInitView(item.id==='home'?'home':item.id);
+    setTab('training');
+  };
+
+  // ── Map current tab to active nav id for mobile ──
+  const mobileActiveId=(()=>{
+    if(tab==='weekly')return'training';
+    if(tab==='daily')return'daily_tab';
+    if(tab==='clinical')return'body';
+    if(tab==='labs')return'body';
+    if(tab==='goals'||tab==='supplements'||tab==='races')return'more';
+    return'home';
+  })();
+
+  // ── Swipe navigation for drill-down tabs ──
+  const SWIPE_ORDER=['home','training','daily_tab','body','nutrition'];
+  const mobileSwipe=useSwipeNav({
+    onSwipeLeft:()=>{
+      if(!isMobileApp||mobileHomeActive)return;
+      const idx=SWIPE_ORDER.indexOf(mobileActiveId);
+      const next=SWIPE_ORDER[Math.min(idx+1,SWIPE_ORDER.length-1)];
+      if(next&&next!==mobileActiveId)handleMobileNav(NAV_ITEMS.find(n=>n.id===next));
+    },
+    onSwipeRight:()=>{
+      if(!isMobileApp||mobileHomeActive)return;
+      const idx=SWIPE_ORDER.indexOf(mobileActiveId);
+      const prev=SWIPE_ORDER[Math.max(idx-1,0)];
+      if(prev&&prev!==mobileActiveId)handleMobileNav(NAV_ITEMS.find(n=>n.id===prev));
+    },
+  });
 
   useEffect(()=>{
     // Check for incoming sync data
@@ -359,7 +398,7 @@ export default function App(){
       <nav style={S.nav} className="arnold-nav">
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
       </nav>
-      <main style={S.main} className="arnold-main">
+      <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{})}} className="arnold-main" {...(isMobileApp&&!mobileHomeActive?mobileSwipe:{})}>
         {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} onAiSum={async()=>{
           if(aiSummLoad)return;
           setAiSummLoad(true);setAiSummStream("");
@@ -371,13 +410,43 @@ export default function App(){
         }}/></div>}
         {tab==="labs"&&<div className="arnold-tab-panel"><LabsModule data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="clinical"&&<div className="arnold-tab-panel"><ClinicalModule data={data} persist={persist} showToast={showToast}/></div>}
-        {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data}/></div>}
+        {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('home')}/></div>}
         {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
         {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
         {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
       </main>
+      {/* ── Persistent mobile bottom nav (when drill-down tabs are active) ── */}
+      {isMobileApp&&tab!=='training'&&(
+        <nav style={{position:'fixed',bottom:0,left:0,right:0,zIndex:100,background:'rgba(12,13,18,0.92)',backdropFilter:'blur(24px) saturate(1.3)',WebkitBackdropFilter:'blur(24px) saturate(1.3)',borderTop:'1px solid rgba(255,255,255,0.06)',display:'flex',justifyContent:'space-around',alignItems:'center',padding:'6px 0 env(safe-area-inset-bottom, 8px)',boxShadow:'0 -4px 24px rgba(0,0,0,0.4)'}}>
+          {NAV_ITEMS.map(item=>{
+            const isActive=item.id===mobileActiveId;
+            return(
+              <button key={item.id} onClick={()=>handleMobileNav(item)} style={{background:'none',border:'none',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'6px 4px',minWidth:56,color:isActive?'#60a5fa':'rgba(255,255,255,0.35)',transition:'color 0.2s ease',position:'relative'}}>
+                <span style={{fontSize:20,lineHeight:1,filter:isActive?'drop-shadow(0 0 6px rgba(96,165,250,0.5))':'none'}}>{item.icon}</span>
+                <span style={{fontSize:9,fontWeight:isActive?700:500,letterSpacing:'0.02em'}}>{item.label}</span>
+                {isActive&&<div style={{width:4,height:4,borderRadius:'50%',background:'#60a5fa',boxShadow:'0 0 8px rgba(96,165,250,0.6)',position:'absolute',bottom:2}}/>}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+      {/* ── Mobile More Menu (when in drill-down tabs) ── */}
+      {isMobileApp&&mobileMoreOpen&&(
+        <div style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(8px)'}} onClick={()=>setMobileMoreOpen(false)}>
+          <div style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(16,18,24,0.98)',borderRadius:'20px 20px 0 0',padding:'20px 16px env(safe-area-inset-bottom, 16px)',animation:'mobileSheetUp 0.25s ease-out'}} onClick={e=>e.stopPropagation()}>
+            <div style={{width:36,height:4,borderRadius:2,background:'rgba(255,255,255,0.15)',margin:'0 auto 16px'}}/>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              {[{label:'Goals',tab:'goals'},{label:'Planner',tab:'goals'},{label:'Races',tab:'races'},{label:'Stack',tab:'supplements'},{label:'Sync',id:'sync'},{label:'Labs',tab:'labs'}].map(m=>(
+                <button key={m.label} onClick={()=>{setMobileMoreOpen(false);if(m.id==='sync'){setMobileInitView('sync');setTab('training');}else{setTab(m.tab);}}} style={{padding:'14px 12px',borderRadius:12,background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0',fontSize:13,fontWeight:500,cursor:'pointer',textAlign:'center'}}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {toast&&<div style={S.toast}>{toast}</div>}
     </div>
   );
@@ -2680,7 +2749,7 @@ function ImportHub({data,persist,showToast,setTab}){
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRAINING TAB
 // ═══════════════════════════════════════════════════════════════════════════════
-function TrainingTab({setTab,data}){
+function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
   const profile={...(storage.get('profile')||{}),...getGoals()};
   const activities=storage.get('activities')||[];
   const cronometer=storage.get('cronometer')||[];
@@ -2777,7 +2846,7 @@ Structure:
         totalMi={0} annualRunTarget={800} totalSessions={0}
         sortedSleep={[]} hrvData={[]} sortedW={[]} currentWeight={null} currentBF={null}
         latestSleepScore={null} avgHRV30={null} recentNut={[]} avgProtein={null} latestRHR={null}
-        nextRace={null} onOpenTab={setTab}
+        nextRace={null} onOpenTab={setTab} initialView={mobileInitView}
       />;
     }
     return(
@@ -3035,6 +3104,7 @@ Structure:
       latestRHR={latestRHR}
       nextRace={nextRaceMobile}
       onOpenTab={setTab}
+      initialView={mobileInitView}
     />;
   }
 

@@ -371,6 +371,25 @@
     padding-bottom: max(env(safe-area-inset-bottom, 8px), 8px) !important;
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+     PERSISTENT MOBILE NAV — drill-down tabs (not arnold-mobile-active)
+     ═══════════════════════════════════════════════════════════════════════════ */
+  nav[style*="position: fixed"][style*="bottom: 0"] button {
+    min-height: auto !important;
+    border-radius: 0 !important;
+  }
+
+  /* Animation for More menu bottom sheet */
+  @keyframes mobileSheetUp {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+  }
+
+  /* Hide the floating back button when persistent nav is showing */
+  .arnold-mobile-back {
+    display: none !important;
+  }
+
 } /* end @media (max-width: 600px) */
 
 /* ─── Touch-friendly scrollbar styling ────────────────────────────────────── */

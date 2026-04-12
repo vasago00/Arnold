@@ -135,6 +135,11 @@ export function NutritionInput({ date, onUpdate }) {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [barcodeResult, setBarcodeResult] = useState(null);
   const [barcodeLoading, setBarcodeLoading] = useState(false);
+  const [scannerActive, setScannerActive] = useState(false);
+  const [scannerError, setScannerError] = useState('');
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const scanLoopRef = useRef(null);
 
   // ── Search state ──
   const [searchQuery, setSearchQuery] = useState('');
@@ -177,13 +182,71 @@ export function NutritionInput({ date, onUpdate }) {
   };
 
   // ── Barcode lookup ──
-  const handleBarcodeLookup = async () => {
-    if (!barcodeInput.trim()) return;
+  const handleBarcodeLookup = async (code) => {
+    const barcode = code || barcodeInput.trim();
+    if (!barcode) return;
+    setBarcodeInput(barcode);
     setBarcodeLoading(true);
-    const result = await lookupBarcode(barcodeInput.trim());
+    const result = await lookupBarcode(barcode);
     setBarcodeResult(result);
     setBarcodeLoading(false);
   };
+
+  // ── Camera barcode scanner ──
+  const stopScanner = useCallback(() => {
+    if (scanLoopRef.current) { clearInterval(scanLoopRef.current); scanLoopRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    setScannerActive(false);
+  }, []);
+
+  const startScanner = useCallback(async () => {
+    setScannerError('');
+    // Check BarcodeDetector support
+    if (!('BarcodeDetector' in window)) {
+      setScannerError('Camera scanning not supported in this browser. Use manual entry below.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      streamRef.current = stream;
+      setScannerActive(true);
+
+      // Wait for video element to be ready
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      });
+
+      const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] });
+
+      // Scan loop — check every 400ms
+      let lastDetected = '';
+      scanLoopRef.current = setInterval(async () => {
+        if (!videoRef.current || videoRef.current.readyState < 2) return;
+        try {
+          const barcodes = await detector.detect(videoRef.current);
+          if (barcodes.length > 0 && barcodes[0].rawValue !== lastDetected) {
+            lastDetected = barcodes[0].rawValue;
+            stopScanner();
+            handleBarcodeLookup(barcodes[0].rawValue);
+          }
+        } catch { /* ignore detection errors during scan */ }
+      }, 400);
+    } catch (err) {
+      setScannerError(err.name === 'NotAllowedError'
+        ? 'Camera access denied. Please allow camera permissions and try again.'
+        : `Camera error: ${err.message}`);
+      stopScanner();
+    }
+  }, [stopScanner]);
+
+  // Clean up scanner on unmount or mode change
+  useEffect(() => { return () => stopScanner(); }, [stopScanner]);
+  useEffect(() => { if (mode !== 'barcode') stopScanner(); }, [mode, stopScanner]);
 
   // ── Food search ──
   const handleSearch = async () => {
@@ -361,21 +424,66 @@ export function NutritionInput({ date, onUpdate }) {
 
           {/* ── BARCODE MODE ─────────────────────────────────────────── */}
           {mode === 'barcode' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center' }}>
-                Enter barcode number or scan with camera
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleBarcodeLookup()}
-                  placeholder="Enter barcode (UPC/EAN)..."
-                  style={{ flex: 1, padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: 13 }} />
-                <button onClick={handleBarcodeLookup} disabled={barcodeLoading} style={{
-                  padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
-                  background: 'rgba(96,165,250,0.15)', color: '#60a5fa', fontSize: 12, fontWeight: 600,
-                }}>{barcodeLoading ? '...' : 'Look up'}</button>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
+              {/* Camera viewfinder */}
+              {scannerActive && (
+                <div style={{ position: 'relative', borderRadius: 14, overflow: 'hidden', background: '#000', aspectRatio: '4/3' }}>
+                  <video ref={videoRef} playsInline muted autoPlay
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  {/* Scanning overlay with crosshair */}
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                    <div style={{ width: '65%', height: '35%', border: '2px solid rgba(96,165,250,0.6)', borderRadius: 12, boxShadow: '0 0 0 2000px rgba(0,0,0,0.35)' }} />
+                  </div>
+                  <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, textAlign: 'center', fontSize: 11, color: 'rgba(255,255,255,0.7)', textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                    Point at barcode — scanning...
+                  </div>
+                  <button onClick={stopScanner} style={{
+                    position: 'absolute', top: 8, right: 8, width: 32, height: 32, borderRadius: '50%',
+                    background: 'rgba(0,0,0,0.5)', border: 'none', color: '#fff', fontSize: 16, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>×</button>
+                </div>
+              )}
+
+              {/* Scan button (when camera not active) */}
+              {!scannerActive && !barcodeResult && (
+                <button onClick={startScanner} style={{
+                  padding: '20px 16px', borderRadius: 14, cursor: 'pointer',
+                  border: '2px dashed rgba(96,165,250,0.3)', background: 'rgba(96,165,250,0.06)',
+                  color: '#60a5fa', fontSize: 14, fontWeight: 600, textAlign: 'center',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                }}>
+                  <span style={{ fontSize: 28 }}>⊞</span>
+                  Scan Barcode
+                  <span style={{ fontSize: 10, fontWeight: 400, color: 'rgba(255,255,255,0.35)' }}>
+                    Point your camera at a barcode
+                  </span>
+                </button>
+              )}
+
+              {/* Scanner error */}
+              {scannerError && (
+                <div style={{ fontSize: 11, color: '#f87171', textAlign: 'center', padding: '8px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.08)' }}>
+                  {scannerError}
+                </div>
+              )}
+
+              {/* Manual barcode fallback */}
+              {!scannerActive && (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleBarcodeLookup()}
+                    placeholder="Or type barcode number..."
+                    style={{ flex: 1, padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontSize: 13 }} />
+                  <button onClick={() => handleBarcodeLookup()} disabled={barcodeLoading} style={{
+                    padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                    background: 'rgba(96,165,250,0.15)', color: '#60a5fa', fontSize: 12, fontWeight: 600,
+                  }}>{barcodeLoading ? '...' : 'Look up'}</button>
+                </div>
+              )}
+
+              {/* Barcode result */}
               {barcodeResult && (
                 <div style={{ padding: '12px', borderRadius: 12, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
@@ -388,15 +496,21 @@ export function NutritionInput({ date, onUpdate }) {
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>
                     {barcodeResult.macros.calories} cal · {barcodeResult.macros.protein}g P · {barcodeResult.macros.carbs}g C · {barcodeResult.macros.fat}g F
                   </div>
-                  <button onClick={() => {
-                    addEntry({ name: barcodeResult.name, source: 'barcode', macros: barcodeResult.macros, barcode: barcodeResult.barcode, imageUrl: barcodeResult.imageUrl });
-                  }} style={{
-                    width: '100%', padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer',
-                    background: 'rgba(74,222,128,0.15)', color: '#4ade80', fontSize: 12, fontWeight: 600,
-                  }}>Add this food</button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => {
+                      addEntry({ name: barcodeResult.name, source: 'barcode', macros: barcodeResult.macros, barcode: barcodeResult.barcode, imageUrl: barcodeResult.imageUrl });
+                    }} style={{
+                      flex: 1, padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                      background: 'rgba(74,222,128,0.15)', color: '#4ade80', fontSize: 12, fontWeight: 600,
+                    }}>Add this food</button>
+                    <button onClick={() => { setBarcodeResult(null); setBarcodeInput(''); }} style={{
+                      padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                      background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', fontSize: 12,
+                    }}>Scan another</button>
+                  </div>
                 </div>
               )}
-              {barcodeResult === null && barcodeInput && !barcodeLoading && (
+              {barcodeResult === null && barcodeInput && !barcodeLoading && !scannerActive && (
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', textAlign: 'center' }}>No product found. Try entering manually.</div>
               )}
             </div>
