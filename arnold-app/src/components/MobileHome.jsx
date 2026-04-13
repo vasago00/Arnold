@@ -300,47 +300,53 @@ function SleepInsight({ headline, detail }) {
   );
 }
 
-// ─── CO-PILOT GAUGE CARD ────────────────────────────────────────────────────
-function GaugeCard({ label, value, unit, sparkData, color, goalPct, trendText, trendDir, onTap }) {
-  const trendBg = trendDir === 'up' ? 'rgba(91,191,138,0.1)' : trendDir === 'down' ? 'rgba(207,107,107,0.1)' : 'rgba(255,255,255,0.04)';
-  const trendColor = trendDir === 'up' ? C.green : trendDir === 'down' ? C.red : T4;
+// ─── METRIC TILE (Today + W/M averages) ────────────────────────────────────
+// Big today value on left, weekly avg + monthly avg stacked on right with arrows
+function MetricTile({ label, todayVal, todayUnit, weekAvg, weekTrend, monthAvg, monthTrend, color, sparkData, onTap }) {
+  const arrowUp = '▲', arrowDown = '▼', arrowFlat = '→';
+  const trendIcon = (dir) => dir === 'up' ? arrowUp : dir === 'down' ? arrowDown : arrowFlat;
+  const trendCol = (dir) => dir === 'up' ? C.green : dir === 'down' ? C.red : T4;
 
   return (
     <div onClick={onTap} style={{
-      ...card,
-      borderRadius: 14,
-      padding: '8px 10px 6px',
-      display: 'flex', flexDirection: 'column', minHeight: 96,
-      cursor: onTap ? 'pointer' : 'default',
+      ...card, borderRadius: 14, padding: '10px 10px 7px',
+      cursor: onTap ? 'pointer' : 'default', minHeight: 88,
     }}>
       {/* Top accent */}
       <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.6 }} />
 
-      {/* Label + Trend */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-        <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color }}>{label}</span>
-        {trendText && (
-          <span style={{ fontSize: 8, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: trendBg, color: trendColor }}>{trendText}</span>
-        )}
-      </div>
+      {/* Label */}
+      <div style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
 
-      {/* Value */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 3, marginBottom: 4 }}>
-        <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{value}</span>
-        <span style={{ fontSize: 9, color: T4 }}>{unit}</span>
+      {/* Main row: Today value + W/M averages */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        {/* Today (big) */}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
+            <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1 }}>{todayVal}</span>
+            <span style={{ fontSize: 9, color: T4 }}>{todayUnit}</span>
+          </div>
+        </div>
+
+        {/* W / M stacked */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-end', minWidth: 58 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <span style={{ fontSize: 7, color: T4, fontWeight: 600 }}>W</span>
+            <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>{weekAvg}</span>
+            {weekTrend && <span style={{ fontSize: 7, color: trendCol(weekTrend), lineHeight: 1 }}>{trendIcon(weekTrend)}</span>}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <span style={{ fontSize: 7, color: T4, fontWeight: 600 }}>M</span>
+            <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>{monthAvg}</span>
+            {monthTrend && <span style={{ fontSize: 7, color: trendCol(monthTrend), lineHeight: 1 }}>{trendIcon(monthTrend)}</span>}
+          </div>
+        </div>
       </div>
 
       {/* Sparkline */}
       {sparkData && sparkData.length > 1 && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', minHeight: 28 }}>
-          <Sparkline data={sparkData} width="100%" height={28} color={color} fill={true} dot={false} />
-        </div>
-      )}
-
-      {/* Progress bar */}
-      {goalPct !== undefined && (
-        <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden', marginTop: 4 }}>
-          <div style={{ width: `${Math.min(goalPct * 100, 100)}%`, height: '100%', borderRadius: 2, background: color, opacity: 0.7, transition: 'width 0.6s' }} />
+        <div style={{ height: 22, marginTop: 4 }}>
+          <Sparkline data={sparkData} width="100%" height={22} color={color} fill={true} dot={false} />
         </div>
       )}
     </div>
@@ -375,67 +381,191 @@ function ThisWeekCard({ headline, miles, sessions, time, weeklyMiPct, weeklyTarg
   );
 }
 
-// ─── 30-DAY BODY & RECOVERY TILE ────────────────────────────────────────────
-function RecoveryTile({ icon, label, value, unit, sparkData, color }) {
-  return (
-    <div style={{ ...card, borderRadius: 12, padding: '10px 12px 6px' }}>
-      <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 1, background: color, opacity: 0.5 }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-        {icon}
-        <span style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      </div>
-      <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1, marginBottom: 6 }}>
-        {value} <span style={{ fontSize: 9, color: T4, fontWeight: 400 }}>{unit}</span>
-      </div>
-      {sparkData && sparkData.length > 1 && (
-        <div style={{ height: 24 }}>
-          <Sparkline data={sparkData} width="100%" height={24} color={color} fill={true} dot={false} />
-        </div>
-      )}
-    </div>
-  );
-}
+// ─── ANNUAL TIMELINE ────────────────────────────────────────────────────────
+// Elegant horizontal year bar with race markers and goal progress
+function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsActual, totalSessions }) {
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const yearEnd = new Date(now.getFullYear(), 11, 31);
+  const yearProgress = (now - yearStart) / (yearEnd - yearStart);
+  const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
 
-// ─── THIS MONTH TILE ────────────────────────────────────────────────────────
-function MonthTile({ icon, label, value, unit, sub }) {
-  return (
-    <div style={{ ...card, borderRadius: 12, padding: '10px 12px 8px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-        {icon}
-        <span style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      </div>
-      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>
-        {value} {unit && <span style={{ fontSize: 10, color: T4, fontWeight: 400 }}>{unit}</span>}
-      </div>
-      {sub && <div style={{ fontSize: 9, color: T4, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-}
+  // Parse races into markers with positions
+  const raceMarkers = (races || [])
+    .filter(r => r.date && new Date(r.date).getFullYear() === now.getFullYear())
+    .map(r => {
+      const d = new Date(r.date);
+      const pct = (d - yearStart) / (yearEnd - yearStart);
+      const isPast = d < now;
+      return { name: r.name || 'Race', date: d, pct: Math.max(0, Math.min(1, pct)), isPast, distMi: r.distanceMi };
+    })
+    .sort((a, b) => a.pct - b.pct);
 
-// ─── YEAR TO DATE ───────────────────────────────────────────────────────────
-function YearToDateCard({ totalMi, annualTarget, totalSessions, avgPace, totalHrs, ytdPct }) {
+  const runPct = runMiGoal > 0 ? Math.min(runMiActual / runMiGoal, 1) : 0;
+  const wkPct = workoutsGoal > 0 ? Math.min(workoutsActual / workoutsGoal, 1) : 0;
+
   return (
-    <div style={card}>
+    <div style={{ ...card, borderRadius: 14, padding: '10px 12px 10px' }}>
       <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(212,139,78,0.15), transparent)` }} />
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
-        <span style={{ fontSize: 30, fontWeight: 800, lineHeight: 1 }}>{totalMi}</span>
-        <span style={{ fontSize: 11, color: T4 }}>/ {annualTarget} mi</span>
+
+      {/* Year label */}
+      <div style={{ fontSize: 8, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>{now.getFullYear()} Timeline</div>
+
+      {/* Month markers */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2, padding: '0 1px' }}>
+        {months.map((m, i) => (
+          <span key={i} style={{ fontSize: 7, color: i === now.getMonth() ? T1 : T4, fontWeight: i === now.getMonth() ? 700 : 400 }}>{m}</span>
+        ))}
       </div>
-      <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden', marginBottom: 12 }}>
-        <div style={{ width: `${Math.min(ytdPct * 100, 100)}%`, height: '100%', borderRadius: 2, background: C.orange, opacity: 0.6 }} />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-        {[
-          { lbl: 'Sessions', v: totalSessions },
-          { lbl: 'Avg Pace', v: avgPace },
-          { lbl: 'Total Hrs', v: totalHrs },
-        ].map((s, i) => (
-          <div key={i} style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 8, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s.lbl}</div>
-            <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{s.v}</div>
+
+      {/* Timeline bar */}
+      <div style={{ position: 'relative', height: 20, marginBottom: 10 }}>
+        {/* Track */}
+        <div style={{ position: 'absolute', top: 8, left: 0, right: 0, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)' }} />
+        {/* Progress fill */}
+        <div style={{ position: 'absolute', top: 8, left: 0, width: `${yearProgress * 100}%`, height: 4, borderRadius: 2, background: `linear-gradient(90deg, ${C.blue}, ${C.cyan})`, opacity: 0.7 }} />
+        {/* Today marker */}
+        <div style={{ position: 'absolute', top: 4, left: `${yearProgress * 100}%`, width: 2, height: 12, borderRadius: 1, background: T1, transform: 'translateX(-1px)' }} />
+
+        {/* Race markers */}
+        {raceMarkers.map((r, i) => (
+          <div key={i} style={{
+            position: 'absolute', top: -1, left: `${r.pct * 100}%`, transform: 'translateX(-6px)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+          }}>
+            <div style={{
+              width: 12, height: 12, borderRadius: 6,
+              background: r.isPast ? 'rgba(91,191,138,0.15)' : 'rgba(212,139,78,0.15)',
+              border: `1.5px solid ${r.isPast ? C.green : C.orange}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <span style={{ fontSize: 6 }}>{r.isPast ? '✓' : '⚑'}</span>
+            </div>
           </div>
         ))}
       </div>
+
+      {/* Race labels below timeline */}
+      {raceMarkers.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+          {raceMarkers.map((r, i) => (
+            <span key={i} style={{
+              fontSize: 7, padding: '2px 6px', borderRadius: 4,
+              background: r.isPast ? 'rgba(91,191,138,0.06)' : 'rgba(212,139,78,0.06)',
+              color: r.isPast ? C.green : C.orange, fontWeight: 600,
+            }}>
+              {r.name} · {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              {r.distMi ? ` · ${r.distMi}mi` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Goal progress bars */}
+      <div style={{ display: 'flex', gap: 10 }}>
+        {/* Running goal */}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
+            <span style={{ fontSize: 7, fontWeight: 600, color: C.blue, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Run Miles</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: T2 }}>{runMiActual} <span style={{ fontSize: 7, color: T4 }}>/ {runMiGoal}</span></span>
+          </div>
+          <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+            <div style={{ width: `${runPct * 100}%`, height: '100%', borderRadius: 2, background: C.blue, opacity: 0.7 }} />
+          </div>
+        </div>
+        {/* Workouts goal */}
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
+            <span style={{ fontSize: 7, fontWeight: 600, color: C.purple, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Workouts</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: T2 }}>{workoutsActual} <span style={{ fontSize: 7, color: T4 }}>/ {workoutsGoal}</span></span>
+          </div>
+          <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+            <div style={{ width: `${wkPct * 100}%`, height: '100%', borderRadius: 2, background: C.purple, opacity: 0.7 }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CORE SUMMARY ───────────────────────────────────────────────────────────
+// Key body & recovery metrics in a compact card
+function CoreSummary({ hrv, rhr, weight, bodyFat, onTap }) {
+  const items = [
+    { label: 'HRV',    value: hrv || '—',    unit: 'ms',  color: C.green },
+    { label: 'RHR',    value: rhr || '—',    unit: 'bpm', color: C.purple },
+    { label: 'Weight', value: weight || '—',  unit: 'lb',  color: C.amber },
+    { label: 'Body Fat', value: bodyFat || '—', unit: '%', color: C.red },
+  ];
+  return (
+    <div onClick={onTap} style={{ ...card, borderRadius: 14, padding: '10px 12px', cursor: 'pointer' }}>
+      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(91,191,138,0.12), transparent)` }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Icon.Pulse color={C.green} size={12} />
+          <span style={{ fontSize: 8, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Core · Body & Recovery</span>
+        </div>
+        <span style={{ fontSize: 9, color: T4 }}>→</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4 }}>
+        {items.map((it, i) => (
+          <div key={i} style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 7, color: it.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{it.label}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>{it.value}</div>
+            <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{it.unit}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── LABS SUMMARY ───────────────────────────────────────────────────────────
+// Latest blood panel highlights
+function LabsSummary({ labSnapshots, onTap }) {
+  const latest = (() => {
+    try {
+      const snaps = [...(labSnapshots || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      return snaps[0] || null;
+    } catch { return null; }
+  })();
+
+  const markers = latest?.markers || {};
+  // Pick key markers to show
+  const keyMarkers = [
+    { key: 'testosterone', label: 'Testo', unit: 'ng/dL', color: C.blue },
+    { key: 'vitaminD', label: 'Vit D', unit: 'ng/mL', color: C.amber },
+    { key: 'hsCRP', label: 'hsCRP', unit: 'mg/L', color: C.red },
+    { key: 'ferritin', label: 'Ferritin', unit: 'ng/mL', color: C.green },
+    { key: 'HbA1c', label: 'A1c', unit: '%', color: C.pink },
+    { key: 'TSH', label: 'TSH', unit: 'mU/L', color: C.purple },
+  ].filter(m => markers[m.key] != null);
+
+  const dateStr = latest?.date ? new Date(latest.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '';
+
+  return (
+    <div onClick={onTap} style={{ ...card, borderRadius: 14, padding: '10px 12px', cursor: 'pointer' }}>
+      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(155,142,196,0.12), transparent)` }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Icon.Flask color={C.purple} size={12} />
+          <span style={{ fontSize: 8, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Labs{dateStr ? ` · ${dateStr}` : ''}</span>
+        </div>
+        <span style={{ fontSize: 9, color: T4 }}>→</span>
+      </div>
+      {keyMarkers.length > 0 ? (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(keyMarkers.length, 3)}, 1fr)`, gap: 4 }}>
+          {keyMarkers.slice(0, 6).map((m, i) => (
+            <div key={i} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 7, color: m.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{m.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1 }}>{typeof markers[m.key] === 'number' ? markers[m.key].toFixed(markers[m.key] < 10 ? 1 : 0) : markers[m.key]}</div>
+              <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{m.unit}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 10, color: T3, textAlign: 'center', padding: '6px 0' }}>No lab data yet — tap to add</div>
+      )}
     </div>
   );
 }
@@ -667,34 +797,85 @@ function MobileHomeInner({
     return diff > 0 ? { text: `↑ ${Math.abs(diff).toFixed(1)}`, dir: 'up' } : { text: `↓ ${Math.abs(diff).toFixed(1)}`, dir: 'down' };
   };
 
-  // ── Gauge configs ──
-  const gauges = [
+  // ── Metric tile data (today + W avg + M avg) ──
+  const todayNut = (() => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const nuts = recentNut || [];
+      return nuts.find(n => n.date === today) || {};
+    } catch { return {}; }
+  })();
+
+  const monthlyAvgs = (() => {
+    try {
+      const acts = storage.get('activities') || [];
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthActs = acts.filter(a => a.date && new Date(a.date) >= monthStart);
+      const monthMi = monthActs.reduce((s, a) => s + (a.distanceMi || 0), 0);
+      const monthSessions = monthActs.length;
+      const monthWeeks = Math.max((now.getDate() / 7), 1);
+      return { miPerWeek: (monthMi / monthWeeks).toFixed(1), sessions: monthSessions };
+    } catch { return { miPerWeek: '0', sessions: 0 }; }
+  })();
+
+  const monthlyProtein = (() => {
+    try {
+      const nuts = recentNut || [];
+      const now = new Date();
+      const monthNuts = nuts.filter(n => n.date && new Date(n.date).getMonth() === now.getMonth());
+      if (!monthNuts.length) return '—';
+      return (monthNuts.reduce((s, n) => s + (n.protein || 0), 0) / monthNuts.length).toFixed(0);
+    } catch { return '—'; }
+  })();
+
+  const monthlySleep = (() => {
+    try {
+      if (!sortedSleep || sortedSleep.length < 4) return '—';
+      const last30 = sortedSleep.slice(-30);
+      return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(0);
+    } catch { return '—'; }
+  })();
+
+  const monthlyWeight = (() => {
+    try {
+      if (!sortedW || sortedW.length < 2) return '—';
+      const last30 = sortedW.slice(-30);
+      return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(1);
+    } catch { return '—'; }
+  })();
+
+  const weekTrend = (current, history) => {
+    const t = getTrend(current, history);
+    return t.dir;
+  };
+
+  const metricTiles = [
     {
-      label: 'Miles/Week', value: avgWeeklyMi?.toFixed(1) || '0', unit: 'mi',
-      sparkData: weeklyStats?.map(w => w.miles) || [], color: C.blue,
-      goalPct: avgWeeklyMi / (G.weeklyRunDistanceTarget || 50),
-      ...getTrend(avgWeeklyMi, weeklyStats?.map(w => w.miles)),
-      tapTab: 'activity',
+      label: 'Miles', todayVal: avgWeeklyMi?.toFixed(1) || '0', todayUnit: 'mi/wk',
+      weekAvg: avgWeeklyMi?.toFixed(1) || '0', weekTrend: weekTrend(avgWeeklyMi, weeklyStats?.map(w => w.miles)),
+      monthAvg: monthlyAvgs.miPerWeek, monthTrend: parseFloat(monthlyAvgs.miPerWeek) > (avgWeeklyMi || 0) ? 'up' : parseFloat(monthlyAvgs.miPerWeek) < (avgWeeklyMi || 0) ? 'down' : 'flat',
+      color: C.blue, sparkData: weeklyStats?.map(w => w.miles) || [], tapTab: 'activity',
     },
     {
-      label: 'Sleep Score', value: latestSleepScore || '—', unit: 'pts',
-      sparkData: sortedSleep?.slice(-8) || [], color: C.cyan,
-      goalPct: (latestSleepScore || 0) / 100,
-      ...getTrend(latestSleepScore, sortedSleep?.slice(-8)),
-      tapTab: 'clinical',
+      label: 'Sleep', todayVal: latestSleepScore || '—', todayUnit: 'pts',
+      weekAvg: sortedSleep?.length >= 7 ? (sortedSleep.slice(-7).reduce((s, v) => s + v, 0) / 7).toFixed(0) : (latestSleepScore || '—'),
+      weekTrend: weekTrend(latestSleepScore, sortedSleep?.slice(-8)),
+      monthAvg: monthlySleep, monthTrend: 'flat',
+      color: C.cyan, sparkData: sortedSleep?.slice(-14) || [], tapTab: 'clinical',
     },
     {
-      label: 'Protein', value: avgProtein?.toFixed(0) || '0', unit: 'g',
-      sparkData: recentNut?.map(n => n.protein) || [], color: C.pink,
-      goalPct: (avgProtein || 0) / 160,
-      ...getTrend(avgProtein, recentNut?.map(n => n.protein)),
-      tapTab: 'nutrition_mobile',
+      label: 'Protein', todayVal: todayNut.protein?.toFixed(0) || avgProtein?.toFixed(0) || '0', todayUnit: 'g',
+      weekAvg: avgProtein?.toFixed(0) || '0', weekTrend: weekTrend(avgProtein, recentNut?.map(n => n.protein)),
+      monthAvg: monthlyProtein, monthTrend: 'flat',
+      color: C.pink, sparkData: recentNut?.map(n => n.protein) || [], tapTab: 'nutrition_mobile',
     },
     {
-      label: 'Weight', value: currentWeight?.toFixed(1) || '—', unit: 'lb',
-      sparkData: sortedW?.slice(-8) || [], color: C.amber,
-      ...getTrend(currentWeight, sortedW?.slice(-8)),
-      tapTab: 'clinical',
+      label: 'Weight', todayVal: currentWeight?.toFixed(1) || '—', todayUnit: 'lb',
+      weekAvg: sortedW?.length >= 7 ? (sortedW.slice(-7).reduce((s, v) => s + v, 0) / 7).toFixed(1) : (currentWeight?.toFixed(1) || '—'),
+      weekTrend: weekTrend(currentWeight, sortedW?.slice(-8)),
+      monthAvg: monthlyWeight, monthTrend: 'flat',
+      color: C.amber, sparkData: sortedW?.slice(-14) || [], tapTab: 'clinical',
     },
   ];
 
@@ -703,25 +884,14 @@ function MobileHomeInner({
   const weeklyHeadline = weeklyMiPct > 0.8 ? 'Strong week' : weeklyMiPct > 0.6 ? 'Building momentum' : 'Light week';
   const weeklyTime = `${Math.floor((avgWeeklyHrsTotal || 0))}h ${Math.round(((avgWeeklyHrsTotal || 0) % 1) * 60)}m`;
 
-  // ── Monthly activity stats (data is an object, not array — use computed props) ──
-  const monthWeeks = 4.3;
-  const monthSessions = Math.round((totalSessions || 0) / Math.max((new Date().getMonth() + 1), 1)) || 0;
-  const monthTotalMins = Math.round((avgWeeklyHrsTotal || 0) * 60 * monthWeeks);
-  const monthTimeStr = `${Math.floor(monthTotalMins / 60)}h ${monthTotalMins % 60}m`;
-  const longestRun = (() => {
-    try {
-      const acts = storage.get('activities') || [];
-      const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return acts.filter(a => a.date && new Date(a.date) >= monthStart)
-        .reduce((max, a) => Math.max(max, a.distanceMi || 0), 0);
-    } catch { return 0; }
-  })();
-  const monthCalories = monthSessions > 0 ? Math.round(monthSessions * 540) : 0;
+  // ── Annual goals from Goals system ──
+  const annualRunMiGoal = G.annualRunDistanceTarget || 800;
+  const annualWorkoutsGoal = G.annualWorkoutsTarget || 200;
 
-  // ── YTD ──
-  const ytdPct = totalMi / (annualRunTarget || 1000);
-  const totalHrs = ((totalMi || 0) / 6 * 60 / 60).toFixed(1); // rough estimate
+  // ── Races from localStorage ──
+  const allRaces = (() => {
+    try { return JSON.parse(localStorage.getItem('arnold:races') || '[]'); } catch { return []; }
+  })();
 
   // ── Today's plan items ──
   const planItems = (() => {
@@ -798,15 +968,16 @@ function MobileHomeInner({
 
       <SleepInsight headline={sleepInsight.hl} detail={sleepInsight.detail} />
 
-      {/* Co-Pilot Gauges */}
+      {/* Metric Tiles — 2×2 grid: today value + W/M averages */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
-        {gauges.map((g, i) => (
-          <GaugeCard
+        {metricTiles.map((t, i) => (
+          <MetricTile
             key={i}
-            label={g.label} value={g.value} unit={g.unit}
-            sparkData={g.sparkData} color={g.color} goalPct={g.goalPct}
-            trendText={g.text} trendDir={g.dir}
-            onTap={() => onOpenTab?.(g.tapTab)}
+            label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
+            weekAvg={t.weekAvg} weekTrend={t.weekTrend}
+            monthAvg={t.monthAvg} monthTrend={t.monthTrend}
+            color={t.color} sparkData={t.sparkData}
+            onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
       </div>
@@ -822,54 +993,37 @@ function MobileHomeInner({
         weeklyTarget={G.weeklyRunDistanceTarget || 50}
       />
 
-      {/* 30-Day Body & Recovery */}
-      <div style={sectionHeader}>30-Day Body & Recovery <div style={shLine} /></div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
-        <RecoveryTile
-          icon={<Icon.Pulse color={C.green} size={12} />}
-          label="HRV" value={avgHRV30?.toFixed(0) || '—'} unit="ms"
-          sparkData={hrvData?.slice(-8) || []} color={C.green}
-        />
-        <RecoveryTile
-          icon={<Icon.Heart color={C.purple} />}
-          label="Resting HR" value={latestRHR || '—'} unit="bpm"
-          sparkData={[]} color={C.purple}
-        />
-        <RecoveryTile
-          icon={<Icon.Clock color={C.orange} />}
-          label="Avg Pace" value={paceStr} unit="/mi"
-          sparkData={[]} color={C.orange}
-        />
-        <RecoveryTile
-          icon={<svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" opacity="0.3" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>}
-          label="Body Fat" value={currentBF?.toFixed(1) || '—'} unit="%"
-          sparkData={[]} color={C.red}
-        />
-      </div>
-
-      {/* This Month */}
-      <div style={sectionHeader}>This Month <div style={shLine} /></div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
-        <MonthTile icon={<Icon.Clock color={C.blue} />} label="Total Time" value={monthTimeStr} sub={`across ${monthSessions} sessions`} />
-        <MonthTile icon={<Icon.Bolt color={C.orange} />} label="Longest Run" value={longestRun.toFixed(1)} unit="mi" sub={longestRun > 0 ? 'this month' : 'no runs yet'} />
-        <MonthTile icon={<Icon.TrendUp color={C.green} />} label="Elevation" value="—" unit="ft" sub="gain this month" />
-        <MonthTile icon={<Icon.Pulse color={C.pink} />} label="Active Cal" value={monthCalories.toLocaleString()} sub={monthSessions > 0 ? `avg ${Math.round(monthCalories / monthSessions)} / session` : ''} />
-      </div>
-
-      {/* Year to Date */}
-      <div style={sectionHeader}>Year to Date <div style={shLine} /></div>
-      <YearToDateCard
-        totalMi={totalMi?.toFixed(0) || '0'}
-        annualTarget={annualRunTarget || 1000}
+      {/* Annual Timeline */}
+      <div style={sectionHeader}>Annual Goals <div style={shLine} /></div>
+      <AnnualTimeline
+        races={allRaces}
+        runMiGoal={annualRunMiGoal}
+        runMiActual={Math.round(totalMi || 0)}
+        workoutsGoal={annualWorkoutsGoal}
+        workoutsActual={totalSessions || 0}
         totalSessions={totalSessions || 0}
-        avgPace={paceStr}
-        totalHrs={totalHrs}
-        ytdPct={ytdPct}
       />
 
       {/* Today's Plan */}
       <div style={sectionHeader}>Today's Plan <div style={shLine} /></div>
       <TodaysPlan items={planItems} onTap={() => onOpenTab?.('plan')} />
+
+      {/* Core Summary */}
+      <div style={sectionHeader}>Body & Recovery <div style={shLine} /></div>
+      <CoreSummary
+        hrv={avgHRV30?.toFixed(0)}
+        rhr={latestRHR}
+        weight={currentWeight?.toFixed(1)}
+        bodyFat={currentBF?.toFixed(1)}
+        onTap={() => onOpenTab?.('clinical')}
+      />
+
+      {/* Labs Summary */}
+      <div style={sectionHeader}>Labs <div style={shLine} /></div>
+      <LabsSummary
+        labSnapshots={data?.labSnapshots}
+        onTap={() => onOpenTab?.('labs')}
+      />
 
       {/* Bottom Nav is rendered by Arnold.jsx (outside main) so position:fixed works */}
 
