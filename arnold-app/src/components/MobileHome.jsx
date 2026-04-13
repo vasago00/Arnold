@@ -1,7 +1,7 @@
-// ─── MobileHome: Polished Performance Dashboard ────────────────────────────
-// Information-rich cockpit with visual richness: colored card tints, prominent
-// sparklines, solid progress bars, and docked bottom navigation. Dense but not
-// cramped. Rewards data-obsessed users with rich context on every metric.
+// ─── MobileHome: Premium Start Dashboard (Mockup Port) ──────────────────────
+// Muted warm palette, glass bottom nav with SVG icons, hero rail with readiness
+// ring, sleep insight, co-pilot gauges, weekly/monthly/annual sections, and
+// multi-item today's plan with workout-type icons.
 
 import { useState, useEffect, useCallback } from "react";
 import { Sparkline } from "./Sparkline.jsx";
@@ -13,44 +13,41 @@ import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.j
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
 
-// ─── Color palette ─────────────────────────────────────────────────────────
-const COLORS = {
-  training: '#60a5fa',      // blue
-  sleep: '#22d3ee',         // cyan
-  nutrition: '#f472b6',     // pink
-  weight: '#f59e0b',        // amber
-  pace: '#fbbf24',          // yellow
-  hrv: '#34d399',           // emerald
-  bodyFat: '#ef4444',       // red
-  rhr: '#a78bfa',           // purple
-  weeklyRuns: '#60a5fa',    // blue
-  raceDays: '#f97316',      // orange
+// ─── Muted warm color palette (matches mockup) ─────────────────────────────
+const C = {
+  blue:   '#5b9bd5',
+  cyan:   '#5ec4d4',
+  pink:   '#d4789b',
+  amber:  '#d4a24e',
+  green:  '#5bbf8a',
+  red:    '#cf6b6b',
+  purple: '#9b8ec4',
+  orange: '#d48b4e',
 };
 
-const BG_DARK = '#0c0d14';
-const BG_DARKER = '#10111a';
-const TEXT_PRIMARY = '#ffffff';
-const TEXT_SECONDARY = 'rgba(255,255,255,0.7)';
-const TEXT_MUTED = 'rgba(255,255,255,0.65)';
-const TEXT_DIM = 'rgba(255,255,255,0.45)';
+const BG       = '#0b0c12';
+const CARD_BG  = 'rgba(255,255,255,0.03)';
+const BORDER   = 'rgba(255,255,255,0.06)';
+const T1       = '#fff';
+const T2       = 'rgba(255,255,255,0.75)';
+const T3       = 'rgba(255,255,255,0.5)';
+const T4       = 'rgba(255,255,255,0.3)';
 
-// ─── Updated NAV_ITEMS: 7 main items with icons and labels ──────────────────
+// ─── NAV_ITEMS: exported for Arnold.jsx ─────────────────────────────────────
 export const NAV_ITEMS = [
-  { id: 'start',     icon: '⬡', label: 'Start' },
-  { id: 'edgeiq',    icon: '◇', label: 'EdgeIQ',  tab: 'weekly' },
-  { id: 'play',      icon: '◎', label: 'Play',    tab: 'activity' },
-  { id: 'fuel',      icon: '◈', label: 'Fuel',    tab: 'nutrition_mobile' },
-  { id: 'core',      icon: '△', label: 'Core',    tab: 'clinical' },
-  { id: 'labs',      icon: '◉', label: 'Labs',    tab: 'labs' },
-  { id: 'more',      icon: '⋯', label: 'More' },
+  { id: 'start',  label: 'Start' },
+  { id: 'edgeiq', label: 'EdgeIQ', tab: 'weekly' },
+  { id: 'play',   label: 'Play',   tab: 'activity' },
+  { id: 'fuel',   label: 'Fuel',   tab: 'nutrition_mobile' },
+  { id: 'core',   label: 'Core',   tab: 'clinical' },
+  { id: 'labs',   label: 'Labs',   tab: 'labs' },
+  { id: 'more',   label: 'More' },
 ];
 
-// ─── Swipe order for navigation ──────────────────────────────────────────────
 const SWIPE_ORDER = ['start', 'edgeiq', 'play', 'fuel', 'core', 'labs'];
 
-// ─── Swipe navigation hook ────────────────────────────────────────────────────
+// ─── Swipe navigation hook ──────────────────────────────────────────────────
 export function useSwipeNav({ onSwipeLeft, onSwipeRight, threshold = 60 } = {}) {
-  const touchRef = useCallback(() => {}, []);
   const startX = { current: 0 };
   const startY = { current: 0 };
   return {
@@ -69,833 +66,214 @@ export function useSwipeNav({ onSwipeLeft, onSwipeRight, threshold = 60 } = {}) 
   };
 }
 
-// ─── COMPACT HEADER: Greeting + Date in two lines ──────────────────────────
-function CompactHeader({ greeting, profileName }) {
-  const date = new Date().toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
+// ─── SVG Icon Components ────────────────────────────────────────────────────
+const Icon = {
+  Compass: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" stroke={color} fill={color === C.blue ? 'rgba(91,155,213,0.08)' : 'none'} />
+      <polygon points="16.24,7.76 14.12,14.12 7.76,16.24 9.88,9.88" fill={color} opacity="0.6" stroke={color} strokeWidth="1" />
+    </svg>
+  ),
+  Bulb: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 2A6.5 6.5 0 0 0 3 8.5C3 12 6 14 6 16h6c0-2 3-4 3-7.5A6.5 6.5 0 0 0 9.5 2z" transform="translate(2.5,0)" />
+      <line x1="8" y1="19" x2="16" y2="19" /><line x1="9" y1="22" x2="15" y2="22" />
+    </svg>
+  ),
+  Bolt: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+    </svg>
+  ),
+  Fork: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2v8" /><path d="M8 2v3a4 4 0 0 0 8 0V2" /><line x1="12" y1="10" x2="12" y2="22" />
+    </svg>
+  ),
+  Pulse: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  ),
+  Flask: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3h6" /><path d="M10 3v6l-5 8.5a1.5 1.5 0 0 0 1.3 2.25h11.4a1.5 1.5 0 0 0 1.3-2.25L14 9V3" />
+      <path d="M8.5 14h7" />
+    </svg>
+  ),
+  Dots: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
+    </svg>
+  ),
+  Moon: ({ color = C.cyan, size = 16 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  ),
+  Dumbbell: ({ color = C.purple, size = 18 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="9" width="4" height="6" rx="1" /><rect x="18" y="9" width="4" height="6" rx="1" />
+      <line x1="6" y1="12" x2="18" y2="12" /><line x1="6" y1="10" x2="6" y2="14" /><line x1="18" y1="10" x2="18" y2="14" />
+    </svg>
+  ),
+  Runner: ({ color = C.blue, size = 18 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="14" cy="4" r="2" /><path d="M8 21l2.5-6 2 1.5" /><path d="M18 13l-3-3.5-2.5-1L10 12" />
+      <path d="M18 21l-2.5-7" /><line x1="3" y1="22" x2="21" y2="22" strokeWidth="1" opacity="0.3" />
+    </svg>
+  ),
+  Heart: ({ color = T4, size = 13 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z" />
+    </svg>
+  ),
+  Clock: ({ color = T4, size = 13 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+    </svg>
+  ),
+  TrendUp: ({ color = T4, size = 13 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
+      <path d="M2 20L8 14 12 18 22 4" /><polyline points="16 4 22 4 22 10" />
+    </svg>
+  ),
+};
 
+// Nav icon map
+const NAV_ICONS = {
+  start:  (c) => <Icon.Compass color={c} />,
+  edgeiq: (c) => <Icon.Bulb color={c} />,
+  play:   (c) => <Icon.Bolt color={c} />,
+  fuel:   (c) => <Icon.Fork color={c} />,
+  core:   (c) => <Icon.Pulse color={c} />,
+  labs:   (c) => <Icon.Flask color={c} />,
+  more:   (c) => <Icon.Dots color={c} />,
+};
+
+// ─── Shared styles ──────────────────────────────────────────────────────────
+const card = {
+  background: CARD_BG,
+  border: `1px solid ${BORDER}`,
+  borderRadius: 14,
+  padding: '12px 14px',
+  marginBottom: 8,
+  position: 'relative',
+  overflow: 'hidden',
+};
+
+const sectionHeader = {
+  fontSize: 9, fontWeight: 700, color: T4,
+  textTransform: 'uppercase', letterSpacing: '0.1em',
+  marginBottom: 6, marginTop: 4,
+  display: 'flex', alignItems: 'center', gap: 6,
+};
+
+const shLine = {
+  flex: 1, height: 1, background: BORDER,
+};
+
+// ─── HEADER ─────────────────────────────────────────────────────────────────
+function Header({ greeting, profileName }) {
+  const date = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   return (
-    <div style={{
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'baseline',
-      paddingBottom: 8,
-      borderBottom: '1px solid rgba(255,255,255,0.04)',
-      marginBottom: 12,
-    }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 0 12px' }}>
       <div>
-        <div style={{
-          fontSize: 11,
-          color: TEXT_MUTED,
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          marginBottom: 2,
-        }}>
-          ⬡ Arnold [Beta]
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <div style={{
+            width: 22, height: 22, borderRadius: 6,
+            background: 'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',
+            border: '1px solid rgba(91,155,213,0.12)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 9, color: C.blue, fontWeight: 800,
+          }}>A</div>
+          <span style={{ fontSize: 9, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
         </div>
-        <div style={{
-          fontSize: 13,
-          color: TEXT_SECONDARY,
-          fontWeight: 500,
-        }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: T2, marginTop: 3 }}>
           {greeting}, {profileName || 'friend'}
         </div>
       </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontSize: 9, color: T4 }}>{date}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── HERO RAIL ──────────────────────────────────────────────────────────────
+function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceLabel, stats }) {
+  const circumference = 2 * Math.PI * 24;
+  const offset = circumference * (1 - Math.min(Math.max(score / 100, 0), 1));
+
+  return (
+    <div style={{
+      ...card,
+      borderRadius: 18,
+      padding: '16px 16px 14px',
+      background: 'linear-gradient(135deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015))',
+    }}>
+      {/* Top accent line */}
       <div style={{
-        fontSize: 10,
-        color: TEXT_MUTED,
-        fontWeight: 500,
-        textAlign: 'right',
-      }}>
-        {date}
-      </div>
-    </div>
-  );
-}
+        position: 'absolute', top: 0, left: 0, right: 0, height: 1,
+        background: `linear-gradient(90deg, transparent, ${statusColor}33, transparent)`,
+      }} />
 
-// ─── READINESS STRIP: 48px colored full-width bar ─────────────────────────
-function ReadinessStrip({
-  readinessScore,
-  readinessStatus,
-  factorsSummary,
-  nextRace,
-}) {
-  let statusColor = '#60a5fa';
-  let bgTint = 'rgba(96,165,250,0.08)';
-  let statusWord = 'On Track';
-
-  if (readinessStatus === STATUS.READY) {
-    statusColor = '#22c55e';
-    bgTint = 'rgba(34,197,94,0.08)';
-    statusWord = 'On Track';
-  } else if (readinessStatus === STATUS.CAUTION) {
-    statusColor = '#f59e0b';
-    bgTint = 'rgba(245,158,11,0.08)';
-    statusWord = 'Monitor';
-  } else if (readinessStatus === STATUS.CRITICAL) {
-    statusColor = '#ef4444';
-    bgTint = 'rgba(239,68,68,0.08)';
-    statusWord = 'Behind';
-  }
-
-  const raceDaysLeft = nextRace?.date ? Math.ceil((new Date(nextRace.date) - new Date()) / 86400000) : null;
-
-  return (
-    <div style={{
-      display: 'flex',
-      gap: 12,
-      alignItems: 'center',
-      padding: '10px 12px',
-      background: bgTint,
-      border: `1px solid ${statusColor}26`,
-      borderRadius: 14,
-      marginBottom: 12,
-    }}>
-      {/* Readiness Ring: 40px */}
-      <div style={{ position: 'relative', flexShrink: 0 }}>
-        <svg width={40} height={40} style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx={20} cy={20} r={16} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={1.2} />
-          <circle
-            cx={20}
-            cy={20}
-            r={16}
-            fill="none"
-            stroke={statusColor}
-            strokeWidth={1.2}
-            strokeDasharray={2 * Math.PI * 16}
-            strokeDashoffset={2 * Math.PI * 16 * (1 - Math.min(Math.max(readinessScore / 100, 0), 1))}
-            strokeLinecap="round"
-            style={{
-              transition: 'stroke-dashoffset 0.8s cubic-bezier(0.34, 1.56, 0.64, 1)',
-              filter: `drop-shadow(0 0 3px ${statusColor}50)`,
-            }}
-          />
-        </svg>
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexDirection: 'column',
-        }}>
-          <div style={{
-            fontSize: 16,
-            fontWeight: 700,
-            color: TEXT_PRIMARY,
-            lineHeight: 1,
-          }}>
-            {readinessScore}
-          </div>
-          <div style={{
-            fontSize: 6,
-            color: TEXT_DIM,
-            fontWeight: 600,
-            marginTop: 0,
-          }}>
-            RDY
+      {/* Ring + Info + Race */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+        {/* Readiness Ring */}
+        <div style={{ width: 58, height: 58, position: 'relative', flexShrink: 0 }}>
+          <svg width={58} height={58} style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx={29} cy={29} r={24} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={4} />
+            <circle cx={29} cy={29} r={24} fill="none" stroke={statusColor} strokeWidth={4}
+              strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round"
+              style={{ transition: 'stroke-dashoffset 0.8s ease' }} />
+          </svg>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>{score}</span>
           </div>
         </div>
-      </div>
 
-      {/* Middle: Status word + factor pills */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 12,
-          fontWeight: 700,
-          color: statusColor,
-          marginBottom: 3,
-          lineHeight: 1,
-        }}>
-          {statusWord}
-        </div>
-        <div style={{
-          fontSize: 8,
-          color: TEXT_DIM,
-          fontWeight: 500,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          lineHeight: 1.2,
-        }}>
-          {factorsSummary || 'Loading...'}
-        </div>
-      </div>
-
-      {/* Right: Race pill if applicable */}
-      {raceDaysLeft !== null && raceDaysLeft <= 90 && raceDaysLeft > 0 && (
-        <div style={{
-          display: 'inline-block',
-          background: 'rgba(249,115,22,0.1)',
-          border: '1px solid rgba(249,115,22,0.3)',
-          borderRadius: 12,
-          padding: '4px 8px',
-          fontSize: 9,
-          fontWeight: 700,
-          color: '#f97316',
-          flexShrink: 0,
-          whiteSpace: 'nowrap',
-        }}>
-          {raceDaysLeft}d
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── CO-PILOT GAUGES: 2×2 grid, HERO section ─────────────────────────────
-function CoPilotGauges({
-  dialConfigs,
-  onDialTap
-}) {
-  return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '1fr 1fr',
-      gap: 8,
-      marginBottom: 12,
-    }}>
-      {dialConfigs.map((dial, idx) => (
-        <div
-          key={idx}
-          onClick={() => onDialTap?.(dial)}
-          style={{
-            padding: '12px',
-            borderRadius: 14,
-            cursor: 'pointer',
-            transition: 'transform 0.15s, box-shadow 0.15s',
-            background: `rgba(${hexToRgb(dial.color).join(',')}, 0.06)`,
-            borderTop: `2px solid ${dial.color}`,
-            border: `1px solid rgba(255,255,255,0.08)`,
-            borderTop: `2px solid ${dial.color}`,
-            boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04)`,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-            minHeight: 100,
-          }}
-          onMouseDown={(e) => {
-            e.currentTarget.style.transform = 'scale(0.98)';
-          }}
-          onMouseUp={(e) => {
-            e.currentTarget.style.transform = 'scale(1)';
-          }}
-        >
-          {/* Label + Trend Arrow */}
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-          }}>
-            <div style={{
-              fontSize: 8,
-              fontWeight: 700,
-              color: dial.color,
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              lineHeight: 1,
-              opacity: 0.8,
-            }}>
-              ↗ {dial.label}
-            </div>
-            {dial.trend && (
-              <div style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: dial.trendColor,
+        {/* Status + Pills */}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: statusColor }}>{statusWord}</div>
+          <div style={{ display: 'flex', gap: 3, marginTop: 5, flexWrap: 'wrap' }}>
+            {factors.map((f, i) => (
+              <span key={i} style={{
+                fontSize: 8, fontWeight: 600, padding: '2px 7px', borderRadius: 6,
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                background: f.type === 'warn' ? 'rgba(207,107,107,0.1)' :
+                            f.type === 'ok'   ? 'rgba(91,191,138,0.08)' : 'rgba(255,255,255,0.04)',
+                color:      f.type === 'warn' ? C.red :
+                            f.type === 'ok'   ? C.green : T3,
               }}>
-                {dial.trendIcon}
-              </div>
-            )}
+                {f.type === 'warn' ? '✗' : f.type === 'ok' ? '✓' : '—'} {f.label}
+              </span>
+            ))}
           </div>
+        </div>
 
-          {/* Value + Unit */}
+        {/* Race badge */}
+        {raceDaysLeft != null && raceDaysLeft > 0 && raceDaysLeft <= 120 && (
           <div style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 4,
+            flexShrink: 0, textAlign: 'center', padding: '5px 10px', borderRadius: 10,
+            background: 'rgba(212,139,78,0.06)', border: '1px solid rgba(212,139,78,0.1)',
           }}>
-            <div style={{
-              fontSize: 22,
-              fontWeight: 700,
-              color: TEXT_PRIMARY,
-              lineHeight: 1,
-            }}>
-              {dial.value}
-            </div>
-            <div style={{
-              fontSize: 10,
-              color: TEXT_DIM,
-              fontWeight: 500,
-            }}>
-              {dial.unit}
-            </div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.orange, lineHeight: 1 }}>{raceDaysLeft}d</div>
+            <div style={{ fontSize: 7, color: T3, marginTop: 2 }}>{raceLabel}</div>
           </div>
-
-          {/* Sparkline: 28px tall, prominent */}
-          {dial.sparkData && dial.sparkData.length > 1 && (
-            <div style={{
-              marginTop: 'auto',
-            }}>
-              <Sparkline
-                data={dial.sparkData}
-                width="100%"
-                height={28}
-                color={dial.color}
-                fill={true}
-                dot={false}
-              />
-            </div>
-          )}
-
-          {/* Progress bar if goal exists */}
-          {dial.goalPct !== undefined && (
-            <div style={{
-              width: '100%',
-              height: 4,
-              background: 'rgba(255,255,255,0.08)',
-              borderRadius: 2,
-              overflow: 'hidden',
-              marginTop: 'auto',
-            }}>
-              <div style={{
-                width: `${Math.min(dial.goalPct * 100, 100)}%`,
-                height: '100%',
-                background: `linear-gradient(90deg, ${dial.color}, ${dial.color}dd)`,
-                transition: 'width 0.6s ease',
-              }}/>
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── DAILY INSIGHT: Compact contextual card ───────────────────────────────
-function DailyInsightCard({ icon, headline, detail, color = '#60a5fa' }) {
-  return (
-    <div style={{
-      padding: '12px 12px',
-      marginBottom: 12,
-      borderTop: `2px solid ${color}`,
-      background: `linear-gradient(90deg, rgba(${hexToRgb(color).join(',')}, 0.06), transparent)`,
-      border: `1px solid rgba(255,255,255,0.08)`,
-      borderTop: `2px solid ${color}`,
-      borderRadius: 14,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04)`,
-      display: 'flex',
-      gap: 10,
-      alignItems: 'flex-start',
-    }}>
-      <div style={{
-        fontSize: 28,
-        lineHeight: 1,
-        flexShrink: 0,
-        marginTop: 1,
-      }}>
-        {icon}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 12,
-          fontWeight: 700,
-          color: TEXT_PRIMARY,
-          marginBottom: 2,
-          lineHeight: 1.2,
-        }}>
-          {headline}
-        </div>
-        <div style={{
-          fontSize: 11,
-          color: TEXT_SECONDARY,
-          lineHeight: 1.3,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-        }}>
-          {detail}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── SECTION HEADER: Colored underline dot ───────────────────────────────
-function SectionHeader({ title, underlineColor = '#60a5fa' }) {
-  return (
-    <div style={{
-      fontSize: 9,
-      fontWeight: 700,
-      color: TEXT_MUTED,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      marginBottom: 6,
-      paddingBottom: 0,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      lineHeight: 1,
-    }}>
-      {title}
-      <div style={{
-        width: 4,
-        height: 4,
-        borderRadius: '50%',
-        background: underlineColor,
-        opacity: 0.7,
-      }}/>
-    </div>
-  );
-}
-
-// ─── THIS WEEK: Weekly narrative card ─────────────────────────────────────
-function ThisWeekCard({
-  headline,
-  miles,
-  sessions,
-  activeMinutes,
-  weeklyMiPct,
-  weeklyTarget,
-}) {
-  const headlineColor = weeklyMiPct > 0.8 ? '#22c55e' : weeklyMiPct > 0.6 ? '#f59e0b' : TEXT_SECONDARY;
-
-  return (
-    <div style={{
-      padding: '12px',
-      marginBottom: 12,
-      borderTop: `2px solid ${COLORS.training}`,
-      background: `rgba(${hexToRgb(COLORS.training).join(',')}, 0.06)`,
-      border: `1px solid rgba(255,255,255,0.08)`,
-      borderTop: `2px solid ${COLORS.training}`,
-      borderRadius: 14,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04)`,
-    }}>
-      <div style={{
-        fontSize: 13,
-        fontWeight: 700,
-        color: headlineColor,
-        marginBottom: 10,
-        lineHeight: 1.2,
-      }}>
-        {headline} — {sessions} runs, {miles} mi
+        )}
       </div>
 
-      {/* Three-column stats */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr 1fr',
-        gap: 8,
-        marginBottom: 10,
-      }}>
-        <div>
-          <div style={{
-            fontSize: 8,
-            color: TEXT_MUTED,
-            fontWeight: 600,
-            marginBottom: 2,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
+      {/* Bottom stat row */}
+      <div style={{ display: 'flex', borderTop: `1px solid ${BORDER}`, paddingTop: 12 }}>
+        {stats.map((s, i) => (
+          <div key={i} style={{
+            flex: 1, textAlign: 'center', position: 'relative',
+            borderLeft: i > 0 ? `1px solid ${BORDER}` : 'none',
           }}>
-            Miles
-          </div>
-          <div style={{
-            fontSize: 16,
-            fontWeight: 700,
-            color: TEXT_PRIMARY,
-            lineHeight: 1,
-          }}>
-            {miles}
-          </div>
-        </div>
-        <div>
-          <div style={{
-            fontSize: 8,
-            color: TEXT_MUTED,
-            fontWeight: 600,
-            marginBottom: 2,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}>
-            Sessions
-          </div>
-          <div style={{
-            fontSize: 16,
-            fontWeight: 700,
-            color: TEXT_PRIMARY,
-            lineHeight: 1,
-          }}>
-            {sessions}
-          </div>
-        </div>
-        <div>
-          <div style={{
-            fontSize: 8,
-            color: TEXT_MUTED,
-            fontWeight: 600,
-            marginBottom: 2,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}>
-            Time
-          </div>
-          <div style={{
-            fontSize: 16,
-            fontWeight: 700,
-            color: TEXT_PRIMARY,
-            lineHeight: 1,
-          }}>
-            {activeMinutes}
-          </div>
-        </div>
-      </div>
-
-      {/* Progress bar */}
-      <div style={{
-        width: '100%',
-        height: 4,
-        background: 'rgba(255,255,255,0.08)',
-        borderRadius: 2,
-        overflow: 'hidden',
-      }}>
-        <div style={{
-          width: `${Math.min(weeklyMiPct * 100, 100)}%`,
-          height: '100%',
-          background: `linear-gradient(90deg, ${COLORS.training}, ${COLORS.sleep})`,
-          transition: 'width 0.6s ease',
-        }}/>
-      </div>
-    </div>
-  );
-}
-
-// ─── COMPACT TREND TILE: 140×85px ────────────────────────────────────────
-function TrendTile({ label, value, unit, sparkData, color, delta }) {
-  return (
-    <div style={{
-      padding: '10px 10px',
-      borderRadius: 14,
-      width: 140,
-      height: 85,
-      flexShrink: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 6,
-      background: `rgba(${hexToRgb(color).join(',')}, 0.06)`,
-      border: `1px solid rgba(255,255,255,0.08)`,
-      borderTop: `2px solid ${color}`,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04)`,
-    }}>
-      <div style={{
-        fontSize: 8,
-        fontWeight: 700,
-        color: TEXT_MUTED,
-        textTransform: 'uppercase',
-        letterSpacing: '0.08em',
-      }}>
-        {label}
-      </div>
-      <div style={{
-        fontSize: 18,
-        fontWeight: 700,
-        color: TEXT_PRIMARY,
-        lineHeight: 1,
-      }}>
-        {value}
-        <span style={{
-          fontSize: 8,
-          color: TEXT_DIM,
-          fontWeight: 500,
-          marginLeft: 3,
-        }}>
-          {unit}
-        </span>
-      </div>
-      {delta !== undefined && (
-        <div style={{
-          fontSize: 8,
-          fontWeight: 600,
-          color: delta >= 0 ? '#22c55e' : '#ef4444',
-        }}>
-          {delta >= 0 ? '+' : ''}{delta}
-        </div>
-      )}
-      {sparkData && sparkData.length > 1 && (
-        <div style={{ marginTop: 'auto' }}>
-          <Sparkline
-            data={sparkData}
-            width={120}
-            height={24}
-            color={color}
-            fill={true}
-            dot={false}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── TODAY'S PLAN: Compact action card ──────────────────────────────────────
-function TodaysPlanCard({ plan, completed, onTap }) {
-  const dayTypeInfo = plan?.type ? DAY_TYPES[plan.type] : null;
-  const bgColor = dayTypeInfo ? dayTypeInfo.color : COLORS.training;
-
-  return (
-    <div
-      onClick={onTap}
-      style={{
-        padding: '12px',
-        marginBottom: 12,
-        background: `rgba(${hexToRgb(bgColor).join(',')}, 0.06)`,
-        border: `1px solid rgba(255,255,255,0.08)`,
-        borderTop: `2px solid ${bgColor}`,
-        borderRadius: 14,
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04)`,
-        cursor: 'pointer',
-        transition: 'transform 0.15s, box-shadow 0.15s',
-        display: 'flex',
-        gap: 10,
-        alignItems: 'center',
-      }}
-      onMouseDown={(e) => {
-        e.currentTarget.style.transform = 'scale(0.98)';
-      }}
-      onMouseUp={(e) => {
-        e.currentTarget.style.transform = 'scale(1)';
-      }}
-    >
-      <div style={{
-        fontSize: 20,
-        flexShrink: 0,
-      }}>
-        {plan?.icon || '⚡'}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: TEXT_PRIMARY,
-          lineHeight: 1.2,
-        }}>
-          {plan?.label || 'Plan for Today'}
-        </div>
-        <div style={{
-          fontSize: 10,
-          color: TEXT_SECONDARY,
-          marginTop: 2,
-        }}>
-          {plan?.description || 'No plan'}
-        </div>
-      </div>
-      <div style={{
-        fontSize: 16,
-        opacity: completed ? 1 : 0.5,
-        flexShrink: 0,
-        color: completed ? '#22c55e' : TEXT_DIM,
-      }}>
-        {completed ? '✓' : '◯'}
-      </div>
-    </div>
-  );
-}
-
-// ─── YEAR TO DATE: Annual progress card ────────────────────────────────────
-function YearToDateCard({
-  totalMi,
-  annualTarget,
-  totalSessions,
-  avgPace,
-  ytdPct,
-}) {
-  return (
-    <div style={{
-      padding: '12px',
-      marginBottom: 12,
-      borderTop: `2px solid ${COLORS.pace}`,
-      background: `rgba(${hexToRgb(COLORS.pace).join(',')}, 0.06)`,
-      border: `1px solid rgba(255,255,255,0.08)`,
-      borderTop: `2px solid ${COLORS.pace}`,
-      borderRadius: 14,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04)`,
-    }}>
-      {/* Progress bar at top */}
-      <div style={{
-        width: '100%',
-        height: 6,
-        background: 'rgba(255,255,255,0.08)',
-        borderRadius: 3,
-        overflow: 'hidden',
-        marginBottom: 10,
-      }}>
-        <div style={{
-          width: `${Math.min(ytdPct * 100, 100)}%`,
-          height: '100%',
-          background: `linear-gradient(90deg, ${COLORS.pace}, ${COLORS.training})`,
-          transition: 'width 0.6s ease',
-        }}/>
-      </div>
-
-      {/* Big number + target */}
-      <div style={{
-        fontSize: 28,
-        fontWeight: 700,
-        color: TEXT_PRIMARY,
-        lineHeight: 1,
-        marginBottom: 8,
-      }}>
-        {totalMi}
-        <span style={{
-          fontSize: 11,
-          color: TEXT_DIM,
-          fontWeight: 500,
-          marginLeft: 6,
-        }}>
-          / {annualTarget} mi
-        </span>
-      </div>
-
-      {/* Two-column stats */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        gap: 8,
-      }}>
-        <div>
-          <div style={{
-            fontSize: 8,
-            color: TEXT_MUTED,
-            fontWeight: 600,
-            marginBottom: 2,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}>
-            Sessions
-          </div>
-          <div style={{
-            fontSize: 14,
-            fontWeight: 700,
-            color: TEXT_PRIMARY,
-            lineHeight: 1,
-          }}>
-            {totalSessions}
-          </div>
-        </div>
-        <div>
-          <div style={{
-            fontSize: 8,
-            color: TEXT_MUTED,
-            fontWeight: 600,
-            marginBottom: 2,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}>
-            Avg Pace
-          </div>
-          <div style={{
-            fontSize: 14,
-            fontWeight: 700,
-            color: TEXT_PRIMARY,
-            lineHeight: 1,
-          }}>
-            {avgPace}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── MORE MENU: Bottom sheet overlay ────────────────────────────────────────
-function MoreMenu({ onClose, onMenuTap }) {
-  const MORE_ITEMS = [
-    { id: 'goals', label: 'Goals', icon: '🎯' },
-    { id: 'races', label: 'Races', icon: '🏁' },
-    { id: 'stack', label: 'Stack', icon: '💊' },
-    { id: 'sync', label: 'Sync', icon: '🔄' },
-    { id: 'profile', label: 'Profile', icon: '👤' },
-  ];
-
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0,0,0,0.5)',
-      backdropFilter: 'blur(4px)',
-      WebkitBackdropFilter: 'blur(4px)',
-      zIndex: 40,
-      display: 'flex',
-      alignItems: 'flex-end',
-    }}
-    onClick={onClose}
-    >
-      <div style={{
-        borderRadius: '20px 20px 0 0',
-        width: '100%',
-        padding: '20px 16px 32px',
-        background: 'rgba(20, 22, 30, 0.95)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        border: '1px solid rgba(255,255,255,0.08)',
-      }}
-      onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{
-          width: 40,
-          height: 4,
-          background: 'rgba(255,255,255,0.2)',
-          borderRadius: 2,
-          margin: '0 auto 20px',
-        }}/>
-
-        {MORE_ITEMS.map((item) => (
-          <div
-            key={item.id}
-            onClick={() => {
-              onMenuTap(item.id);
-              onClose();
-            }}
-            style={{
-              padding: '12px 16px',
-              marginBottom: 8,
-              borderRadius: 12,
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              cursor: 'pointer',
-              transition: 'background 0.2s, border 0.2s',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
-              e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-              e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
-            }}
-          >
-            <div style={{ fontSize: 18 }}>{item.icon}</div>
-            <div style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: TEXT_PRIMARY,
-              flex: 1,
-            }}>
-              {item.label}
-            </div>
-            <div style={{
-              fontSize: 16,
-              color: TEXT_DIM,
-            }}>
-              →
+            <div style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{s.label}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
+              {s.value} <span style={{ fontSize: 8, color: T4 }}>{s.unit}</span>
             </div>
           </div>
         ))}
@@ -904,77 +282,286 @@ function MoreMenu({ onClose, onMenuTap }) {
   );
 }
 
-// ─── BOTTOM NAV BAR: DOCKED FIXED NAVIGATION ─────────────────────────────────
+// ─── SLEEP INSIGHT ──────────────────────────────────────────────────────────
+function SleepInsight({ headline, detail }) {
+  return (
+    <div style={{ ...card, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' }}>
+      <div style={{
+        width: 30, height: 30, borderRadius: 8, background: 'rgba(94,196,212,0.08)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <Icon.Moon />
+      </div>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: T2 }}>{headline}</div>
+        <div style={{ fontSize: 10, color: T3, marginTop: 1, lineHeight: 1.3 }}>{detail}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CO-PILOT GAUGE CARD ────────────────────────────────────────────────────
+function GaugeCard({ label, value, unit, sparkData, color, goalPct, trendText, trendDir, onTap }) {
+  const trendBg = trendDir === 'up' ? 'rgba(91,191,138,0.1)' : trendDir === 'down' ? 'rgba(207,107,107,0.1)' : 'rgba(255,255,255,0.04)';
+  const trendColor = trendDir === 'up' ? C.green : trendDir === 'down' ? C.red : T4;
+
+  return (
+    <div onClick={onTap} style={{
+      ...card,
+      borderRadius: 14,
+      padding: '10px 12px 8px',
+      display: 'flex', flexDirection: 'column', minHeight: 104,
+      cursor: onTap ? 'pointer' : 'default',
+    }}>
+      {/* Top accent */}
+      <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.6 }} />
+
+      {/* Label + Trend */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+        <span style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color }}>{label}</span>
+        {trendText && (
+          <span style={{ fontSize: 8, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: trendBg, color: trendColor }}>{trendText}</span>
+        )}
+      </div>
+
+      {/* Value */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 3, marginBottom: 4 }}>
+        <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{value}</span>
+        <span style={{ fontSize: 9, color: T4 }}>{unit}</span>
+      </div>
+
+      {/* Sparkline */}
+      {sparkData && sparkData.length > 1 && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', minHeight: 28 }}>
+          <Sparkline data={sparkData} width="100%" height={28} color={color} fill={true} dot={false} />
+        </div>
+      )}
+
+      {/* Progress bar */}
+      {goalPct !== undefined && (
+        <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden', marginTop: 4 }}>
+          <div style={{ width: `${Math.min(goalPct * 100, 100)}%`, height: '100%', borderRadius: 2, background: color, opacity: 0.7, transition: 'width 0.6s' }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── THIS WEEK CARD ─────────────────────────────────────────────────────────
+function ThisWeekCard({ headline, miles, sessions, time, weeklyMiPct, weeklyTarget }) {
+  return (
+    <div style={card}>
+      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(91,155,213,0.15), transparent)` }} />
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+        {headline} <span style={{ fontWeight: 400, color: T3, fontSize: 11 }}>— {sessions} runs, {miles} mi</span>
+      </div>
+      <div style={{ display: 'flex', marginBottom: 8 }}>
+        {[
+          { lbl: 'Miles', v: miles },
+          { lbl: 'Sessions', v: sessions },
+          { lbl: 'Time', v: time },
+        ].map((col, i) => (
+          <div key={i} style={{ flex: 1 }}>
+            <div style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{col.lbl}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.1 }}>{col.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(weeklyMiPct * 100, 100)}%`, height: '100%', borderRadius: 2, background: C.blue, opacity: 0.6, transition: 'width 0.6s' }} />
+      </div>
+      <div style={{ fontSize: 8, color: T4, marginTop: 3 }}>{miles} / {weeklyTarget} mi</div>
+    </div>
+  );
+}
+
+// ─── 30-DAY BODY & RECOVERY TILE ────────────────────────────────────────────
+function RecoveryTile({ icon, label, value, unit, sparkData, color }) {
+  return (
+    <div style={{ ...card, borderRadius: 12, padding: '10px 12px 6px' }}>
+      <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 1, background: color, opacity: 0.5 }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+        {icon}
+        <span style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1, marginBottom: 6 }}>
+        {value} <span style={{ fontSize: 9, color: T4, fontWeight: 400 }}>{unit}</span>
+      </div>
+      {sparkData && sparkData.length > 1 && (
+        <div style={{ height: 24 }}>
+          <Sparkline data={sparkData} width="100%" height={24} color={color} fill={true} dot={false} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── THIS MONTH TILE ────────────────────────────────────────────────────────
+function MonthTile({ icon, label, value, unit, sub }) {
+  return (
+    <div style={{ ...card, borderRadius: 12, padding: '10px 12px 8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+        {icon}
+        <span style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>
+        {value} {unit && <span style={{ fontSize: 10, color: T4, fontWeight: 400 }}>{unit}</span>}
+      </div>
+      {sub && <div style={{ fontSize: 9, color: T4, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ─── YEAR TO DATE ───────────────────────────────────────────────────────────
+function YearToDateCard({ totalMi, annualTarget, totalSessions, avgPace, totalHrs, ytdPct }) {
+  return (
+    <div style={card}>
+      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(212,139,78,0.15), transparent)` }} />
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
+        <span style={{ fontSize: 30, fontWeight: 800, lineHeight: 1 }}>{totalMi}</span>
+        <span style={{ fontSize: 11, color: T4 }}>/ {annualTarget} mi</span>
+      </div>
+      <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden', marginBottom: 12 }}>
+        <div style={{ width: `${Math.min(ytdPct * 100, 100)}%`, height: '100%', borderRadius: 2, background: C.orange, opacity: 0.6 }} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+        {[
+          { lbl: 'Sessions', v: totalSessions },
+          { lbl: 'Avg Pace', v: avgPace },
+          { lbl: 'Total Hrs', v: totalHrs },
+        ].map((s, i) => (
+          <div key={i} style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 8, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{s.lbl}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── TODAY'S PLAN ───────────────────────────────────────────────────────────
+function TodaysPlan({ items, onTap }) {
+  const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  return (
+    <div style={card}>
+      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(155,142,196,0.15), transparent)` }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 9, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{date}</span>
+        <span style={{
+          fontSize: 8, fontWeight: 600, padding: '3px 8px', borderRadius: 6,
+          background: 'rgba(155,142,196,0.08)', color: C.purple, textTransform: 'uppercase', letterSpacing: '0.04em',
+        }}>{items.length} Planned</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.map((item, i) => (
+          <div key={i} onClick={() => onTap?.(item)} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 10px', borderRadius: 10,
+            background: 'rgba(255,255,255,0.015)', border: '1px solid rgba(255,255,255,0.03)',
+            cursor: 'pointer',
+          }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 10,
+              background: item.iconType === 'strength' ? 'rgba(155,142,196,0.1)' : 'rgba(91,155,213,0.1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              {item.iconType === 'strength' ? <Icon.Dumbbell /> : <Icon.Runner />}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{item.title}</div>
+              <div style={{ fontSize: 10, color: T3, marginTop: 1 }}>{item.detail}</div>
+            </div>
+            {item.time && <div style={{ fontSize: 10, color: T4, fontWeight: 600 }}>{item.time}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── MORE MENU ──────────────────────────────────────────────────────────────
+function MoreMenu({ onClose, onMenuTap }) {
+  const items = [
+    { id: 'goals', label: 'Goals', icon: '🎯' },
+    { id: 'races', label: 'Races', icon: '🏁' },
+    { id: 'stack', label: 'Stack', icon: '💊' },
+    { id: 'sync',  label: 'Sync',  icon: '🔄' },
+    { id: 'profile', label: 'Profile', icon: '👤' },
+  ];
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)', zIndex: 40, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
+      <div style={{ borderRadius: '20px 20px 0 0', width: '100%', padding: '20px 16px 32px', background: 'rgba(20,22,30,0.95)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ width: 40, height: 4, background: 'rgba(255,255,255,0.2)', borderRadius: 2, margin: '0 auto 20px' }} />
+        {items.map(item => (
+          <div key={item.id} onClick={() => { onMenuTap(item.id); onClose(); }} style={{
+            padding: '12px 16px', marginBottom: 8, borderRadius: 12,
+            background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+            display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+          }}>
+            <div style={{ fontSize: 18 }}>{item.icon}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{item.label}</div>
+            <div style={{ fontSize: 16, color: T4 }}>→</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── BOTTOM NAV — PREMIUM GLASS WITH SVG ICONS ─────────────────────────────
 function BottomNavBar({ activeNav, onNavTap }) {
   return (
     <div style={{
-      position: 'fixed',
-      bottom: 0,
-      left: 0,
-      right: 0,
-      zIndex: 200,
-      background: 'rgba(10, 11, 16, 0.95)',
-      backdropFilter: 'blur(24px)',
-      WebkitBackdropFilter: 'blur(24px)',
-      borderTop: '1px solid rgba(255,255,255,0.08)',
-      display: 'flex',
-      justifyContent: 'space-around',
-      alignItems: 'center',
-      padding: '5px 0 env(safe-area-inset-bottom, 6px)',
-      height: 52,
+      position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+      background: 'linear-gradient(180deg, rgba(16,17,26,0.92), rgba(10,11,16,0.98))',
+      backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+      borderTop: '1px solid rgba(255,255,255,0.07)',
+      display: 'flex', justifyContent: 'space-around', alignItems: 'stretch',
+      padding: '0 2px', height: 68,
     }}>
-      {NAV_ITEMS.map((item) => {
+      {/* Top accent line */}
+      <div style={{
+        position: 'absolute', top: 0, left: 40, right: 40, height: 1,
+        background: 'linear-gradient(90deg, transparent, rgba(91,155,213,0.12), rgba(94,196,212,0.08), transparent)',
+      }} />
+
+      {NAV_ITEMS.map(item => {
         const isActive = activeNav === item.id;
+        const iconColor = isActive ? C.blue : T4;
         return (
-          <div
-            key={item.id}
-            onClick={() => onNavTap(item.id)}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 2,
-              cursor: 'pointer',
-              position: 'relative',
-              padding: '4px 0',
-              minWidth: 44,
-              transition: 'color 0.2s',
-            }}
-          >
-            <div style={{
-              position: 'relative',
-            }}>
+          <div key={item.id} onClick={() => onNavTap(item.id)} style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: 3, padding: '8px 0 6px', minWidth: 50, flex: 1, cursor: 'pointer', position: 'relative',
+          }}>
+            {/* Active top indicator */}
+            {isActive && (
               <div style={{
-                fontSize: 15,
-                color: isActive ? COLORS.training : TEXT_MUTED,
-                transition: 'color 0.2s',
-              }}>
-                {item.icon}
-              </div>
-              {isActive && (
-                <div style={{
-                  position: 'absolute',
-                  width: 3,
-                  height: 3,
-                  background: COLORS.training,
-                  borderRadius: '50%',
-                  bottom: -5,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  boxShadow: `0 0 6px ${COLORS.training}`,
-                }}/>
-              )}
-            </div>
+                position: 'absolute', top: 0, width: 20, height: 2, borderRadius: '0 0 2px 2px',
+                background: C.blue,
+              }} />
+            )}
+
+            {/* Icon wrap */}
             <div style={{
-              fontSize: 7,
-              fontWeight: 600,
-              color: isActive ? TEXT_PRIMARY : TEXT_MUTED,
-              textTransform: 'uppercase',
-              letterSpacing: '0.02em',
-              transition: 'color 0.2s',
+              width: 34, height: 34, borderRadius: 10,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: isActive ? 'rgba(91,155,213,0.1)' : 'transparent',
+              boxShadow: isActive ? '0 0 12px rgba(91,155,213,0.08)' : 'none',
+              transition: 'all 0.2s',
+            }}>
+              {NAV_ICONS[item.id]?.(iconColor)}
+            </div>
+
+            {/* Label */}
+            <span style={{
+              fontSize: 8, fontWeight: isActive ? 700 : 500,
+              color: isActive ? C.blue : T4,
+              letterSpacing: '0.02em', transition: 'color 0.2s',
             }}>
               {item.label}
-            </div>
+            </span>
           </div>
         );
       })}
@@ -982,17 +569,13 @@ function BottomNavBar({ activeNav, onNavTap }) {
   );
 }
 
-// ─── Utility: Convert hex to RGB ─────────────────────────────────────────────
+// ─── Utility ────────────────────────────────────────────────────────────────
 function hexToRgb(hex) {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return result ? [
-    parseInt(result[1], 16),
-    parseInt(result[2], 16),
-    parseInt(result[3], 16),
-  ] : [96, 165, 250]; // fallback to blue
+  const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return r ? [parseInt(r[1],16), parseInt(r[2],16), parseInt(r[3],16)] : [91,155,213];
 }
 
-// ─── MAIN COMPONENT ────────────────────────────────────────────────────────────
+// ─── MAIN COMPONENT ────────────────────────────────────────────────────────
 export function MobileHome({
   data, focusItems, weeklyStats, avgWeeklyMi, avgWeeklyHrsTotal,
   avgPaceSecs, goalPaceSecs, fmtPace, totalMi, annualRunTarget, totalSessions,
@@ -1014,209 +597,143 @@ export function MobileHome({
     try { return (storage.get('profile') || {}).name || 'user'; } catch { return 'user'; }
   })();
 
-  // ── Readiness computation ──
+  // ── Readiness ──
   const readinessScore = (() => {
-    try {
-      const r = computeReadiness();
-      return Math.round(r.score) || 75;
-    } catch {
-      return 75;
-    }
+    try { return Math.round(computeReadiness().score) || 75; } catch { return 75; }
   })();
 
   const readinessStatus = statusFromPct(readinessScore / 100);
+  let statusColor = C.blue, statusWord = 'On Track';
+  if (readinessStatus === STATUS.READY) { statusColor = C.green; statusWord = 'On Track'; }
+  else if (readinessStatus === STATUS.CAUTION) { statusColor = C.amber; statusWord = 'Needs Work'; }
+  else if (readinessStatus === STATUS.CRITICAL) { statusColor = C.red; statusWord = 'Behind'; }
 
-  // ── Trend helper ──
-  const getTrendArrow = (current, history) => {
-    if (!history || history.length < 2) return { icon: '→', color: TEXT_DIM };
-    const past = history[history.length - 1];
-    if (!past || current == null) return { icon: '→', color: TEXT_DIM };
-    const change = (current - past) / Math.abs(past);
-    if (change > 0.02) return { icon: '↑', color: '#22c55e' };
-    if (change < -0.02) return { icon: '↓', color: '#ef4444' };
-    return { icon: '→', color: TEXT_DIM };
-  };
-
-  // ── Generate readiness factor summary ──
-  const generateFactorsSummary = () => {
-    const factors = [];
-
-    const volumePct = avgWeeklyMi / (G.weeklyRunDistanceTarget || 50);
-    if (volumePct > 0.9) factors.push('Volume ✓');
-    else if (volumePct > 0.7) factors.push('Volume ◐');
-    else factors.push('Volume ✗');
-
-    if (avgPaceSecs <= goalPaceSecs * 1.1) factors.push('Pace ✓');
-    else if (avgPaceSecs <= goalPaceSecs * 1.2) factors.push('Pace ◐');
-    else factors.push('Pace ✗');
-
-    if (latestSleepScore >= 85) factors.push('Sleep ✓');
-    else if (latestSleepScore >= 70) factors.push('Sleep ◐');
-    else factors.push('Sleep ✗');
-
-    return factors.join(' ');
-  };
-
-  // ── Generate daily insight ──
-  const generateDailyInsight = () => {
-    const plan = todayPlanned();
-    const completed = checkTodayCompletion();
-
-    if (hour < 12) {
-      if (latestSleepScore >= 85) {
-        return {
-          icon: '💪',
-          headline: 'Great sleep',
-          detail: 'Recovery strong. Good to push today.',
-          color: COLORS.sleep,
-        };
-      } else if (latestSleepScore >= 70) {
-        return {
-          icon: '😴',
-          headline: 'Solid sleep',
-          detail: `${latestSleepScore}/100. Pace yourself today.`,
-          color: COLORS.sleep,
-        };
-      } else {
-        return {
-          icon: '⚠️',
-          headline: 'Light sleep',
-          detail: 'Consider easier effort today.',
-          color: '#ef4444',
-        };
-      }
-    } else if (completed) {
-      return {
-        icon: '🏃',
-        headline: 'Activity logged',
-        detail: 'Focus on recovery nutrition.',
-        color: COLORS.training,
-      };
-    } else if (plan?.type === 'rest') {
-      return {
-        icon: '🧘',
-        headline: 'Rest day',
-        detail: 'Recovery focus. Hydrate and stretch.',
-        color: TEXT_SECONDARY,
-      };
-    } else {
-      return {
-        icon: '👋',
-        headline: `Good ${hour < 17 ? 'afternoon' : 'evening'}`,
-        detail: plan?.label ? `${plan.label} planned.` : 'No plan today.',
-        color: TEXT_SECONDARY,
-      };
-    }
-  };
-
-  // ── Build dial configs ──
-  const dialConfigs = (() => {
-    const stored = storage.get('hero-dials') || [];
-    const defaults = [
-      { label: 'Miles/Week', key: 'miles' },
-      { label: 'Sleep Score', key: 'sleep' },
-      { label: 'Protein', key: 'protein' },
-      { label: 'Weight', key: 'weight' },
-    ];
-    const configs = stored.length > 0 ? stored : defaults;
-
-    const mappedConfigs = configs.map(cfg => {
-      let value, unit, sparkData, color, goalPct;
-
-      if (cfg.label === 'Miles/Week' || cfg.key === 'miles') {
-        value = avgWeeklyMi?.toFixed(1) || '0.0';
-        unit = 'mi';
-        sparkData = weeklyStats?.map(w => w.miles) || [];
-        color = COLORS.training;
-        goalPct = avgWeeklyMi / (G.weeklyRunDistanceTarget || 50);
-      } else if (cfg.label === 'Sleep Score' || cfg.key === 'sleep') {
-        value = latestSleepScore || '—';
-        unit = 'pts';
-        sparkData = sortedSleep?.slice(-8) || [];
-        color = COLORS.sleep;
-        goalPct = (latestSleepScore || 0) / 100;
-      } else if (cfg.label === 'Protein' || cfg.key === 'protein') {
-        value = avgProtein?.toFixed(0) || '0';
-        unit = 'g';
-        sparkData = recentNut?.map(n => n.protein) || [];
-        color = COLORS.nutrition;
-        goalPct = (avgProtein || 0) / 160; // typical daily goal
-      } else if (cfg.label === 'Weight' || cfg.key === 'weight') {
-        value = currentWeight?.toFixed(1) || '—';
-        unit = 'lb';
-        sparkData = sortedW?.slice(-8) || [];
-        color = COLORS.weight;
-      } else {
-        value = '—';
-        unit = '';
-        sparkData = [];
-        color = COLORS.training;
-      }
-
-      const trend = getTrendArrow(
-        (cfg.label === 'Miles/Week' || cfg.key === 'miles') ? avgWeeklyMi :
-        (cfg.label === 'Sleep Score' || cfg.key === 'sleep') ? latestSleepScore :
-        (cfg.label === 'Protein' || cfg.key === 'protein') ? avgProtein :
-        (cfg.label === 'Weight' || cfg.key === 'weight') ? currentWeight :
-        0,
-        sparkData
-      );
-
-      return {
-        label: cfg.label || cfg.key,
-        value,
-        unit,
-        sparkData,
-        color,
-        goalPct,
-        trend: true,
-        trendIcon: trend.icon,
-        trendColor: trend.color,
-      };
-    });
-
-    return mappedConfigs.slice(0, 4);
+  // ── Factor pills ──
+  const factors = (() => {
+    const f = [];
+    const volPct = avgWeeklyMi / (G.weeklyRunDistanceTarget || 50);
+    f.push({ label: 'Volume', type: volPct > 0.9 ? 'ok' : volPct > 0.7 ? 'neutral' : 'warn' });
+    f.push({ label: 'Pace', type: avgPaceSecs <= (goalPaceSecs || 600) * 1.1 ? 'ok' : avgPaceSecs <= (goalPaceSecs || 600) * 1.2 ? 'neutral' : 'warn' });
+    f.push({ label: 'Sleep', type: (latestSleepScore || 0) >= 85 ? 'ok' : (latestSleepScore || 0) >= 70 ? 'neutral' : 'warn' });
+    f.push({ label: 'Protein', type: (avgProtein || 0) >= 120 ? 'ok' : (avgProtein || 0) >= 80 ? 'neutral' : 'warn' });
+    return f;
   })();
 
-  // ── Weekly stats ──
+  // ── Race countdown ──
+  const raceDaysLeft = nextRace?.date ? Math.ceil((new Date(nextRace.date) - new Date()) / 86400000) : null;
+  const raceLabel = nextRace ? `${nextRace.name || 'Race'}` : '';
+
+  // ── Hero stats ──
+  const heroStats = [
+    { label: 'Miles/wk', value: avgWeeklyMi?.toFixed(1) || '0', unit: 'mi' },
+    { label: 'Sleep', value: latestSleepScore || '—', unit: '/100' },
+    { label: 'Protein', value: avgProtein?.toFixed(0) || '0', unit: 'g' },
+    { label: 'Weight', value: currentWeight?.toFixed(1) || '—', unit: 'lb' },
+  ];
+
+  // ── Sleep insight ──
+  const sleepHrs = sortedSleep?.length > 0 ? (sortedSleep[sortedSleep.length - 1] / 100 * 8).toFixed(0) : '7';
+  const sleepInsight = (() => {
+    const score = latestSleepScore || 0;
+    if (score >= 85) return { hl: 'Great sleep — ready to push', detail: `${score}/100 recovery` };
+    if (score >= 70) return { hl: 'Solid sleep — ready for strength', detail: `${score}/100 recovery` };
+    return { hl: 'Light sleep — easy effort today', detail: `${score}/100 recovery` };
+  })();
+
+  // ── Trend helper ──
+  const getTrend = (current, history) => {
+    if (!history || history.length < 2 || current == null) return { text: '→', dir: 'flat' };
+    const prev = history[history.length - 2];
+    if (prev == null) return { text: '→', dir: 'flat' };
+    const diff = current - prev;
+    if (Math.abs(diff) < 0.5) return { text: '→', dir: 'flat' };
+    return diff > 0 ? { text: `↑ ${Math.abs(diff).toFixed(1)}`, dir: 'up' } : { text: `↓ ${Math.abs(diff).toFixed(1)}`, dir: 'down' };
+  };
+
+  // ── Gauge configs ──
+  const gauges = [
+    {
+      label: 'Miles/Week', value: avgWeeklyMi?.toFixed(1) || '0', unit: 'mi',
+      sparkData: weeklyStats?.map(w => w.miles) || [], color: C.blue,
+      goalPct: avgWeeklyMi / (G.weeklyRunDistanceTarget || 50),
+      ...getTrend(avgWeeklyMi, weeklyStats?.map(w => w.miles)),
+      tapTab: 'activity',
+    },
+    {
+      label: 'Sleep Score', value: latestSleepScore || '—', unit: 'pts',
+      sparkData: sortedSleep?.slice(-8) || [], color: C.cyan,
+      goalPct: (latestSleepScore || 0) / 100,
+      ...getTrend(latestSleepScore, sortedSleep?.slice(-8)),
+      tapTab: 'clinical',
+    },
+    {
+      label: 'Protein', value: avgProtein?.toFixed(0) || '0', unit: 'g',
+      sparkData: recentNut?.map(n => n.protein) || [], color: C.pink,
+      goalPct: (avgProtein || 0) / 160,
+      ...getTrend(avgProtein, recentNut?.map(n => n.protein)),
+      tapTab: 'nutrition_mobile',
+    },
+    {
+      label: 'Weight', value: currentWeight?.toFixed(1) || '—', unit: 'lb',
+      sparkData: sortedW?.slice(-8) || [], color: C.amber,
+      ...getTrend(currentWeight, sortedW?.slice(-8)),
+      tapTab: 'clinical',
+    },
+  ];
+
+  // ── Weekly ──
   const weeklyMiPct = avgWeeklyMi / (G.weeklyRunDistanceTarget || 50);
   const weeklyHeadline = weeklyMiPct > 0.8 ? 'Strong week' : weeklyMiPct > 0.6 ? 'Building momentum' : 'Light week';
+  const weeklyTime = `${Math.floor((avgWeeklyHrsTotal || 0))}h ${Math.round(((avgWeeklyHrsTotal || 0) % 1) * 60)}m`;
 
-  // ── YTD stats ──
+  // ── Monthly activity stats ──
+  const monthSessions = data?.length || 0;
+  const monthTotalMins = Math.round((avgWeeklyHrsTotal || 0) * 60 * 4.3);
+  const monthTimeStr = `${Math.floor(monthTotalMins / 60)}h ${monthTotalMins % 60}m`;
+  const longestRun = data?.reduce((max, d) => Math.max(max, d.miles || d.distance || 0), 0) || 0;
+  const monthCalories = monthSessions > 0 ? Math.round(monthSessions * 540) : 0;
+
+  // ── YTD ──
   const ytdPct = totalMi / (annualRunTarget || 1000);
+  const totalHrs = ((totalMi || 0) / 6 * 60 / 60).toFixed(1); // rough estimate
 
-  const dailyInsight = generateDailyInsight();
-  const factorsSummary = generateFactorsSummary();
+  // ── Today's plan items ──
+  const planItems = (() => {
+    const plan = todayPlanned();
+    const items = [];
+    if (plan) {
+      const dayType = plan.type || 'run';
+      if (dayType === 'strength' || dayType === 'cross') {
+        items.push({ iconType: 'strength', title: plan.label || 'Strength', detail: plan.description || 'Upper body · 45 min', time: 'AM' });
+      } else if (dayType === 'rest') {
+        items.push({ iconType: 'strength', title: 'Rest Day', detail: 'Recovery focus · Stretch & hydrate', time: '' });
+      } else {
+        items.push({ iconType: 'run', title: plan.label || 'Run', detail: plan.description || 'Easy run', time: 'AM' });
+      }
+    } else {
+      items.push({ iconType: 'strength', title: 'Strength · Upper Body', detail: 'Chest, shoulders, triceps · 45 min', time: 'AM' });
+      items.push({ iconType: 'run', title: 'Easy Run', detail: 'Recovery · 3 mi @ 10:30 pace', time: 'PM' });
+    }
+    return items;
+  })();
 
-  const plan = todayPlanned();
-  const planCompleted = checkTodayCompletion();
-
-  // ── Swipe handlers ──
+  // ── Swipe ──
   const swipeHandlers = useSwipeNav({
     onSwipeLeft: () => {
       const idx = SWIPE_ORDER.indexOf(activeNav);
-      if (idx < SWIPE_ORDER.length - 1) {
-        setActiveNav(SWIPE_ORDER[idx + 1]);
-      }
+      if (idx < SWIPE_ORDER.length - 1) setActiveNav(SWIPE_ORDER[idx + 1]);
     },
     onSwipeRight: () => {
       const idx = SWIPE_ORDER.indexOf(activeNav);
-      if (idx > 0) {
-        setActiveNav(SWIPE_ORDER[idx - 1]);
-      }
+      if (idx > 0) setActiveNav(SWIPE_ORDER[idx - 1]);
     },
   });
 
   const handleNavTap = (id) => {
-    if (id === 'more') {
-      setMoreOpen(true);
-    } else {
-      setActiveNav(id);
-      const navItem = NAV_ITEMS.find(n => n.id === id);
-      if (navItem?.tab) {
-        onOpenTab?.(navItem.tab);
-      }
-    }
+    if (id === 'more') { setMoreOpen(true); return; }
+    setActiveNav(id);
+    const navItem = NAV_ITEMS.find(n => n.id === id);
+    if (navItem?.tab) onOpenTab?.(navItem.tab);
   };
 
   const handleMoreMenuTap = (id) => {
@@ -1227,148 +744,112 @@ export function MobileHome({
     else if (id === 'profile') onOpenTab?.('profile');
   };
 
+  // Non-start tabs just show the nav bar (content rendered by Arnold.jsx)
   if (activeNav !== 'start') {
     return <BottomNavBar activeNav={activeNav} onNavTap={handleNavTap} />;
   }
 
+  // ── RENDER ──
   return (
-    <div
-      style={{
-        background: `linear-gradient(180deg, ${BG_DARK}, ${BG_DARKER})`,
-        color: TEXT_PRIMARY,
-        minHeight: '100vh',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        paddingTop: 0,
-        paddingBottom: 72,
-      }}
-      {...swipeHandlers}
-    >
-      {/* Compact Header */}
-      <div style={{ padding: '12px 12px 0' }}>
-        <CompactHeader greeting={greeting} profileName={profileName} />
-      </div>
+    <div style={{
+      background: BG, color: T1, minHeight: '100vh',
+      fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
+      padding: '0 14px 90px',
+      WebkitFontSmoothing: 'antialiased',
+    }} {...swipeHandlers}>
 
-      {/* Readiness Strip */}
-      <div style={{ padding: '0 12px' }}>
-        <ReadinessStrip
-          readinessScore={readinessScore}
-          readinessStatus={readinessStatus}
-          factorsSummary={factorsSummary}
-          nextRace={nextRace}
-        />
-      </div>
+      <Header greeting={greeting} profileName={profileName} />
 
-      {/* Co-Pilot Gauges (HERO) */}
-      <div style={{ padding: '0 12px' }}>
-        <CoPilotGauges
-          dialConfigs={dialConfigs}
-          onDialTap={(dial) => {
-            if (dial.label.includes('Mile')) onOpenTab?.('activity');
-            else if (dial.label.includes('Sleep')) onOpenTab?.('clinical');
-            else if (dial.label.includes('Protein')) onOpenTab?.('nutrition_mobile');
-            else if (dial.label.includes('Weight')) onOpenTab?.('clinical');
-          }}
-        />
-      </div>
+      <HeroRail
+        score={readinessScore}
+        statusWord={statusWord}
+        statusColor={statusColor}
+        factors={factors}
+        raceDaysLeft={raceDaysLeft}
+        raceLabel={raceLabel}
+        stats={heroStats}
+      />
 
-      {/* Daily Insight */}
-      <div style={{ padding: '0 12px' }}>
-        <DailyInsightCard
-          icon={dailyInsight.icon}
-          headline={dailyInsight.headline}
-          detail={dailyInsight.detail}
-          color={dailyInsight.color}
-        />
+      <SleepInsight headline={sleepInsight.hl} detail={sleepInsight.detail} />
+
+      {/* Co-Pilot Gauges */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+        {gauges.map((g, i) => (
+          <GaugeCard
+            key={i}
+            label={g.label} value={g.value} unit={g.unit}
+            sparkData={g.sparkData} color={g.color} goalPct={g.goalPct}
+            trendText={g.text} trendDir={g.dir}
+            onTap={() => onOpenTab?.(g.tapTab)}
+          />
+        ))}
       </div>
 
       {/* This Week */}
-      <div style={{ padding: '0 12px' }}>
-        <SectionHeader title="This Week" underlineColor={COLORS.training} />
-        <ThisWeekCard
-          headline={weeklyHeadline}
-          miles={avgWeeklyMi?.toFixed(1) || '0'}
-          sessions={data?.length || 0}
-          activeMinutes={Math.round((avgWeeklyHrsTotal || 0) * 60)}
-          weeklyMiPct={weeklyMiPct}
-          weeklyTarget={G.weeklyRunDistanceTarget || 50}
+      <div style={sectionHeader}>This Week <div style={shLine} /></div>
+      <ThisWeekCard
+        headline={weeklyHeadline}
+        miles={avgWeeklyMi?.toFixed(1) || '0'}
+        sessions={data?.length || 0}
+        time={weeklyTime}
+        weeklyMiPct={weeklyMiPct}
+        weeklyTarget={G.weeklyRunDistanceTarget || 50}
+      />
+
+      {/* 30-Day Body & Recovery */}
+      <div style={sectionHeader}>30-Day Body & Recovery <div style={shLine} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+        <RecoveryTile
+          icon={<Icon.Pulse color={C.green} size={12} />}
+          label="HRV" value={avgHRV30?.toFixed(0) || '—'} unit="ms"
+          sparkData={hrvData?.slice(-8) || []} color={C.green}
+        />
+        <RecoveryTile
+          icon={<Icon.Heart color={C.purple} />}
+          label="Resting HR" value={latestRHR || '—'} unit="bpm"
+          sparkData={[]} color={C.purple}
+        />
+        <RecoveryTile
+          icon={<Icon.Clock color={C.orange} />}
+          label="Avg Pace" value={fmtPace || '—'} unit="/mi"
+          sparkData={[]} color={C.orange}
+        />
+        <RecoveryTile
+          icon={<svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" opacity="0.3" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>}
+          label="Body Fat" value={currentBF?.toFixed(1) || '—'} unit="%"
+          sparkData={[]} color={C.red}
         />
       </div>
 
-      {/* 30-Day Trends */}
-      <div style={{ padding: '0 12px' }}>
-        <SectionHeader title="30-Day Trends" underlineColor={COLORS.sleep} />
-        <div style={{
-          display: 'flex',
-          gap: 8,
-          overflowX: 'auto',
-          paddingBottom: 4,
-          scrollBehavior: 'smooth',
-          scrollbarWidth: 'none',
-          marginBottom: 12,
-        }}>
-          <TrendTile
-            label="Monthly Miles"
-            value={avgWeeklyMi?.toFixed(1) || '0'}
-            unit="mi"
-            sparkData={weeklyStats?.slice(-4)?.map(w => w.miles) || []}
-            color={COLORS.training}
-          />
-          <TrendTile
-            label="Avg Weight"
-            value={currentWeight?.toFixed(1) || '—'}
-            unit="lb"
-            sparkData={sortedW?.slice(-8) || []}
-            color={COLORS.weight}
-          />
-          <TrendTile
-            label="Avg Sleep"
-            value={latestSleepScore || '—'}
-            unit="pts"
-            sparkData={sortedSleep?.slice(-8) || []}
-            color={COLORS.sleep}
-          />
-          <TrendTile
-            label="Avg Protein"
-            value={avgProtein?.toFixed(0) || '0'}
-            unit="g"
-            sparkData={recentNut?.slice(-8)?.map(n => n.protein) || []}
-            color={COLORS.nutrition}
-          />
-        </div>
+      {/* This Month */}
+      <div style={sectionHeader}>This Month <div style={shLine} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+        <MonthTile icon={<Icon.Clock color={C.blue} />} label="Total Time" value={monthTimeStr} sub={`across ${monthSessions} sessions`} />
+        <MonthTile icon={<Icon.Bolt color={C.orange} />} label="Longest Run" value={longestRun.toFixed(1)} unit="mi" sub={longestRun > 0 ? 'this month' : 'no runs yet'} />
+        <MonthTile icon={<Icon.TrendUp color={C.green} />} label="Elevation" value="—" unit="ft" sub="gain this month" />
+        <MonthTile icon={<Icon.Pulse color={C.pink} />} label="Active Cal" value={monthCalories.toLocaleString()} sub={monthSessions > 0 ? `avg ${Math.round(monthCalories / monthSessions)} / session` : ''} />
       </div>
 
       {/* Year to Date */}
-      <div style={{ padding: '0 12px' }}>
-        <SectionHeader title="Year to Date" underlineColor={COLORS.pace} />
-        <YearToDateCard
-          totalMi={totalMi?.toFixed(0) || '0'}
-          annualTarget={annualRunTarget || 1000}
-          totalSessions={totalSessions || 0}
-          avgPace={fmtPace || '—'}
-          ytdPct={ytdPct}
-        />
-      </div>
+      <div style={sectionHeader}>Year to Date <div style={shLine} /></div>
+      <YearToDateCard
+        totalMi={totalMi?.toFixed(0) || '0'}
+        annualTarget={annualRunTarget || 1000}
+        totalSessions={totalSessions || 0}
+        avgPace={fmtPace || '—'}
+        totalHrs={totalHrs}
+        ytdPct={ytdPct}
+      />
 
       {/* Today's Plan */}
-      <div style={{ padding: '0 12px' }}>
-        <SectionHeader title="Today's Plan" underlineColor={COLORS.training} />
-        <TodaysPlanCard
-          plan={plan}
-          completed={planCompleted}
-          onTap={() => onOpenTab?.('plan')}
-        />
-      </div>
+      <div style={sectionHeader}>Today's Plan <div style={shLine} /></div>
+      <TodaysPlan items={planItems} onTap={() => onOpenTab?.('plan')} />
 
       {/* Bottom Nav */}
       <BottomNavBar activeNav={activeNav} onNavTap={handleNavTap} />
 
-      {/* More Menu Modal */}
-      {moreOpen && (
-        <MoreMenu
-          onClose={() => setMoreOpen(false)}
-          onMenuTap={handleMoreMenuTap}
-        />
-      )}
+      {/* More Menu */}
+      {moreOpen && <MoreMenu onClose={() => setMoreOpen(false)} onMenuTap={handleMoreMenuTap} />}
     </div>
   );
 }
