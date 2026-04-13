@@ -30,7 +30,7 @@ import { GoalsHub } from "./components/GoalsHub.jsx";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
-import { MobileHome, NAV_ITEMS, useSwipeNav } from "./components/MobileHome.jsx";
+import { MobileHome, NAV_ITEMS, useSwipeNav, BottomNavBar } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import { startAutoBackup } from "./core/backup.js";
@@ -438,18 +438,10 @@ export default function App(){
       </main>
       {/* ── Persistent mobile bottom nav (when drill-down tabs are active) ── */}
       {isMobileApp&&tab!=='training'&&(
-        <nav style={{position:'fixed',bottom:0,left:0,right:0,zIndex:100,background:'rgba(12,13,18,0.92)',backdropFilter:'blur(24px) saturate(1.3)',WebkitBackdropFilter:'blur(24px) saturate(1.3)',borderTop:'1px solid rgba(255,255,255,0.06)',display:'flex',justifyContent:'space-around',alignItems:'center',padding:'6px 0 env(safe-area-inset-bottom, 8px)',boxShadow:'0 -4px 24px rgba(0,0,0,0.4)'}}>
-          {NAV_ITEMS.map(item=>{
-            const isActive=item.id===mobileActiveId;
-            return(
-              <button key={item.id} onClick={()=>handleMobileNav(item)} style={{background:'none',border:'none',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'6px 4px',minWidth:56,color:isActive?'#60a5fa':'rgba(255,255,255,0.35)',transition:'color 0.2s ease',position:'relative'}}>
-                <span style={{fontSize:20,lineHeight:1,filter:isActive?'drop-shadow(0 0 6px rgba(96,165,250,0.5))':'none'}}>{item.icon}</span>
-                <span style={{fontSize:9,fontWeight:isActive?700:500,letterSpacing:'0.02em'}}>{item.label}</span>
-                {isActive&&<div style={{width:4,height:4,borderRadius:'50%',background:'#60a5fa',boxShadow:'0 0 8px rgba(96,165,250,0.6)',position:'absolute',bottom:2}}/>}
-              </button>
-            );
-          })}
-        </nav>
+        <BottomNavBar activeNav={mobileActiveId} onNavTap={(id)=>{
+          const item=NAV_ITEMS.find(n=>n.id===id);
+          if(item)handleMobileNav(item);
+        }} />
       )}
       {/* ── Mobile More Menu (when in drill-down tabs) ── */}
       {isMobileApp&&mobileMoreOpen&&(

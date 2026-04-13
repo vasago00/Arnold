@@ -156,8 +156,8 @@ const card = {
   background: CARD_BG,
   border: `1px solid ${BORDER}`,
   borderRadius: 14,
-  padding: '12px 14px',
-  marginBottom: 8,
+  padding: '10px 12px',
+  marginBottom: 6,
   position: 'relative',
   overflow: 'hidden',
 };
@@ -165,7 +165,7 @@ const card = {
 const sectionHeader = {
   fontSize: 9, fontWeight: 700, color: T4,
   textTransform: 'uppercase', letterSpacing: '0.1em',
-  marginBottom: 6, marginTop: 4,
+  marginBottom: 4, marginTop: 2,
   display: 'flex', alignItems: 'center', gap: 6,
 };
 
@@ -177,7 +177,7 @@ const shLine = {
 function Header({ greeting, profileName }) {
   const date = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 0 12px' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 0 8px' }}>
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <div style={{
@@ -208,8 +208,8 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
   return (
     <div style={{
       ...card,
-      borderRadius: 18,
-      padding: '16px 16px 14px',
+      borderRadius: 16,
+      padding: '12px 14px 10px',
       background: 'linear-gradient(135deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015))',
     }}>
       {/* Top accent line */}
@@ -219,7 +219,7 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
       }} />
 
       {/* Ring + Info + Race */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
         {/* Readiness Ring */}
         <div style={{ width: 58, height: 58, position: 'relative', flexShrink: 0 }}>
           <svg width={58} height={58} style={{ transform: 'rotate(-90deg)' }}>
@@ -265,7 +265,7 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
       </div>
 
       {/* Bottom stat row */}
-      <div style={{ display: 'flex', borderTop: `1px solid ${BORDER}`, paddingTop: 12 }}>
+      <div style={{ display: 'flex', borderTop: `1px solid ${BORDER}`, paddingTop: 8 }}>
         {stats.map((s, i) => (
           <div key={i} style={{
             flex: 1, textAlign: 'center', position: 'relative',
@@ -285,7 +285,7 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
 // ─── SLEEP INSIGHT ──────────────────────────────────────────────────────────
 function SleepInsight({ headline, detail }) {
   return (
-    <div style={{ ...card, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' }}>
+    <div style={{ ...card, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px' }}>
       <div style={{
         width: 30, height: 30, borderRadius: 8, background: 'rgba(94,196,212,0.08)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -309,8 +309,8 @@ function GaugeCard({ label, value, unit, sparkData, color, goalPct, trendText, t
     <div onClick={onTap} style={{
       ...card,
       borderRadius: 14,
-      padding: '10px 12px 8px',
-      display: 'flex', flexDirection: 'column', minHeight: 104,
+      padding: '8px 10px 6px',
+      display: 'flex', flexDirection: 'column', minHeight: 96,
       cursor: onTap ? 'pointer' : 'default',
     }}>
       {/* Top accent */}
@@ -511,7 +511,7 @@ function MoreMenu({ onClose, onMenuTap }) {
 }
 
 // ─── BOTTOM NAV — PREMIUM GLASS WITH SVG ICONS ─────────────────────────────
-function BottomNavBar({ activeNav, onNavTap }) {
+export function BottomNavBar({ activeNav, onNavTap }) {
   return (
     <div style={{
       position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
@@ -594,7 +594,13 @@ function MobileHomeInner({
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
   const profileName = (() => {
-    try { return (storage.get('profile') || {}).name || 'user'; } catch { return 'user'; }
+    try {
+      const stored = (storage.get('profile') || {}).name;
+      if (stored) return stored;
+      // Fallback: check data.profile (from Arnold.jsx DD object)
+      if (data?.profile?.name) return data.profile.name;
+      return 'user';
+    } catch { return 'user'; }
   })();
 
   // ── Format pace helper (fmtPace may be a function or a string) ──
@@ -645,11 +651,13 @@ function MobileHomeInner({
 
   // ── Trend helper ──
   const getTrend = (current, history) => {
-    if (!history || history.length < 2 || current == null) return { text: '→', dir: 'flat' };
-    const prev = history[history.length - 2];
-    if (prev == null) return { text: '→', dir: 'flat' };
-    const diff = current - prev;
-    if (Math.abs(diff) < 0.5) return { text: '→', dir: 'flat' };
+    const flat = { text: '→', dir: 'flat' };
+    if (!Array.isArray(history) || history.length < 2) return flat;
+    const cur = typeof current === 'number' ? current : parseFloat(current);
+    const prev = typeof history[history.length - 2] === 'number' ? history[history.length - 2] : parseFloat(history[history.length - 2]);
+    if (isNaN(cur) || isNaN(prev)) return flat;
+    const diff = cur - prev;
+    if (Math.abs(diff) < 0.5) return flat;
     return diff > 0 ? { text: `↑ ${Math.abs(diff).toFixed(1)}`, dir: 'up' } : { text: `↓ ${Math.abs(diff).toFixed(1)}`, dir: 'down' };
   };
 
@@ -766,7 +774,7 @@ function MobileHomeInner({
     <div style={{
       background: BG, color: T1, minHeight: '100vh',
       fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
-      padding: '0 14px 90px',
+      padding: '0 10px 76px',
       WebkitFontSmoothing: 'antialiased',
     }} {...swipeHandlers}>
 
@@ -785,7 +793,7 @@ function MobileHomeInner({
       <SleepInsight headline={sleepInsight.hl} detail={sleepInsight.detail} />
 
       {/* Co-Pilot Gauges */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
         {gauges.map((g, i) => (
           <GaugeCard
             key={i}
@@ -810,7 +818,7 @@ function MobileHomeInner({
 
       {/* 30-Day Body & Recovery */}
       <div style={sectionHeader}>30-Day Body & Recovery <div style={shLine} /></div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
         <RecoveryTile
           icon={<Icon.Pulse color={C.green} size={12} />}
           label="HRV" value={avgHRV30?.toFixed(0) || '—'} unit="ms"
@@ -835,7 +843,7 @@ function MobileHomeInner({
 
       {/* This Month */}
       <div style={sectionHeader}>This Month <div style={shLine} /></div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
         <MonthTile icon={<Icon.Clock color={C.blue} />} label="Total Time" value={monthTimeStr} sub={`across ${monthSessions} sessions`} />
         <MonthTile icon={<Icon.Bolt color={C.orange} />} label="Longest Run" value={longestRun.toFixed(1)} unit="mi" sub={longestRun > 0 ? 'this month' : 'no runs yet'} />
         <MonthTile icon={<Icon.TrendUp color={C.green} />} label="Elevation" value="—" unit="ft" sub="gain this month" />
