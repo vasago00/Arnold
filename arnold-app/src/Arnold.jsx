@@ -321,33 +321,33 @@ export default function App(){
     return()=>mq.removeEventListener('change',h);
   },[]);
   const mobileHomeActive=isMobileApp&&tab==='training';
-  const [mobileInitView,setMobileInitView]=useState('home');
+  const [mobileInitView,setMobileInitView]=useState('start');
   const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
 
   // ── Mobile nav handler (for drill-down tabs — when MobileHome is NOT active) ──
   const handleMobileNav=(item)=>{
-    const tabMap={training:'weekly',activity:'activity',nutrition:'nutrition_mobile',body:'clinical'};
+    const tabMap={edgeiq:'weekly',play:'activity',fuel:'nutrition_mobile',core:'clinical',labs:'labs'};
     if(item.id==='more'){setMobileMoreOpen(true);return;}
     if(tabMap[item.id]){setTab(tabMap[item.id]);return;}
-    // home, sync → go back to MobileHome
-    setMobileInitView(item.id==='home'?'home':item.id);
+    // start, sync → go back to MobileHome
+    setMobileInitView(item.id==='start'?'start':item.id);
     setTab('training');
   };
 
   // ── Map current tab to active nav id for mobile ──
   const mobileActiveId=(()=>{
-    if(tab==='weekly')return'training';
-    if(tab==='activity')return'activity';
-    if(tab==='nutrition_mobile')return'nutrition';
-    if(tab==='daily')return'activity'; // legacy daily → activity
-    if(tab==='clinical')return'body';
-    if(tab==='labs')return'body';
+    if(tab==='weekly')return'edgeiq';
+    if(tab==='activity')return'play';
+    if(tab==='nutrition_mobile')return'fuel';
+    if(tab==='daily')return'play'; // legacy daily → play
+    if(tab==='clinical')return'core';
+    if(tab==='labs')return'labs';
     if(tab==='goals'||tab==='supplements'||tab==='races')return'more';
-    return'home';
+    return'start';
   })();
 
   // ── Swipe navigation for drill-down tabs ──
-  const SWIPE_ORDER=['home','training','activity','nutrition','body'];
+  const SWIPE_ORDER=['start','edgeiq','play','fuel','core','labs'];
   const mobileSwipe=useSwipeNav({
     onSwipeLeft:()=>{
       if(!isMobileApp||mobileHomeActive)return;
@@ -427,7 +427,7 @@ export default function App(){
         }}/></div>}
         {tab==="labs"&&<div className="arnold-tab-panel"><LabsModule data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="clinical"&&<div className="arnold-tab-panel"><ClinicalModule data={data} persist={persist} showToast={showToast}/></div>}
-        {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('home')}/></div>}
+        {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('start')}/></div>}
         {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity"/></div>}
         {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition"/></div>}
