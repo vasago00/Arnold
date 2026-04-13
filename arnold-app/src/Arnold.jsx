@@ -437,7 +437,7 @@ export default function App(){
         {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
       </main>
       {/* ── Persistent mobile bottom nav (when drill-down tabs are active) ── */}
-      {isMobileApp&&tab!=='training'&&(
+      {isMobileApp&&(
         <BottomNavBar activeNav={mobileActiveId} onNavTap={(id)=>{
           const item=NAV_ITEMS.find(n=>n.id===id);
           if(item)handleMobileNav(item);

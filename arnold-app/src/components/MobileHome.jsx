@@ -764,9 +764,9 @@ function MobileHomeInner({
     else if (id === 'profile') onOpenTab?.('profile');
   };
 
-  // Non-start tabs just show the nav bar (content rendered by Arnold.jsx)
+  // Non-start tabs: Arnold.jsx renders both the tab content and the BottomNavBar
   if (activeNav !== 'start') {
-    return <BottomNavBar activeNav={activeNav} onNavTap={handleNavTap} />;
+    return null;
   }
 
   // ── RENDER ──
@@ -865,8 +865,7 @@ function MobileHomeInner({
       <div style={sectionHeader}>Today's Plan <div style={shLine} /></div>
       <TodaysPlan items={planItems} onTap={() => onOpenTab?.('plan')} />
 
-      {/* Bottom Nav */}
-      <BottomNavBar activeNav={activeNav} onNavTap={handleNavTap} />
+      {/* Bottom Nav is rendered by Arnold.jsx (outside main) so position:fixed works */}
 
       {/* More Menu */}
       {moreOpen && <MoreMenu onClose={() => setMoreOpen(false)} onMenuTap={handleMoreMenuTap} />}
