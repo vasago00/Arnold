@@ -595,12 +595,18 @@ function MobileHomeInner({
 
   const profileName = (() => {
     try {
+      // 1. Check dedicated profile key in storage
       const stored = (storage.get('profile') || {}).name;
       if (stored) return stored;
-      // Fallback: check data.profile (from Arnold.jsx DD object)
+      // 2. Check data.profile (from Arnold.jsx main data blob)
       if (data?.profile?.name) return data.profile.name;
-      return 'user';
-    } catch { return 'user'; }
+      // 3. Check arnold:data blob directly from storage
+      try {
+        const raw = localStorage.getItem('arnold:data');
+        if (raw) { const d = JSON.parse(raw); if (d?.profile?.name) return d.profile.name; }
+      } catch {}
+      return 'Emil';
+    } catch { return 'Emil'; }
   })();
 
   // ── Format pace helper (fmtPace may be a function or a string) ──
