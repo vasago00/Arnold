@@ -575,8 +575,8 @@ function hexToRgb(hex) {
   return r ? [parseInt(r[1],16), parseInt(r[2],16), parseInt(r[3],16)] : [91,155,213];
 }
 
-// ─── MAIN COMPONENT ────────────────────────────────────────────────────────
-export function MobileHome({
+// ─── ERROR BOUNDARY WRAPPER ─────────────────────────────────────────────────
+function MobileHomeInner({
   data, focusItems, weeklyStats, avgWeeklyMi, avgWeeklyHrsTotal,
   avgPaceSecs, goalPaceSecs, fmtPace, totalMi, annualRunTarget, totalSessions,
   sortedSleep, hrvData, sortedW, currentWeight, currentBF, latestSleepScore,
@@ -597,6 +597,9 @@ export function MobileHome({
     try { return (storage.get('profile') || {}).name || 'user'; } catch { return 'user'; }
   })();
 
+  // ── Format pace helper (fmtPace may be a function or a string) ──
+  const paceStr = typeof fmtPace === 'function' ? fmtPace(avgPaceSecs) : (fmtPace || '—');
+
   // ── Readiness ──
   const readinessScore = (() => {
     try { return Math.round(computeReadiness().score) || 75; } catch { return 75; }
@@ -604,9 +607,9 @@ export function MobileHome({
 
   const readinessStatus = statusFromPct(readinessScore / 100);
   let statusColor = C.blue, statusWord = 'On Track';
-  if (readinessStatus === STATUS.READY) { statusColor = C.green; statusWord = 'On Track'; }
-  else if (readinessStatus === STATUS.CAUTION) { statusColor = C.amber; statusWord = 'Needs Work'; }
-  else if (readinessStatus === STATUS.CRITICAL) { statusColor = C.red; statusWord = 'Behind'; }
+  if (readinessStatus === 'ok') { statusColor = C.green; statusWord = 'On Track'; }
+  else if (readinessStatus === 'warn') { statusColor = C.amber; statusWord = 'Needs Work'; }
+  else if (readinessStatus === 'critical') { statusColor = C.red; statusWord = 'Behind'; }
 
   // ── Factor pills ──
   const factors = (() => {
@@ -686,11 +689,20 @@ export function MobileHome({
   const weeklyHeadline = weeklyMiPct > 0.8 ? 'Strong week' : weeklyMiPct > 0.6 ? 'Building momentum' : 'Light week';
   const weeklyTime = `${Math.floor((avgWeeklyHrsTotal || 0))}h ${Math.round(((avgWeeklyHrsTotal || 0) % 1) * 60)}m`;
 
-  // ── Monthly activity stats ──
-  const monthSessions = data?.length || 0;
-  const monthTotalMins = Math.round((avgWeeklyHrsTotal || 0) * 60 * 4.3);
+  // ── Monthly activity stats (data is an object, not array — use computed props) ──
+  const monthWeeks = 4.3;
+  const monthSessions = Math.round((totalSessions || 0) / Math.max((new Date().getMonth() + 1), 1)) || 0;
+  const monthTotalMins = Math.round((avgWeeklyHrsTotal || 0) * 60 * monthWeeks);
   const monthTimeStr = `${Math.floor(monthTotalMins / 60)}h ${monthTotalMins % 60}m`;
-  const longestRun = data?.reduce((max, d) => Math.max(max, d.miles || d.distance || 0), 0) || 0;
+  const longestRun = (() => {
+    try {
+      const acts = storage.get('activities') || [];
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      return acts.filter(a => a.date && new Date(a.date) >= monthStart)
+        .reduce((max, a) => Math.max(max, a.distanceMi || 0), 0);
+    } catch { return 0; }
+  })();
   const monthCalories = monthSessions > 0 ? Math.round(monthSessions * 540) : 0;
 
   // ── YTD ──
@@ -790,7 +802,7 @@ export function MobileHome({
       <ThisWeekCard
         headline={weeklyHeadline}
         miles={avgWeeklyMi?.toFixed(1) || '0'}
-        sessions={data?.length || 0}
+        sessions={totalSessions || 0}
         time={weeklyTime}
         weeklyMiPct={weeklyMiPct}
         weeklyTarget={G.weeklyRunDistanceTarget || 50}
@@ -811,7 +823,7 @@ export function MobileHome({
         />
         <RecoveryTile
           icon={<Icon.Clock color={C.orange} />}
-          label="Avg Pace" value={fmtPace || '—'} unit="/mi"
+          label="Avg Pace" value={paceStr} unit="/mi"
           sparkData={[]} color={C.orange}
         />
         <RecoveryTile
@@ -836,7 +848,7 @@ export function MobileHome({
         totalMi={totalMi?.toFixed(0) || '0'}
         annualTarget={annualRunTarget || 1000}
         totalSessions={totalSessions || 0}
-        avgPace={fmtPace || '—'}
+        avgPace={paceStr}
         totalHrs={totalHrs}
         ytdPct={ytdPct}
       />
@@ -851,5 +863,51 @@ export function MobileHome({
       {/* More Menu */}
       {moreOpen && <MoreMenu onClose={() => setMoreOpen(false)} onMenuTap={handleMoreMenuTap} />}
     </div>
+  );
+}
+
+// ─── MAIN COMPONENT (with error boundary) ──────────────────────────────────
+import { Component } from "react";
+
+class MobileHomeErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          background: '#0b0c12', color: '#fff', minHeight: '100vh',
+          padding: 20, fontFamily: 'monospace', fontSize: 12,
+        }}>
+          <div style={{ color: '#cf6b6b', fontWeight: 700, fontSize: 16, marginBottom: 12 }}>
+            Arnold crashed:
+          </div>
+          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#d4a24e' }}>
+            {this.state.error.message}
+          </pre>
+          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'rgba(255,255,255,0.4)', marginTop: 8, fontSize: 10 }}>
+            {this.state.error.stack}
+          </pre>
+          <button onClick={() => this.setState({ error: null })} style={{
+            marginTop: 16, padding: '8px 16px', background: '#5b9bd5', color: '#fff',
+            border: 'none', borderRadius: 8, cursor: 'pointer',
+          }}>Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function MobileHome(props) {
+  return (
+    <MobileHomeErrorBoundary>
+      <MobileHomeInner {...props} />
+    </MobileHomeErrorBoundary>
   );
 }
