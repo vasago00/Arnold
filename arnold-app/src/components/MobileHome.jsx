@@ -15,23 +15,23 @@ import { DataSync } from "./DataSync.jsx";
 
 // ─── Muted warm color palette (matches mockup) ─────────────────────────────
 const C = {
-  blue:   '#5b9bd5',
-  cyan:   '#5ec4d4',
-  pink:   '#d4789b',
-  amber:  '#d4a24e',
-  green:  '#5bbf8a',
-  red:    '#cf6b6b',
-  purple: '#9b8ec4',
-  orange: '#d48b4e',
+  blue:   '#6babdf',
+  cyan:   '#6fd4e4',
+  pink:   '#e088ab',
+  amber:  '#e0b45e',
+  green:  '#6bcf9a',
+  red:    '#df7b7b',
+  purple: '#ab9ed4',
+  orange: '#e09b5e',
 };
 
 const BG       = '#0b0c12';
-const CARD_BG  = 'rgba(255,255,255,0.03)';
-const BORDER   = 'rgba(255,255,255,0.06)';
+const CARD_BG  = 'rgba(255,255,255,0.04)';
+const BORDER   = 'rgba(255,255,255,0.08)';
 const T1       = '#fff';
-const T2       = 'rgba(255,255,255,0.75)';
-const T3       = 'rgba(255,255,255,0.5)';
-const T4       = 'rgba(255,255,255,0.3)';
+const T2       = 'rgba(255,255,255,0.88)';
+const T3       = 'rgba(255,255,255,0.65)';
+const T4       = 'rgba(255,255,255,0.45)';
 
 // ─── NAV_ITEMS: exported for Arnold.jsx ─────────────────────────────────────
 export const NAV_ITEMS = [
@@ -68,44 +68,84 @@ export function useSwipeNav({ onSwipeLeft, onSwipeRight, threshold = 60 } = {}) 
 
 // ─── SVG Icon Components ────────────────────────────────────────────────────
 const Icon = {
-  Compass: ({ color = T4, size = 19 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="9" stroke={color} fill={color === C.blue ? 'rgba(91,155,213,0.08)' : 'none'} />
-      <polygon points="16.24,7.76 14.12,14.12 7.76,16.24 9.88,9.88" fill={color} opacity="0.6" stroke={color} strokeWidth="1" />
+  // PSP ✕ cross button — Start/Home
+  PspX: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="10" opacity="0.25" />
+      <line x1="8" y1="8" x2="16" y2="16" />
+      <line x1="16" y1="8" x2="8" y2="16" />
     </svg>
   ),
-  Bulb: ({ color = T4, size = 19 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9.5 2A6.5 6.5 0 0 0 3 8.5C3 12 6 14 6 16h6c0-2 3-4 3-7.5A6.5 6.5 0 0 0 9.5 2z" transform="translate(2.5,0)" />
-      <line x1="8" y1="19" x2="16" y2="19" /><line x1="9" y1="22" x2="15" y2="22" />
+  // Gem with electric sparks — EdgeIQ
+  GemSpark: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round">
+      {/* Gem body */}
+      <polygon points="12,2 4,9 12,22 20,9" stroke={color} strokeWidth="1.6" fill={color} fillOpacity="0.08" />
+      <line x1="4" y1="9" x2="20" y2="9" stroke={color} strokeWidth="1.4" />
+      <line x1="12" y1="2" x2="9" y2="9" stroke={color} strokeWidth="1.2" opacity="0.5" />
+      <line x1="12" y1="2" x2="15" y2="9" stroke={color} strokeWidth="1.2" opacity="0.5" />
+      <line x1="12" y1="22" x2="9" y2="9" stroke={color} strokeWidth="1.2" opacity="0.3" />
+      <line x1="12" y1="22" x2="15" y2="9" stroke={color} strokeWidth="1.2" opacity="0.3" />
+      {/* Electric sparks */}
+      <line x1="1" y1="5" x2="3" y2="7" stroke={color} strokeWidth="1.5" opacity="0.7" />
+      <line x1="21" y1="5" x2="23" y2="3" stroke={color} strokeWidth="1.5" opacity="0.7" />
+      <line x1="2" y1="14" x2="1" y2="12" stroke={color} strokeWidth="1.2" opacity="0.5" />
     </svg>
   ),
+  // Lightning bolt — Play
   Bolt: ({ color = T4, size = 19 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
     </svg>
   ),
-  Fork: ({ color = T4, size = 19 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2v8" /><path d="M8 2v3a4 4 0 0 0 8 0V2" /><line x1="12" y1="10" x2="12" y2="22" />
+  // Gas pump nozzle — Fuel
+  GasPump: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      {/* Pump body */}
+      <rect x="3" y="3" width="12" height="18" rx="2" />
+      {/* Gauge window */}
+      <rect x="5" y="5" width="8" height="6" rx="1" opacity="0.3" />
+      {/* Nozzle arm */}
+      <path d="M15 7h2a2 2 0 0 1 2 2v6a2 2 0 0 0 2 2v0" />
+      {/* Nozzle hook */}
+      <path d="M21 17v-2" />
+      {/* Hose drip */}
+      <circle cx="21" cy="19" r="0.8" fill={color} opacity="0.5" />
     </svg>
   ),
+  // Heartbeat pulse — Core
   Pulse: ({ color = T4, size = 19 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     </svg>
   ),
-  Flask: ({ color = T4, size = 19 }) => (
+  // Plumbing pipe — Labs (blood work)
+  Pipe: ({ color = T4, size = 19 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 3h6" /><path d="M10 3v6l-5 8.5a1.5 1.5 0 0 0 1.3 2.25h11.4a1.5 1.5 0 0 0 1.3-2.25L14 9V3" />
-      <path d="M8.5 14h7" />
+      {/* Vertical pipe down */}
+      <path d="M8 2v6" />
+      <path d="M6 2h4" strokeWidth="2.2" />
+      {/* Elbow joint */}
+      <path d="M8 8a4 4 0 0 0 4 4h4" />
+      {/* Horizontal pipe right */}
+      <path d="M16 10v4" strokeWidth="2.2" />
+      {/* Down pipe */}
+      <path d="M16 14a4 4 0 0 1-4 4H8" />
+      <path d="M8 18v3" />
+      {/* Drip */}
+      <circle cx="8" cy="22.5" r="0.8" fill={color} opacity="0.6" />
+      {/* Joint rings */}
+      <circle cx="8" cy="8" r="1.2" fill={color} opacity="0.2" />
+      <circle cx="16" cy="12" r="1.2" fill={color} opacity="0.2" />
     </svg>
   ),
+  // Three dots — More
   Dots: ({ color = T4, size = 19 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
     </svg>
   ),
+  // ── Icons used inside tiles (not nav) ──
   Moon: ({ color = C.cyan, size = 16 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
@@ -133,6 +173,12 @@ const Icon = {
       <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
     </svg>
   ),
+  Flask: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3h6" /><path d="M10 3v6l-5 8.5a1.5 1.5 0 0 0 1.3 2.25h11.4a1.5 1.5 0 0 0 1.3-2.25L14 9V3" />
+      <path d="M8.5 14h7" />
+    </svg>
+  ),
   TrendUp: ({ color = T4, size = 13 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round">
       <path d="M2 20L8 14 12 18 22 4" /><polyline points="16 4 22 4 22 10" />
@@ -140,14 +186,14 @@ const Icon = {
   ),
 };
 
-// Nav icon map
+// Nav icon map — gamified
 const NAV_ICONS = {
-  start:  (c) => <Icon.Compass color={c} />,
-  edgeiq: (c) => <Icon.Bulb color={c} />,
+  start:  (c) => <Icon.PspX color={c} />,
+  edgeiq: (c) => <Icon.GemSpark color={c} />,
   play:   (c) => <Icon.Bolt color={c} />,
-  fuel:   (c) => <Icon.Fork color={c} />,
+  fuel:   (c) => <Icon.GasPump color={c} />,
   core:   (c) => <Icon.Pulse color={c} />,
-  labs:   (c) => <Icon.Flask color={c} />,
+  labs:   (c) => <Icon.Pipe color={c} />,
   more:   (c) => <Icon.Dots color={c} />,
 };
 
@@ -163,9 +209,9 @@ const card = {
 };
 
 const sectionHeader = {
-  fontSize: 9, fontWeight: 700, color: T4,
+  fontSize: 10, fontWeight: 700, color: T3,
   textTransform: 'uppercase', letterSpacing: '0.1em',
-  marginBottom: 4, marginTop: 2,
+  marginBottom: 5, marginTop: 6,
   display: 'flex', alignItems: 'center', gap: 6,
 };
 
@@ -300,55 +346,77 @@ function SleepInsight({ headline, detail }) {
   );
 }
 
-// ─── METRIC TILE (Today + W/M averages) ────────────────────────────────────
-// Big today value on left, weekly avg + monthly avg stacked on right with arrows
-function MetricTile({ label, todayVal, todayUnit, weekAvg, weekTrend, monthAvg, monthTrend, color, sparkData, onTap }) {
-  const arrowUp = '▲', arrowDown = '▼', arrowFlat = '→';
-  const trendIcon = (dir) => dir === 'up' ? arrowUp : dir === 'down' ? arrowDown : arrowFlat;
-  const trendCol = (dir) => dir === 'up' ? C.green : dir === 'down' ? C.red : T4;
+// ─── MINI ARC GAUGE ─────────────────────────────────────────────────────────
+// Semi-circle SVG arc showing 30d avg progress toward goal
+function MiniArcGauge({ pct, color }) {
+  // Arc from 180° semicircle, radius=18, center at (22,24)
+  const clampPct = Math.max(0, Math.min(pct || 0, 1));
+  // Start at (4,24), end varies along the arc
+  const angle = Math.PI * clampPct; // 0 to PI
+  const endX = 22 - 18 * Math.cos(angle);
+  const endY = 24 - 18 * Math.sin(angle);
+  const largeArc = clampPct > 0.5 ? 1 : 0;
 
   return (
+    <svg width={44} height={26} viewBox="0 0 44 26">
+      <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={3} strokeLinecap="round" />
+      {clampPct > 0.01 && (
+        <path d={`M 4 24 A 18 18 0 ${largeArc} 1 ${endX.toFixed(1)} ${endY.toFixed(1)}`}
+          fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" opacity={0.8} />
+      )}
+    </svg>
+  );
+}
+
+// ─── CATEGORY LABEL ─────────────────────────────────────────────────────────
+function CategoryLabel({ label, color }) {
+  return (
+    <div style={{
+      fontSize: 8, fontWeight: 700, color: T3, textTransform: 'uppercase',
+      letterSpacing: '0.12em', padding: '3px 0 2px',
+      display: 'flex', alignItems: 'center', gap: 5,
+    }}>
+      <div style={{ width: 5, height: 5, borderRadius: '50%', background: color }} />
+      {label}
+    </div>
+  );
+}
+
+// ─── METRIC TILE (Today value + mini arc gauge for 30d avg) ─────────────────
+function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, avg30Label, gaugePct, color, onTap }) {
+  return (
     <div onClick={onTap} style={{
-      ...card, borderRadius: 14, padding: '10px 10px 7px',
-      cursor: onTap ? 'pointer' : 'default', minHeight: 88,
+      ...card, borderRadius: 14, padding: '8px 10px 8px',
+      cursor: onTap ? 'pointer' : 'default', minHeight: 80,
     }}>
       {/* Top accent */}
-      <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.6 }} />
+      <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.7 }} />
 
       {/* Label */}
-      <div style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 6 }}>{label}</div>
 
-      {/* Main row: Today value + W/M averages */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        {/* Today (big) */}
+      {/* Body: today value + mini gauge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {/* Today col */}
         <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
+          <div>
             <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1 }}>{todayVal}</span>
-            <span style={{ fontSize: 9, color: T4 }}>{todayUnit}</span>
+            {' '}<span style={{ fontSize: 9, color: T3 }}>{todayUnit}</span>
           </div>
+          {trendText && (
+            <div style={{ fontSize: 8, fontWeight: 600, color: trendColor || T3, marginTop: 3 }}>{trendText}</div>
+          )}
         </div>
 
-        {/* W / M stacked */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-end', minWidth: 58 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-            <span style={{ fontSize: 7, color: T4, fontWeight: 600 }}>W</span>
-            <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>{weekAvg}</span>
-            {weekTrend && <span style={{ fontSize: 7, color: trendCol(weekTrend), lineHeight: 1 }}>{trendIcon(weekTrend)}</span>}
+        {/* Gauge col */}
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ width: 44, height: 26, overflow: 'hidden' }}>
+            <MiniArcGauge pct={gaugePct} color={color} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-            <span style={{ fontSize: 7, color: T4, fontWeight: 600 }}>M</span>
-            <span style={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>{monthAvg}</span>
-            {monthTrend && <span style={{ fontSize: 7, color: trendCol(monthTrend), lineHeight: 1 }}>{trendIcon(monthTrend)}</span>}
-          </div>
+          <div style={{ fontSize: 10, fontWeight: 700, color, lineHeight: 1, marginTop: -1 }}>{avg30}</div>
+          <div style={{ fontSize: 7, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>{avg30Label || '30d avg'}</div>
         </div>
       </div>
-
-      {/* Sparkline */}
-      {sparkData && sparkData.length > 1 && (
-        <div style={{ height: 22, marginTop: 4 }}>
-          <Sparkline data={sparkData} width="100%" height={22} color={color} fill={true} dot={false} />
-        </div>
-      )}
     </div>
   );
 }
@@ -488,31 +556,32 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
   );
 }
 
-// ─── CORE SUMMARY ───────────────────────────────────────────────────────────
-// Key body & recovery metrics in a compact card
+// ─── CORE SUMMARY (Body · Recovery · Vitals from DEXA/VO2/RMR) ─────────────
 function CoreSummary({ hrv, rhr, weight, bodyFat, onTap }) {
   const items = [
-    { label: 'HRV',    value: hrv || '—',    unit: 'ms',  color: C.green },
-    { label: 'RHR',    value: rhr || '—',    unit: 'bpm', color: C.purple },
-    { label: 'Weight', value: weight || '—',  unit: 'lb',  color: C.amber },
-    { label: 'Body Fat', value: bodyFat || '—', unit: '%', color: C.red },
+    { label: 'Weight',   value: weight || '—',  unit: 'lb',    color: C.amber },
+    { label: 'Body Fat', value: bodyFat || '—',  unit: '%',     color: C.red },
+    { label: 'RMR',      value: '—',             unit: 'kcal',  color: C.orange },
+    { label: 'HRV',      value: hrv || '—',      unit: 'ms',    color: C.green },
+    { label: 'RHR',      value: rhr || '—',      unit: 'bpm',   color: C.purple },
+    { label: 'VO2max',   value: '—',             unit: 'mL/kg', color: C.cyan },
   ];
   return (
     <div onClick={onTap} style={{ ...card, borderRadius: 14, padding: '10px 12px', cursor: 'pointer' }}>
-      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(91,191,138,0.12), transparent)` }} />
+      <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(107,207,154,0.15), transparent)` }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <Icon.Pulse color={C.green} size={12} />
-          <span style={{ fontSize: 8, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Core · Body & Recovery</span>
+          <span style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Body · Recovery · Vitals</span>
         </div>
-        <span style={{ fontSize: 9, color: T4 }}>→</span>
+        <span style={{ fontSize: 10, color: T3 }}>→</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 4 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4, rowGap: 10 }}>
         {items.map((it, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 7, color: it.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{it.label}</div>
+            <div style={{ fontSize: 8, color: it.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{it.label}</div>
             <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>{it.value}</div>
-            <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{it.unit}</div>
+            <div style={{ fontSize: 8, color: T3, marginTop: 1 }}>{it.unit}</div>
           </div>
         ))}
       </div>
@@ -549,9 +618,9 @@ function LabsSummary({ labSnapshots, onTap }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <Icon.Flask color={C.purple} size={12} />
-          <span style={{ fontSize: 8, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Labs{dateStr ? ` · ${dateStr}` : ''}</span>
+          <span style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Labs{dateStr ? ` · ${dateStr}` : ''}</span>
         </div>
-        <span style={{ fontSize: 9, color: T4 }}>→</span>
+        <span style={{ fontSize: 10, color: T3 }}>→</span>
       </div>
       {keyMarkers.length > 0 ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(keyMarkers.length, 3)}, 1fr)`, gap: 4 }}>
@@ -677,8 +746,8 @@ export function BottomNavBar({ activeNav, onNavTap }) {
             <div style={{
               width: 34, height: 34, borderRadius: 10,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: isActive ? 'rgba(91,155,213,0.1)' : 'transparent',
-              boxShadow: isActive ? '0 0 12px rgba(91,155,213,0.08)' : 'none',
+              background: isActive ? 'rgba(91,155,213,0.12)' : 'transparent',
+              animation: isActive ? 'navGlowPulse 2.4s ease-in-out infinite' : 'none',
               transition: 'all 0.2s',
             }}>
               {NAV_ICONS[item.id]?.(iconColor)}
@@ -797,47 +866,37 @@ function MobileHomeInner({
     return diff > 0 ? { text: `↑ ${Math.abs(diff).toFixed(1)}`, dir: 'up' } : { text: `↓ ${Math.abs(diff).toFixed(1)}`, dir: 'down' };
   };
 
-  // ── Metric tile data (today + W avg + M avg) ──
-  const todayNut = (() => {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const nuts = recentNut || [];
-      return nuts.find(n => n.date === today) || {};
-    } catch { return {}; }
-  })();
-
-  const monthlyAvgs = (() => {
+  // ── 30-day averages for gauge tiles ──
+  const avg30Mi = (() => {
     try {
       const acts = storage.get('activities') || [];
       const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthActs = acts.filter(a => a.date && new Date(a.date) >= monthStart);
-      const monthMi = monthActs.reduce((s, a) => s + (a.distanceMi || 0), 0);
-      const monthSessions = monthActs.length;
-      const monthWeeks = Math.max((now.getDate() / 7), 1);
-      return { miPerWeek: (monthMi / monthWeeks).toFixed(1), sessions: monthSessions };
-    } catch { return { miPerWeek: '0', sessions: 0 }; }
+      const d30 = new Date(now - 30 * 86400000);
+      const recent = acts.filter(a => a.date && new Date(a.date) >= d30);
+      const totalMi30 = recent.reduce((s, a) => s + (a.distanceMi || 0), 0);
+      const weeks = 30 / 7;
+      return (totalMi30 / weeks).toFixed(1);
+    } catch { return '0'; }
   })();
 
-  const monthlyProtein = (() => {
+  const avg30Sleep = (() => {
     try {
-      const nuts = recentNut || [];
-      const now = new Date();
-      const monthNuts = nuts.filter(n => n.date && new Date(n.date).getMonth() === now.getMonth());
-      if (!monthNuts.length) return '—';
-      return (monthNuts.reduce((s, n) => s + (n.protein || 0), 0) / monthNuts.length).toFixed(0);
-    } catch { return '—'; }
-  })();
-
-  const monthlySleep = (() => {
-    try {
-      if (!sortedSleep || sortedSleep.length < 4) return '—';
+      if (!sortedSleep || sortedSleep.length < 2) return '—';
       const last30 = sortedSleep.slice(-30);
       return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(0);
     } catch { return '—'; }
   })();
 
-  const monthlyWeight = (() => {
+  const avg30Protein = (() => {
+    try {
+      const nuts = recentNut || [];
+      if (!nuts.length) return '—';
+      const last30 = nuts.slice(-30);
+      return (last30.reduce((s, n) => s + (n.protein || 0), 0) / last30.length).toFixed(0);
+    } catch { return '—'; }
+  })();
+
+  const avg30Weight = (() => {
     try {
       if (!sortedW || sortedW.length < 2) return '—';
       const last30 = sortedW.slice(-30);
@@ -845,38 +904,78 @@ function MobileHomeInner({
     } catch { return '—'; }
   })();
 
-  const weekTrend = (current, history) => {
+  const avg30HRV = (() => {
+    try {
+      if (!hrvData || hrvData.length < 2) return '—';
+      const last30 = hrvData.slice(-30);
+      return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(0);
+    } catch { return '—'; }
+  })();
+
+  // ── Trend text helper (vs last week) ──
+  const trendVsLastWk = (current, history) => {
     const t = getTrend(current, history);
-    return t.dir;
+    if (t.dir === 'flat') return { text: '→ same as last wk', color: T3 };
+    if (t.dir === 'up') return { text: `▲ ${t.text.replace('↑ ', '')} vs last wk`, color: C.green };
+    return { text: `▼ ${t.text.replace('↓ ', '')} vs last wk`, color: C.red };
   };
 
-  const metricTiles = [
-    {
-      label: 'Miles', todayVal: avgWeeklyMi?.toFixed(1) || '0', todayUnit: 'mi/wk',
-      weekAvg: avgWeeklyMi?.toFixed(1) || '0', weekTrend: weekTrend(avgWeeklyMi, weeklyStats?.map(w => w.miles)),
-      monthAvg: monthlyAvgs.miPerWeek, monthTrend: parseFloat(monthlyAvgs.miPerWeek) > (avgWeeklyMi || 0) ? 'up' : parseFloat(monthlyAvgs.miPerWeek) < (avgWeeklyMi || 0) ? 'down' : 'flat',
-      color: C.blue, sparkData: weeklyStats?.map(w => w.miles) || [], tapTab: 'activity',
-    },
-    {
-      label: 'Sleep', todayVal: latestSleepScore || '—', todayUnit: 'pts',
-      weekAvg: sortedSleep?.length >= 7 ? (sortedSleep.slice(-7).reduce((s, v) => s + v, 0) / 7).toFixed(0) : (latestSleepScore || '—'),
-      weekTrend: weekTrend(latestSleepScore, sortedSleep?.slice(-8)),
-      monthAvg: monthlySleep, monthTrend: 'flat',
-      color: C.cyan, sparkData: sortedSleep?.slice(-14) || [], tapTab: 'clinical',
-    },
-    {
-      label: 'Protein', todayVal: todayNut.protein?.toFixed(0) || avgProtein?.toFixed(0) || '0', todayUnit: 'g',
-      weekAvg: avgProtein?.toFixed(0) || '0', weekTrend: weekTrend(avgProtein, recentNut?.map(n => n.protein)),
-      monthAvg: monthlyProtein, monthTrend: 'flat',
-      color: C.pink, sparkData: recentNut?.map(n => n.protein) || [], tapTab: 'nutrition_mobile',
-    },
-    {
-      label: 'Weight', todayVal: currentWeight?.toFixed(1) || '—', todayUnit: 'lb',
-      weekAvg: sortedW?.length >= 7 ? (sortedW.slice(-7).reduce((s, v) => s + v, 0) / 7).toFixed(1) : (currentWeight?.toFixed(1) || '—'),
-      weekTrend: weekTrend(currentWeight, sortedW?.slice(-8)),
-      monthAvg: monthlyWeight, monthTrend: 'flat',
-      color: C.amber, sparkData: sortedW?.slice(-14) || [], tapTab: 'clinical',
-    },
+  // ── Build category tiles (each has: label, todayVal, todayUnit, trendText, trendColor, avg30, gaugePct, tileColor, tapTab) ──
+  const buildTile = (label, todayVal, todayUnit, trendInfo, avg30, gaugePct, tileColor, tapTab) => ({
+    label, todayVal, todayUnit,
+    trendText: trendInfo?.text || '', trendColor: trendInfo?.color || T3,
+    avg30: avg30 || '—', gaugePct: isNaN(gaugePct) ? 0 : Math.max(0, Math.min(gaugePct, 1)),
+    tileColor, tapTab,
+  });
+
+  // RUN
+  const runTiles = [
+    buildTile('Weekly Miles', avgWeeklyMi?.toFixed(1) || '0', 'mi',
+      trendVsLastWk(avgWeeklyMi, weeklyStats?.map(w => w.miles)),
+      avg30Mi, parseFloat(avg30Mi) / (G.weeklyRunDistanceTarget || 20), C.blue, 'activity'),
+    buildTile('Avg Pace', paceStr, '/mi',
+      { text: '→ tracking', color: T3 },
+      paceStr, avgPaceSecs ? Math.min((goalPaceSecs || 600) / avgPaceSecs, 1) : 0, C.cyan, 'activity'),
+  ];
+
+  // STRENGTH
+  const strengthTiles = [
+    buildTile('Sessions', G.weeklyStrengthTarget || 2, '/wk',
+      { text: '→ on target', color: C.green },
+      ((totalSessions || 0) / Math.max(new Date().getMonth() + 1, 1) / 4.3).toFixed(1),
+      1.0, C.purple, 'activity'),
+    buildTile('Pull-ups', G.pullUpsTarget || '—', 'reps',
+      { text: '', color: T3 },
+      '—', 0, C.pink, 'activity'),
+  ];
+
+  // RECOVERY
+  const recoveryTiles = [
+    buildTile('Sleep Score', latestSleepScore || '—', 'pts',
+      trendVsLastWk(latestSleepScore, sortedSleep?.slice(-8)),
+      avg30Sleep, parseFloat(avg30Sleep) / (G.targetSleepScore || 85), C.cyan, 'clinical'),
+    buildTile('HRV', avgHRV30?.toFixed(0) || '—', 'ms',
+      trendVsLastWk(avgHRV30, hrvData?.slice(-8)),
+      avg30HRV, parseFloat(avg30HRV) / (G.targetHRV || 70), C.green, 'clinical'),
+  ];
+
+  // BODY (weight: down is good, so invert trend color)
+  const weightTrend = (() => {
+    const t = trendVsLastWk(currentWeight, sortedW?.slice(-8));
+    if (t.color === C.red) return { ...t, color: C.green };
+    if (t.color === C.green) return { ...t, color: C.red };
+    return t;
+  })();
+
+  const bodyTiles = [
+    buildTile('Weight', currentWeight?.toFixed(1) || '—', 'lb',
+      weightTrend,
+      avg30Weight, G.targetWeight ? Math.max(0, 1 - Math.abs(parseFloat(avg30Weight || 0) - G.targetWeight) / 20) : 0.5,
+      C.amber, 'clinical'),
+    buildTile('Protein', avgProtein?.toFixed(0) || '0', 'g',
+      trendVsLastWk(avgProtein, recentNut?.map(n => n.protein)),
+      avg30Protein, parseFloat(avg30Protein || 0) / (G.dailyProteinTarget || 150),
+      C.pink, 'nutrition_mobile'),
   ];
 
   // ── Weekly ──
@@ -968,15 +1067,53 @@ function MobileHomeInner({
 
       <SleepInsight headline={sleepInsight.hl} detail={sleepInsight.detail} />
 
-      {/* Metric Tiles — 2×2 grid: today value + W/M averages */}
+      {/* ── RUN ── */}
+      <CategoryLabel label="Run" color={C.blue} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
-        {metricTiles.map((t, i) => (
-          <MetricTile
-            key={i}
+        {runTiles.map((t, i) => (
+          <MetricTile key={`run-${i}`}
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
-            weekAvg={t.weekAvg} weekTrend={t.weekTrend}
-            monthAvg={t.monthAvg} monthTrend={t.monthTrend}
-            color={t.color} sparkData={t.sparkData}
+            trendText={t.trendText} trendColor={t.trendColor}
+            avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor}
+            onTap={() => onOpenTab?.(t.tapTab)}
+          />
+        ))}
+      </div>
+
+      {/* ── STRENGTH ── */}
+      <CategoryLabel label="Strength" color={C.purple} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+        {strengthTiles.map((t, i) => (
+          <MetricTile key={`str-${i}`}
+            label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
+            trendText={t.trendText} trendColor={t.trendColor}
+            avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor}
+            onTap={() => onOpenTab?.(t.tapTab)}
+          />
+        ))}
+      </div>
+
+      {/* ── RECOVERY ── */}
+      <CategoryLabel label="Recovery" color={C.green} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+        {recoveryTiles.map((t, i) => (
+          <MetricTile key={`rec-${i}`}
+            label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
+            trendText={t.trendText} trendColor={t.trendColor}
+            avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor}
+            onTap={() => onOpenTab?.(t.tapTab)}
+          />
+        ))}
+      </div>
+
+      {/* ── BODY ── */}
+      <CategoryLabel label="Body" color={C.amber} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+        {bodyTiles.map((t, i) => (
+          <MetricTile key={`body-${i}`}
+            label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
+            trendText={t.trendText} trendColor={t.trendColor}
+            avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -1009,7 +1146,7 @@ function MobileHomeInner({
       <TodaysPlan items={planItems} onTap={() => onOpenTab?.('plan')} />
 
       {/* Core Summary */}
-      <div style={sectionHeader}>Body & Recovery <div style={shLine} /></div>
+      <div style={sectionHeader}>Core <div style={shLine} /></div>
       <CoreSummary
         hrv={avgHRV30?.toFixed(0)}
         rhr={latestRHR}
