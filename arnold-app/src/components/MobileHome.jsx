@@ -98,19 +98,21 @@ const Icon = {
       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
     </svg>
   ),
-  // Gas pump nozzle — Fuel
+  // Angled nozzle with hose — Fuel (Option C)
   GasPump: ({ color = T4, size = 19 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      {/* Pump body */}
-      <rect x="3" y="3" width="12" height="18" rx="2" />
-      {/* Gauge window */}
-      <rect x="5" y="5" width="8" height="6" rx="1" opacity="0.3" />
-      {/* Nozzle arm */}
-      <path d="M15 7h2a2 2 0 0 1 2 2v6a2 2 0 0 0 2 2v0" />
-      {/* Nozzle hook */}
-      <path d="M21 17v-2" />
-      {/* Hose drip */}
-      <circle cx="21" cy="19" r="0.8" fill={color} opacity="0.5" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {/* Spout tip */}
+      <path d="M16 4l3-1.5" strokeWidth="2" />
+      {/* Spout to handle */}
+      <path d="M10 8l6-4" strokeWidth="2" />
+      {/* Handle */}
+      <rect x="6" y="8" width="5" height="7" rx="1.5" strokeWidth="1.5" fill={color} fillOpacity="0.06" />
+      {/* Trigger */}
+      <path d="M6 12H4" strokeWidth="1.5" />
+      {/* Hose */}
+      <path d="M8.5 15c0 3-2 5-4 5.5" strokeWidth="2.5" />
+      {/* Drip from spout */}
+      <circle cx="18.5" cy="3.5" r="0.6" fill={color} opacity="0.6" />
     </svg>
   ),
   // Heartbeat pulse — Core
@@ -119,24 +121,20 @@ const Icon = {
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     </svg>
   ),
-  // Plumbing pipe — Labs (blood work)
+  // Cross pipe fitting — Labs (Option D)
   Pipe: ({ color = T4, size = 19 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      {/* Vertical pipe down */}
-      <path d="M8 2v6" />
-      <path d="M6 2h4" strokeWidth="2.2" />
-      {/* Elbow joint */}
-      <path d="M8 8a4 4 0 0 0 4 4h4" />
-      {/* Horizontal pipe right */}
-      <path d="M16 10v4" strokeWidth="2.2" />
-      {/* Down pipe */}
-      <path d="M16 14a4 4 0 0 1-4 4H8" />
-      <path d="M8 18v3" />
-      {/* Drip */}
-      <circle cx="8" cy="22.5" r="0.8" fill={color} opacity="0.6" />
-      {/* Joint rings */}
-      <circle cx="8" cy="8" r="1.2" fill={color} opacity="0.2" />
-      <circle cx="16" cy="12" r="1.2" fill={color} opacity="0.2" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      {/* Vertical pipe */}
+      <line x1="12" y1="2" x2="12" y2="22" />
+      {/* Horizontal pipe */}
+      <line x1="2" y1="12" x2="22" y2="12" />
+      {/* Flanges */}
+      <line x1="10" y1="2" x2="14" y2="2" strokeWidth="3" />
+      <line x1="10" y1="22" x2="14" y2="22" strokeWidth="3" />
+      <line x1="2" y1="10" x2="2" y2="14" strokeWidth="3" />
+      <line x1="22" y1="10" x2="22" y2="14" strokeWidth="3" />
+      {/* Center joint ring */}
+      <circle cx="12" cy="12" r="3" strokeWidth="1.5" fill={color} fillOpacity="0.1" />
     </svg>
   ),
   // Three dots — More
@@ -317,9 +315,9 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
             flex: 1, textAlign: 'center', position: 'relative',
             borderLeft: i > 0 ? `1px solid ${BORDER}` : 'none',
           }}>
-            <div style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{s.label}</div>
+            <div style={{ fontSize: 8, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{s.label}</div>
             <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
-              {s.value} <span style={{ fontSize: 8, color: T4 }}>{s.unit}</span>
+              {s.value} <span style={{ fontSize: 8, color: T3 }}>{s.unit}</span>
             </div>
           </div>
         ))}
@@ -339,8 +337,8 @@ function SleepInsight({ headline, detail }) {
         <Icon.Moon />
       </div>
       <div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: T2 }}>{headline}</div>
-        <div style={{ fontSize: 10, color: T3, marginTop: 1, lineHeight: 1.3 }}>{detail}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T1 }}>{headline}</div>
+        <div style={{ fontSize: 10, color: T2, marginTop: 1, lineHeight: 1.3 }}>{detail}</div>
       </div>
     </div>
   );
@@ -369,14 +367,45 @@ function MiniArcGauge({ pct, color }) {
 }
 
 // ─── CATEGORY LABEL ─────────────────────────────────────────────────────────
+const CAT_ICONS = {
+  Run: (color) => (
+    <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14" strokeWidth="2.5" />
+      <path d="M15 6l6 6-6 6" strokeWidth="2.5" />
+    </svg>
+  ),
+  Strength: (color) => (
+    <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 17l6-4 6 4" strokeWidth="2.5" />
+      <path d="M6 12l6-4 6 4" strokeWidth="2" opacity="0.5" />
+      <path d="M6 7l6-4 6 4" strokeWidth="1.8" opacity="0.25" />
+    </svg>
+  ),
+  Recovery: (color) => (
+    <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="8" width="14" height="9" rx="2" />
+      <path d="M18 10.5h1.5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H18" strokeWidth="2" />
+      <path d="M9 11v4" strokeWidth="2.2" />
+      <path d="M12 11v4" strokeWidth="2" opacity="0.45" />
+    </svg>
+  ),
+  Body: (color) => (
+    <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="5" r="3" />
+      <path d="M5 21v-2a7 7 0 0 1 14 0v2" />
+    </svg>
+  ),
+};
+
 function CategoryLabel({ label, color }) {
   return (
     <div style={{
-      fontSize: 8, fontWeight: 700, color: T3, textTransform: 'uppercase',
+      fontSize: 9, fontWeight: 700, color: T2, textTransform: 'uppercase',
       letterSpacing: '0.12em', padding: '3px 0 2px',
       display: 'flex', alignItems: 'center', gap: 5,
     }}>
       <div style={{ width: 5, height: 5, borderRadius: '50%', background: color }} />
+      {CAT_ICONS[label]?.(color)}
       {label}
     </div>
   );
@@ -882,8 +911,10 @@ function MobileHomeInner({
   const avg30Sleep = (() => {
     try {
       if (!sortedSleep || sortedSleep.length < 2) return '—';
-      const last30 = sortedSleep.slice(-30);
-      return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(0);
+      const last30 = sortedSleep.slice(-30).filter(v => typeof v === 'number' && !isNaN(v));
+      if (!last30.length) return '—';
+      const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
+      return isNaN(avg) ? '—' : avg.toFixed(0);
     } catch { return '—'; }
   })();
 
@@ -899,16 +930,20 @@ function MobileHomeInner({
   const avg30Weight = (() => {
     try {
       if (!sortedW || sortedW.length < 2) return '—';
-      const last30 = sortedW.slice(-30);
-      return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(1);
+      const last30 = sortedW.slice(-30).filter(v => typeof v === 'number' && !isNaN(v));
+      if (!last30.length) return '—';
+      const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
+      return isNaN(avg) ? '—' : avg.toFixed(1);
     } catch { return '—'; }
   })();
 
   const avg30HRV = (() => {
     try {
       if (!hrvData || hrvData.length < 2) return '—';
-      const last30 = hrvData.slice(-30);
-      return (last30.reduce((s, v) => s + v, 0) / last30.length).toFixed(0);
+      const last30 = hrvData.slice(-30).filter(v => typeof v === 'number' && !isNaN(v));
+      if (!last30.length) return '—';
+      const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
+      return isNaN(avg) ? '—' : avg.toFixed(0);
     } catch { return '—'; }
   })();
 
@@ -922,9 +957,10 @@ function MobileHomeInner({
 
   // ── Build category tiles (each has: label, todayVal, todayUnit, trendText, trendColor, avg30, gaugePct, tileColor, tapTab) ──
   const buildTile = (label, todayVal, todayUnit, trendInfo, avg30, gaugePct, tileColor, tapTab) => ({
-    label, todayVal, todayUnit,
+    label, todayVal: todayVal ?? '—', todayUnit,
     trendText: trendInfo?.text || '', trendColor: trendInfo?.color || T3,
-    avg30: avg30 || '—', gaugePct: isNaN(gaugePct) ? 0 : Math.max(0, Math.min(gaugePct, 1)),
+    avg30: (avg30 == null || avg30 === '—' || avg30 === '' || isNaN(Number(avg30))) ? '—' : avg30,
+    gaugePct: (isNaN(gaugePct) || !isFinite(gaugePct)) ? 0 : Math.max(0, Math.min(gaugePct, 1)),
     tileColor, tapTab,
   });
 
