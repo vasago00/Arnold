@@ -33,6 +33,8 @@ import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
 import { MobileHome, NAV_ITEMS, useSwipeNav, BottomNavBar } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
+import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
+import { startCloudSync } from "./core/cloud-sync.js";
 import { startAutoBackup } from "./core/backup.js";
 import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as getSupAdherence, getDailyNutrientTotals as getSupTotals } from "./core/supplements.js";
 import { AVATAR_LIBRARY } from "./core/avatars.js";
@@ -391,6 +393,9 @@ export default function App(){
           }
         });
       }
+      // Cloud sync: E2E-encrypted snapshot sync between desktop & mobile via
+      // Cloudflare Worker relay. No-op until the user pairs via CloudSyncPanel.
+      startCloudSync().catch(err=>console.warn('[cloud-sync] start failed:',err));
     });
   },[]);
 
@@ -4393,6 +4398,9 @@ function ProfileSettings({data,persist,showToast}){
 
         <div style={{height:1,background:C.b,margin:"8px 0"}}/>
         <SyncPanel showToast={showToast}/>
+
+        <div style={{height:1,background:C.b,margin:"8px 0"}}/>
+        <CloudSyncPanel/>
 
         <div style={{height:1,background:C.b,margin:"4px 0"}}/>
         <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Reset Arnold</div>

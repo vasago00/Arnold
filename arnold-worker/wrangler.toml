@@ -1,0 +1,20 @@
+# ─── Arnold Cloud Sync Worker — deploy config ───────────────────────────────
+# Fill in the two placeholders below with values from your Cloudflare account,
+# then: `wrangler deploy` to publish.
+
+name = "arnold-sync"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+# Your Cloudflare Account ID (from the dashboard sidebar on the Workers page).
+account_id = "ff8d8a5004c1efaea7f926ab927f393a"
+
+# KV namespace created via:  wrangler kv namespace create arnold-sync
+# Paste the `id` it printed below.
+[[kv_namespaces]]
+binding = "SYNC_KV"
+id = "b625325b778b4191a126585830ad2c5e"
+
+# The bearer token is set as a secret (never committed):
+#   wrangler secret put SYNC_TOKEN
+# Generate one with:  node -e "console.log(crypto.randomBytes(32).toString('hex'))"

@@ -12,6 +12,20 @@ import { validateArray } from './schemas.js';
 let _engine = null;
 export function attachEngine(engine) { _engine = engine; }
 
+// ─── Change listeners (Phase F: cloud-sync) ──────────────────────────────────
+// Any module that needs to react to local writes (e.g., cloud-sync.js) can
+// subscribe here. Listeners fire AFTER the write is persisted, with the full
+// storage key (e.g., 'arnold:garmin-hrv'). A guard flag lets cloud-sync
+// apply remote snapshots without re-triggering a push cycle.
+const _changeListeners = new Set();
+let _cloudApplying = false;
+export function onStorageChange(fn) { _changeListeners.add(fn); return () => _changeListeners.delete(fn); }
+export function setCloudApplying(v) { _cloudApplying = !!v; }
+function emitStorageChange(fullKey) {
+  if (_cloudApplying) return;
+  for (const fn of _changeListeners) { try { fn(fullKey); } catch { /* ignore */ } }
+}
+
 // ─── AES-256-GCM Encryption at Rest ─────────────────────────────────────────
 // Session-key approach: a random AES key is generated once per browser session
 // and stored in sessionStorage. When the tab/browser closes, the key is gone
@@ -276,13 +290,15 @@ function rawSet(fullKey, data) {
     encryptAndFlush(fullKey, data);
     // Also update engine if present
     if (_engine?.dbSet) { try { _engine.dbSet(fullKey, data); } catch {} }
+    emitStorageChange(fullKey);
     return true;
   }
   if (_engine?.dbSet) {
-    try { _engine.dbSet(fullKey, data); return true; } catch {}
+    try { _engine.dbSet(fullKey, data); emitStorageChange(fullKey); return true; } catch {}
   }
   try {
     localStorage.setItem(fullKey, JSON.stringify(data));
+    emitStorageChange(fullKey);
     return true;
   } catch (e) {
     console.error(`storage.set failed for ${fullKey}:`, e);
