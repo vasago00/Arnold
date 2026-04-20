@@ -13,7 +13,7 @@ import { parseRunPDF, parseWorkoutCSV, fetchWeatherForDate } from "./core/pdfPar
 import { parseGarminCSV, mergeGarminActivities } from "./core/garminParser.js";
 import { parseActivitiesCSV, mergeActivities } from "./core/parsers/activitiesParser.js";
 import { parseHRVCSV, mergeHRV } from "./core/parsers/hrvParser.js";
-import { parseSleepCSV, mergeSleep } from "./core/parsers/sleepParser.js";
+import { parseSleepCSV, mergeSleep, cleanSleepForAveraging } from "./core/parsers/sleepParser.js";
 import { parseWeightCSV, mergeWeight } from "./core/parsers/weightParser.js";
 import { detectCSVType } from "./core/parsers/detectType.js";
 import { fetchAndParseICS } from "./core/parsers/icsParser.js";
@@ -30,7 +30,7 @@ import { GoalsHub } from "./components/GoalsHub.jsx";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
-import { MobileHome, NAV_ITEMS, useSwipeNav, BottomNavBar } from "./components/MobileHome.jsx";
+import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
@@ -50,12 +50,72 @@ import { TrendBadge } from "./components/TrendBadge.jsx";
 import { MiniBar } from "./components/MiniBar.jsx";
 import { FocusCard } from "./components/FocusCard.jsx";
 import { NutritionInput as NutritionInputPanel } from "./components/NutritionInput.jsx";
+import { createEntry as createNutEntry, saveEntry as saveNutEntry, getEntriesForDate as getNutEntries, deleteEntry as deleteNutEntry, dailyTotals as nutDailyTotals } from "./core/nutrition.js";
+import { getSystemsReport } from "./core/healthSystems.js";
 import { DataSync } from "./components/DataSync.jsx";
 import { ArcDialSVG } from "./components/ArcDialSVG.jsx";
 import {
   weeklyLoad, loadTrend, paceTrend, hrEfficiency,
   trainingMonotony, raceReadiness, trainingConsistency, buildTrainingContext,
 } from "./core/trainingIntelligence.js";
+import {
+  computeRTSS, computeAcuteChronicRatio, computeTonnage, computeDensity,
+  computeHyroxDensity, matchTemplate, computeDailyScore,
+  computeRolling7d, computeRolling30d,
+} from "./core/trainingStress.js";
+
+// ─── Unified Activities: merge CSV imports + daily FIT uploads ───────────────
+// Single source of truth — used everywhere that needs activity data.
+function getUnifiedActivities() {
+  const csvActs = (storage.get('activities') || [])
+    .filter(a => a.source !== 'health_connect'); // exclude HC ghost data
+  const dailyLogs = storage.get('dailyLogs') || [];
+
+  // Normalize activity type to a canonical category for dedup
+  const canon = (s) => {
+    if (!s) return 'workout';
+    const l = s.toLowerCase();
+    if (/run/i.test(l)) return 'run';
+    if (/strength|weight|gym/i.test(l)) return 'strength';
+    if (/hyrox|circuit/i.test(l)) return 'hyrox';
+    if (/walk/i.test(l)) return 'walk';
+    if (/cycle|bike|cycling/i.test(l)) return 'cycling';
+    if (/swim/i.test(l)) return 'swim';
+    return l;
+  };
+
+  // Build a set of date|canonType from CSV so FIT dupes are skipped
+  const csvByDateType = new Set();
+  for (const a of csvActs) {
+    csvByDateType.add(`${a.date}|${canon(a.activityType || a.title)}`);
+  }
+
+  // Start with all CSV activities keyed by date|title
+  const byKey = new Map(csvActs.map(a => [`${a.date}|${a.title || a.activityType || ''}`, a]));
+  for (const log of dailyLogs) {
+    const fd = log.fitData;
+    if (!fd || !log.date) continue;
+    const type = fd.activityType || fd.type || 'workout';
+    // Skip if CSV already has an activity of the same canonical type on this date
+    if (csvByDateType.has(`${log.date}|${canon(type)}`)) continue;
+    const key = `${log.date}|${type}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, {
+      date: log.date,
+      activityType: type,
+      distanceMi: fd.distanceMi || null,
+      distanceKm: fd.distanceKm || null,
+      durationSecs: fd.durationMins ? fd.durationMins * 60 : (fd.durationSecs || null),
+      durationFormatted: fd.duration || null,
+      avgPaceRaw: fd.avgPacePerMi || fd.avgPaceRaw || null,
+      avgHR: fd.avgHR || null,
+      maxHR: fd.maxHR || null,
+      calories: fd.calories || null,
+      source: 'fit-daily',
+    });
+  }
+  return [...byKey.values()].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 const SK = "vitals-v4";
@@ -138,11 +198,13 @@ const BM={
   "Creatine kinase (U/L)":{cat:"Inflammation",opt:[30,200],warn:[200,400],unit:"U/L",dir:"low",lbl:"CK"},
   "TIBC (ug/dL)":{cat:"Nutrients",opt:[250,400],warn:[220,250],unit:"µg/dL",dir:"mid",lbl:"TIBC"},
   "Transferrin saturation (%)":{cat:"Nutrients",opt:[20,45],warn:[15,20],unit:"%",dir:"mid",lbl:"Trans Sat"},
-  "Creatine kinase (U/L)":{cat:"Blood",opt:[40,300],warn:[300,500],unit:"U/L",dir:"mid",lbl:"CK"},
+  "RBC (x10E6/µL)":{cat:"Blood",opt:[4.5,5.5],warn:[4.0,4.5],unit:"M/µL",dir:"mid",lbl:"RBC"},
+  "eGFR (mL/min)":{cat:"Kidney",opt:[90,120],warn:[60,90],unit:"mL/min",dir:"high",lbl:"eGFR"},
+  "Creatinine (mg/dL)":{cat:"Kidney",opt:[0.7,1.2],warn:[1.2,1.4],unit:"mg/dL",dir:"low",lbl:"Creatinine"},
 };
-const BCATS=["Metabolic","Lipids","Inflammation","Hormones","Nutrients","Liver","Blood"];
-const BCAT_CLR={Metabolic:"#60a5fa",Lipids:"#f59e0b",Inflammation:"#f87171",Hormones:"#a78bfa",Nutrients:"#4ade80",Liver:"#fb923c",Blood:"#e879f9"};
-const BCAT_ICO={Metabolic:"◈",Lipids:"◉",Inflammation:"⚡",Hormones:"∿",Nutrients:"◆",Liver:"⊕",Blood:"○"};
+const BCATS=["Metabolic","Lipids","Inflammation","Hormones","Nutrients","Liver","Blood","Electrolytes","Kidney"];
+const BCAT_CLR={Metabolic:"#60a5fa",Lipids:"#f59e0b",Inflammation:"#f87171",Hormones:"#a78bfa",Nutrients:"#4ade80",Liver:"#fb923c",Blood:"#e879f9",Electrolytes:"#38bdf8",Kidney:"#94a3b8"};
+const BCAT_ICO={Metabolic:"◈",Lipids:"◉",Inflammation:"⚡",Hormones:"∿",Nutrients:"◆",Liver:"⊕",Blood:"○",Electrolytes:"⚛",Kidney:"◎"};
 
 function bStatus(name,val){
   const m=BM[name]; if(!m||val==null)return"unknown";
@@ -330,7 +392,13 @@ export default function App(){
   const handleMobileNav=(item)=>{
     const tabMap={edgeiq:'weekly',play:'activity',fuel:'nutrition_mobile',core:'clinical',labs:'labs'};
     if(item.id==='more'){setMobileMoreOpen(true);return;}
-    if(tabMap[item.id]){setTab(tabMap[item.id]);return;}
+    if(tabMap[item.id]){
+      // Track which mobile nav triggered this tab so Dashboard can decide
+      // whether to render MobileHome (start) or the full EdgeIQ layout
+      setMobileInitView(item.id==='edgeiq'?'edgeiq':'start');
+      setTab(tabMap[item.id]);
+      return;
+    }
     // start, sync → go back to MobileHome
     setMobileInitView(item.id==='start'?'start':item.id);
     setTab('training');
@@ -421,7 +489,7 @@ export default function App(){
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
       </nav>
       <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{})}} className="arnold-main" {...(isMobileApp&&!mobileHomeActive?mobileSwipe:{})}>
-        {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} onAiSum={async()=>{
+        {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} mobileInitView={mobileInitView} onAiSum={async()=>{
           if(aiSummLoad)return;
           setAiSummLoad(true);setAiSummStream("");
           try{
@@ -433,9 +501,9 @@ export default function App(){
         {tab==="labs"&&<div className="arnold-tab-panel"><LabsModule data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="clinical"&&<div className="arnold-tab-panel"><ClinicalModule data={data} persist={persist} showToast={showToast}/></div>}
         {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('start')}/></div>}
-        {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast}/></div>}
-        {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity"/></div>}
-        {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition"/></div>}
+        {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} setTab={setTab}/></div>}
+        {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></div>}
+        {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></div>}
         {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
         {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
@@ -454,7 +522,7 @@ export default function App(){
           <div style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(16,18,24,0.98)',borderRadius:'20px 20px 0 0',padding:'20px 16px env(safe-area-inset-bottom, 16px)',animation:'mobileSheetUp 0.25s ease-out'}} onClick={e=>e.stopPropagation()}>
             <div style={{width:36,height:4,borderRadius:2,background:'rgba(255,255,255,0.15)',margin:'0 auto 16px'}}/>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              {[{label:'Goals',tab:'goals'},{label:'Planner',tab:'goals'},{label:'Races',tab:'races'},{label:'Stack',tab:'supplements'},{label:'Sync',id:'sync'},{label:'Labs',tab:'labs'}].map(m=>(
+              {[{label:'Goals',tab:'goals'},{label:'Races',tab:'races'},{label:'Stack',tab:'supplements'},{label:'Cloud Sync',tab:'settings'},{label:'Profile',tab:'settings'}].map(m=>(
                 <button key={m.label} onClick={()=>{setMobileMoreOpen(false);if(m.id==='sync'){setMobileInitView('sync');setTab('training');}else{setTab(m.tab);}}} style={{padding:'14px 12px',borderRadius:12,background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0',fontSize:13,fontWeight:500,cursor:'pointer',textAlign:'center'}}>
                   {m.label}
                 </button>
@@ -687,6 +755,19 @@ function LabsModule({data,persist,showToast}){
   const [aiTxt,setAiTxt]=useState("");
   const [aiRun,setAiRun]=useState(false);
   const fileRef=useRef();
+  // Swipe between blood categories (contained — doesn't bubble to outer tab swipe)
+  const catSwipeRef=useRef({x:0,y:0});
+  const onCatTouchStart=e=>{catSwipeRef.current={x:e.touches[0].clientX,y:e.touches[0].clientY};};
+  const onCatTouchEnd=e=>{
+    const dx=e.changedTouches[0].clientX-catSwipeRef.current.x;
+    const dy=e.changedTouches[0].clientY-catSwipeRef.current.y;
+    if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.4){
+      e.stopPropagation();
+      const idx=BCATS.indexOf(selCat);
+      if(dx<0&&idx<BCATS.length-1)setSelCat(BCATS[idx+1]);
+      if(dx>0&&idx>0)setSelCat(BCATS[idx-1]);
+    }
+  };
 
   const snaps=[...(data.labSnapshots||[])].sort((a,b)=>b.date.localeCompare(a.date));
   const latest=snaps[0]; const prev=snaps[1];
@@ -748,7 +829,7 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
               </button>
             ))}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0, 1fr))",gap:7}}>
+          <div onTouchStart={onCatTouchStart} onTouchEnd={onCatTouchEnd} style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0, 1fr))",gap:7,touchAction:"pan-y"}}>
             {Object.entries(BM).filter(([,m])=>m.cat===selCat).map(([name,meta])=>{
               const val=latest.markers[name];
               const pv=prev?.markers[name];
@@ -772,6 +853,10 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
                 </div>
               );
             })}
+          </div>
+          {/* Swipe hint */}
+          <div style={{display:"flex",justifyContent:"center",gap:4,padding:"6px 0"}}>
+            {BCATS.map((cat,i)=><div key={cat} style={{width:selCat===cat?16:5,height:5,borderRadius:3,background:selCat===cat?BCAT_CLR[cat]:'rgba(255,255,255,0.12)',transition:'all 0.2s'}}/>)}
           </div>
           <button style={S.aib} onClick={runAI} disabled={aiRun}><span>✦</span>{aiRun?"Analysing…":"AI Blood Panel Analysis"}</button>
           {aiTxt&&!aiRun&&<div style={S.air}><div style={S.aih}>✦ Blood Panel Analysis · {latest.date}</div><div style={S.ait}>{aiTxt}</div></div>}
@@ -906,19 +991,19 @@ function PrinciplesPanel({data}){
 // ═══════════════════════════════════════════════════════════════════════════════
 function HomeCockpit({data,setTab}){
   const profile={...(storage.get('profile')||{}),...getGoals()};
-  const activities=storage.get('activities')||[];
+  const activities=getUnifiedActivities();
   const cronometer=storage.get('cronometer')||[];
   const weightData=storage.get('weight')||[];
   const hrvData=storage.get('hrv')||[];
-  const sleepData=storage.get('sleep')||[];
-  const dailyLogs=storage.get('daily-logs')||[];
+  const sleepData=cleanSleepForAveraging(storage.get('sleep')||[]);
+  const dailyLogs=storage.get('dailyLogs')||[];
 
   // ── Date helpers ──
   const today=new Date();
   const yearStart=new Date(today.getFullYear(),0,1);
   const daysInYear=Math.floor((today-yearStart)/86400000)||1;
   const weeksElapsed=Math.max(daysInYear/7,1);
-  const todayStr=today.toISOString().slice(0,10);
+  const todayStr=td();
 
   // ── YTD activity ──
   const ytdActs=activities.filter(a=>a.date&&new Date(a.date)>=yearStart);
@@ -950,14 +1035,26 @@ function HomeCockpit({data,setTab}){
   const d7=new Date();d7.setDate(today.getDate()-7);
   const recentHRV=hrvData.filter(h=>new Date(h.date)>=d7);
   const recentSleep=sleepData.filter(s=>new Date(s.date)>=d7);
-  const avgHRV7=recentHRV.length?Math.round(recentHRV.reduce((s,h)=>s+(h.overnightHRV||0),0)/recentHRV.length):null;
-  const avgSleepMins7=recentSleep.length?Math.round(recentSleep.reduce((s,sl)=>s+(sl.durationMinutes||0),0)/recentSleep.length):null;
-  const latestSleepScore=recentSleep.length?Math.round(recentSleep.reduce((s,sl)=>s+(sl.sleepScore||0),0)/recentSleep.length):null;
-  const latestRHR=(()=>{const sorted=[...recentSleep].sort((a,b)=>(b.date||'').localeCompare(a.date||''));return sorted[0]?.restingHR||null;})();
+  const recentHRVValid=recentHRV.filter(h=>h.overnightHRV);
+  const avgHRV7=recentHRVValid.length?Math.round(recentHRVValid.reduce((s,h)=>s+h.overnightHRV,0)/recentHRVValid.length):null;
+  const recentSleepDur=recentSleep.filter(s=>s.durationMinutes);
+  const avgSleepMins7=recentSleepDur.length?Math.round(recentSleepDur.reduce((s,sl)=>s+sl.durationMinutes,0)/recentSleepDur.length):null;
+  // latestSleepScore = most recent non-null score (capped at 100), not an average
+  const sortedSleepAll=[...sleepData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const latestSleepScore=(()=>{const s=sortedSleepAll.find(s=>s.sleepScore!=null);return s?Math.min(s.sleepScore,100):null;})();
+  const latestRHR=sortedSleepAll[0]?.restingHR||null;
 
-  // ── 30-day nutrition ──
-  const d30=new Date();d30.setDate(today.getDate()-30);
-  const recentNut=cronometer.filter(n=>new Date(n.date)>=d30);
+  // ── 30-day nutrition (merged: cronometer CSV + manual nutritionLog) ──
+  const recentNut=(()=>{
+    const days=[];
+    for(let i=0;i<30;i++){
+      const d=new Date();d.setDate(today.getDate()-i);
+      const ds=d.toISOString().slice(0,10);
+      const t=nutDailyTotals(ds);
+      if(t.calories>0||t.protein>0) days.push({date:ds,...t});
+    }
+    return days;
+  })();
   const avgCalories=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.calories||0),0)/recentNut.length):null;
   const avgProtein=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.protein||0),0)/recentNut.length):null;
 
@@ -1219,7 +1316,7 @@ function HomeCockpit({data,setTab}){
 // ═══════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
-function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
+function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobileInitView}){
   // ── Mobile detection ──
   const [isDashMobile,setIsDashMobile]=useState(()=>window.innerWidth<=600);
   useEffect(()=>{const mq=window.matchMedia('(max-width: 600px)');const h=e=>setIsDashMobile(e.matches);mq.addEventListener('change',h);return()=>mq.removeEventListener('change',h);},[]);
@@ -1237,7 +1334,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
 
   // ── Load data ──
   const profile={...(storage.get('profile')||{}),...getGoals()};
-  const activities=storage.get('activities')||[];
+  const activities=getUnifiedActivities();
   const nutrition=storage.get('cronometer')||[];
   const weightData=storage.get('weight')||[];
   const sleepData=storage.get('sleep')||[];
@@ -1255,7 +1352,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
       const name=file.name;
       try{
         const txt=await readText(file);
-        const type=detectCSVType(name,txt);
+        const type=detectCSVType(txt,name);
         if(type==='activities'){
           const parsed=parseActivitiesCSV(txt);
           const existing=storage.get('activities')||[];
@@ -1280,6 +1377,27 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
           const {merged}=mergeWeight(existing,parsed);
           storage.set('weight',merged);
           status[name]={ok:true,count:parsed.length,type:'Weight'};
+        }else if(type==='resting_hr'){
+          // Standalone Resting Heart Rate CSV — merge into sleep store
+          const lines=txt.replace(/^\uFEFF/,'').trim().split(/\r?\n/).slice(1);
+          const parsed=[];
+          for(const line of lines){
+            const [rawDate,rawHR]=line.split(',');
+            if(!rawDate||!rawHR) continue;
+            const dm=rawDate.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+            const date=dm?`${dm[3]}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`:null;
+            const hr=parseInt(rawHR.trim(),10);
+            if(date&&hr>0&&hr<=200) parsed.push({date,restingHR:hr});
+          }
+          const existing=storage.get('sleep')||[];
+          const byDate=new Map(existing.map(r=>[r.date,r]));
+          for(const r of parsed){
+            const prev=byDate.get(r.date);
+            if(prev) byDate.set(r.date,{...prev,restingHR:r.restingHR});
+            else byDate.set(r.date,{date:r.date,restingHR:r.restingHR,source:'resting_hr_csv'});
+          }
+          storage.set('sleep',[...byDate.values()].sort((a,b)=>b.date.localeCompare(a.date)));
+          status[name]={ok:true,count:parsed.length,type:'Resting HR'};
         }else if(type==='cronometer'){
           const parsed=parseCronometerCSV(txt);
           const existing=storage.get('cronometer')||[];
@@ -1300,6 +1418,11 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
       setTimeout(()=>window.location.reload(),1500);
     }
   };
+
+  // ── Mobile: render standalone MobileEdgeIQ for the EdgeIQ tab ──
+  if(isDashMobile){
+    return <MobileEdgeIQ data={data} onOpenTab={setTab} />;
+  }
 
   // ── This/last week activities ──
   const thisWeekActs=activities.filter(a=>inWk(a.date,monday,now));
@@ -1647,9 +1770,241 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast}){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TRAINING STRESS PANEL (replaces 7-day trends + Recovery)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ZONE_COLORS = {
+  optimal:       '#4ade80',
+  undertraining: '#60a5fa',
+  overreaching:  '#fbbf24',
+  danger:        '#f87171',
+  no_data:       'var(--text-muted)',
+};
+const ZONE_LABELS = {
+  optimal:       'Optimal',
+  undertraining: 'Under-training',
+  overreaching:  'Over-reaching',
+  danger:        'Danger',
+  no_data:       'No data',
+};
+
+function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, ts, saveStatus, handleSave, S }) {
+  // ── Rolling scores ──
+  const rolling7 = useMemo(() => computeRolling7d(todayStr), [todayStr]);
+  const rolling30 = useMemo(() => computeRolling30d(todayStr), [todayStr]);
+  const daily = rolling7.todayScore || { score: 0, sessionType: 'rest', sessionMetric: null, domains: {}, factors: [] };
+
+  // ── Per-session detail metrics (run / strength / hyrox) ──
+  const ftpPace = profile?.functionalThresholdPace || '8:30';
+  const bodyweight = parseFloat(profile?.targetWeight) || parseFloat(profile?.weight) || 175;
+
+  const activities = useMemo(() => {
+    const csvActs = (storage.get('activities') || []).filter(a => a.source !== 'health_connect');
+    const dailyLogs = storage.get('dailyLogs') || [];
+    const fitActs = dailyLogs.filter(l => l.fitData).map(l => ({ ...l.fitData, date: l.date, source: 'daily_fit' }));
+    return [...csvActs, ...fitActs];
+  }, [todayStr]);
+  const todayActs = useMemo(() => activities.filter(a => a.date === todayStr), [activities, todayStr]);
+
+  const runMetrics = useMemo(() => {
+    const runs = todayActs.filter(a => /run/i.test(a.activityType || ''));
+    if (!runs.length) return null;
+    const best = runs.reduce((b, r) => (r.durationSecs || 0) > (b.durationSecs || 0) ? r : b, runs[0]);
+    return computeRTSS({ durationSecs: best.durationSecs, avgPaceRaw: best.avgPaceRaw, avgHR: best.avgHeartRate || best.avgHR, ftpPace });
+  }, [todayActs, ftpPace]);
+
+  const strengthMetrics = useMemo(() => {
+    const str = todayActs.filter(a => /strength|weight|gym|hyrox|circuit/i.test(a.activityType || a.activityName || ''));
+    if (!str.length) return null;
+    const templates = storage.get('strengthTemplates') || [];
+    const act = str[0];
+    const tpl = matchTemplate(act, templates);
+    if (!tpl) return { type: 'no_template', duration: act.durationSecs };
+    if (tpl.type === 'hyrox') return { type: 'hyrox', ...computeHyroxDensity(tpl, act.durationSecs, bodyweight), template: tpl };
+    const ton = computeTonnage(tpl, null, bodyweight);
+    return { type: 'strength', ...ton, density: computeDensity(ton.totalTonnage, act.durationSecs), durationSecs: act.durationSecs, template: tpl };
+  }, [todayActs, bodyweight]);
+
+  const acr = useMemo(() => computeAcuteChronicRatio(activities, todayStr, ftpPace), [activities, todayStr, ftpPace]);
+
+  const hasRun = daily.sessionType === 'run' || daily.sessionType === 'mixed';
+  const hasStrength = daily.sessionType === 'strength' || daily.sessionType === 'hyrox' || daily.sessionType === 'mixed';
+
+  // ── Styles ──
+  const pillStyle = (status) => ({
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '3px 8px', borderRadius: 20, fontSize: 10, fontWeight: 500,
+    background: status === 'good' ? 'rgba(74,222,128,0.12)' : status === 'warning' ? 'rgba(251,191,36,0.12)' : status === 'poor' ? 'rgba(248,113,113,0.12)' : 'rgba(255,255,255,0.06)',
+    color: status === 'good' ? '#4ade80' : status === 'warning' ? '#fbbf24' : status === 'poor' ? '#f87171' : 'var(--text-muted)',
+  });
+  const metricBox = { background: 'var(--bg-elevated)', borderRadius: 6, padding: '8px 10px', textAlign: 'center' };
+  const metricVal = { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' };
+  const metricLbl = { fontSize: 8, color: 'var(--text-muted)', marginTop: 2 };
+
+  // ── Dynamic title ──
+  const scoreSuffix = daily.sessionMetric
+    ? ` (${daily.sessionMetric.label} ${daily.sessionMetric.value})`
+    : '';
+
+  const scoreColor = (s) => s >= 70 ? '#4ade80' : s >= 45 ? '#fbbf24' : '#f87171';
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
+
+      {/* ── Score + Training Detail ── */}
+      <div style={panelStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Score{scoreSuffix}</span>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{todayStr}</span>
+        </div>
+
+        {/* ── Dual rings + domain breakdown + factor pills ── */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+          {/* Moon ring — 30-day average */}
+          <div style={{ position: 'relative', width: 38, height: 38, flexShrink: 0 }}>
+            <svg width="38" height="38" viewBox="0 0 38 38">
+              <circle cx="19" cy="19" r="15" fill="none" stroke="var(--bg-elevated)" strokeWidth="3.5" />
+              <circle cx="19" cy="19" r="15" fill="none"
+                stroke={scoreColor(rolling30.score)}
+                strokeWidth="3.5" strokeLinecap="round"
+                strokeDasharray={`${(rolling30.score / 100) * 94.2} 94.2`}
+                transform="rotate(-90 19 19)" />
+            </svg>
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{rolling30.score}</span>
+              <span style={{ fontSize: 6, color: 'var(--text-muted)' }}>30d</span>
+            </div>
+          </div>
+
+          {/* Main ring — 7-day weighted */}
+          <div style={{ position: 'relative', width: 56, height: 56, flexShrink: 0 }}>
+            <svg width="56" height="56" viewBox="0 0 56 56">
+              <circle cx="28" cy="28" r="24" fill="none" stroke="var(--bg-elevated)" strokeWidth="5" />
+              <circle cx="28" cy="28" r="24" fill="none"
+                stroke={scoreColor(rolling7.score)}
+                strokeWidth="5" strokeLinecap="round"
+                strokeDasharray={`${(rolling7.score / 100) * 150.8} 150.8`}
+                transform="rotate(-90 28 28)" />
+            </svg>
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{rolling7.score}</span>
+              <span style={{ fontSize: 7, color: 'var(--text-muted)' }}>7d</span>
+            </div>
+          </div>
+
+          <div style={{ flex: 1 }}>
+            {/* Domain sub-scores (today) */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 6 }}>
+              {[['Activity', daily.domains?.activity], ['Nutrition', daily.domains?.nutrition], ['Body', daily.domains?.body]].map(([lbl, val]) => (
+                val != null && <div key={lbl} style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                  <span style={{ color: scoreColor(val), fontWeight: 600 }}>{val}</span> {lbl}
+                </div>
+              ))}
+            </div>
+            {/* Factor pills */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {(daily.factors || []).map((f, i) => (
+                <span key={i} style={pillStyle(f.status)}>
+                  {f.label}: {f.value}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Run detail metrics ── */}
+        {hasRun && runMetrics && runMetrics.rTSS && (
+          <>
+            <div style={{ fontSize: 10, fontWeight: 500, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Run</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginBottom: 12 }}>
+              <div style={metricBox}><div style={metricVal}>{runMetrics.rTSS}</div><div style={metricLbl}>rTSS</div></div>
+              <div style={metricBox}><div style={metricVal}>{runMetrics.ngpPace || '--'}</div><div style={metricLbl}>NGP</div></div>
+              <div style={metricBox}><div style={metricVal}>{runMetrics.intensityFactor ?? '--'}</div><div style={metricLbl}>IF</div></div>
+              <div style={metricBox}><div style={metricVal}>{runMetrics.efficiencyFactor ?? '--'}</div><div style={metricLbl}>EF</div></div>
+            </div>
+          </>
+        )}
+
+        {/* ── Strength / Hyrox detail metrics ── */}
+        {hasStrength && strengthMetrics && strengthMetrics.type !== 'no_template' && (
+          <>
+            <div style={{ fontSize: 10, fontWeight: 500, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {strengthMetrics.type === 'hyrox' ? 'Hyrox' : 'Strength'}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 12 }}>
+              <div style={metricBox}>
+                <div style={metricVal}>{(strengthMetrics.totalTonnage || strengthMetrics.tonnage || 0).toLocaleString()}</div>
+                <div style={metricLbl}>Tonnage (lbs)</div>
+              </div>
+              <div style={metricBox}>
+                <div style={metricVal}>{strengthMetrics.density ?? '--'}</div>
+                <div style={metricLbl}>Density (lbs/min)</div>
+              </div>
+              <div style={metricBox}>
+                <div style={metricVal}>{strengthMetrics.durationMin ? `${strengthMetrics.durationMin}` : strengthMetrics.durationSecs ? `${Math.round(strengthMetrics.durationSecs / 60)}` : '--'}</div>
+                <div style={metricLbl}>Duration (min)</div>
+              </div>
+            </div>
+            {strengthMetrics.exercises?.length > 0 && (
+              <div style={{ fontSize: 9, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                {strengthMetrics.exercises.map((ex, i) => (
+                  <span key={i}>{ex.name} {ex.tonnage.toLocaleString()}lbs{i < strengthMetrics.exercises.length - 1 ? ' · ' : ''}</span>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {hasStrength && strengthMetrics && strengthMetrics.type === 'no_template' && (
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', padding: '8px 0' }}>
+            Strength session detected ({strengthMetrics.duration ? `${Math.round(strengthMetrics.duration / 60)} min` : '--'}). Upload a template to see tonnage breakdown.
+          </div>
+        )}
+
+        {/* ── A:C load ratio bar ── */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: hasRun || hasStrength ? 8 : 0, padding: '8px 10px', background: 'var(--bg-elevated)', borderRadius: 6 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>Acute:Chronic Load</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span style={{ fontSize: 16, fontWeight: 600, color: ZONE_COLORS[acr.zone] }}>{acr.ratio ?? '--'}</span>
+              <span style={{ fontSize: 9, color: ZONE_COLORS[acr.zone] }}>{ZONE_LABELS[acr.zone]}</span>
+            </div>
+          </div>
+          <div style={{ textAlign: 'right', fontSize: 9, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            <div>7d: {acr.acuteLoad} TSS</div>
+            <div>28d avg: {acr.chronicLoad} TSS/wk</div>
+          </div>
+        </div>
+
+        {daily.sessionType === 'rest' && (
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '12px 0 4px', textAlign: 'center' }}>
+            No activity logged today — rest day or upload pending
+          </div>
+        )}
+      </div>
+
+      {/* ── Notes ── */}
+      <div style={panelStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Notes</span>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{ts}</span>
+        </div>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)}
+          placeholder="How did today feel? Energy, mood, reflection..."
+          style={{ ...S.ta, minHeight: 70, marginBottom: 8 }} />
+        <button style={{ ...S.sb, padding: '10px 14px', width: '100%' }} onClick={handleSave}>
+          {saveStatus === 'saved' ? '\u2713 Saved' : 'Save daily entry'}
+        </button>
+      </div>
+
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // LOG TODAY + WORKOUT LOG
 // ═══════════════════════════════════════════════════════════════════════════════
-function LogDay({data,persist,showToast,mobileView}){
+function LogDay({data,persist,showToast,mobileView,setTab}){
   const ts=td(),ex=data.logs.find(l=>l.date===ts);
   const[notes,setNotes]=useState(ex?.notes||"");
   const[todayFIT,setTodayFIT]=useState(null);
@@ -1658,6 +2013,7 @@ function LogDay({data,persist,showToast,mobileView}){
   const[nutFilename,setNutFilename]=useState(null);
   const[fitError,setFitError]=useState(null);
   const[nutError,setNutError]=useState(null);
+  const[nutUploadKey,setNutUploadKey]=useState(0);
   const[saveStatus,setSaveStatus]=useState(null);
   const[todayLoaded,setTodayLoaded]=useState(false);
   const fitRef=useRef();
@@ -1736,8 +2092,40 @@ function LogDay({data,persist,showToast,mobileView}){
       const text=await file.text();
       const parsed=parseTodayNutrition(text);
       if(!parsed)throw new Error('No nutrition data found');
+
+      // ── Bridge Cronometer CSV into the nutritionLog so NutritionInput picks it up.
+      // Remove any previous cronometer-sourced entries for this date, then insert fresh.
+      const dateStr=parsed.date||todayStr;
+      const existing=getNutEntries(dateStr);
+      existing.filter(e=>e.source==='cronometer').forEach(e=>deleteNutEntry(e.id));
+
+      const entry=createNutEntry({
+        name:'Cronometer Daily Summary',
+        date:dateStr,
+        meal:'full-day',
+        source:'cronometer',
+        servings:1,
+        macros:{
+          calories:parsed.calories||0,
+          protein:parsed.protein||0,
+          carbs:parsed.carbs||0,
+          fat:parsed.fat||0,
+          fiber:parsed.fiber||0,
+          sugar:parsed.sugar||0,
+          water:(parsed.water||0)*1000, // stored as ml in nutritionLog
+        },
+      });
+      saveNutEntry(entry);
+
+      // Also write to legacy 'cronometer' storage key (for 7-day trends, weekly tab, etc.)
+      const cronoAll=storage.get('cronometer')||[];
+      const cronoFiltered=cronoAll.filter(c=>c.date!==dateStr);
+      cronoFiltered.unshift({...parsed,date:dateStr,source:'cronometer-daily'});
+      storage.set('cronometer',cronoFiltered.slice(0,365),{skipValidation:true});
+
       setTodayNutrition(parsed);
       setNutFilename(file.name);
+      setNutUploadKey(k=>k+1); // force NutritionInput to re-read from storage
       showToast(`✓ Nutrition parsed — ${parsed.calories} kcal`);
     }catch(e){setNutError(`Could not read CSV: ${e.message}`);}
   };
@@ -1832,7 +2220,7 @@ function LogDay({data,persist,showToast,mobileView}){
   };
 
   // ── Replenishment Tracker: micro-goals from activity needs engine ──
-  const ReplenishTracker=({fd,dateStr})=>{
+  const ReplenishTracker=({fd,dateStr,onGoToFuel})=>{
     const needs=computeActivityNeeds(fd,profile);
     if(!needs)return null;
     const progress=trackReplenishment(needs,dateStr);
@@ -1841,6 +2229,10 @@ function LogDay({data,persist,showToast,mobileView}){
     const phaseOrder=['pre_workout','during_workout','post_workout'];
     const phaseLabels={pre_workout:'Pre-Workout',during_workout:'During Workout',post_workout:'Post-Workout'};
     const phaseColors={pre_workout:'#fbbf24',during_workout:'#60a5fa',post_workout:'#4ade80'};
+    const unmet=progress.filter(g=>!g.met);
+    // Activity context line
+    const dMins=needs.durationSecs?Math.round(needs.durationSecs/60):null;
+    const actType=fd.isRun?'run':fd.isStrength?'strength session':fd.activityType||'workout';
     return<>
       <div style={divider}/>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
@@ -1852,7 +2244,9 @@ function LogDay({data,persist,showToast,mobileView}){
         }}>{summary.met}/{summary.total} met {'\u00b7'} {summary.pct}%</div>
       </div>
       <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:8,marginTop:4}}>
-        Burned <span style={{fontWeight:600,color:'var(--text-primary)'}}>{needs.caloriesBurned} kcal</span> {'\u2014'} replenish with targeted pre/during/post meals
+        <span style={{fontWeight:500,color:fd.isRun?'#60a5fa':fd.isStrength?'#a78bfa':'var(--text-primary)',textTransform:'capitalize'}}>{actType}</span>
+        {dMins!=null&&<span> {'\u00b7'} {dMins} min</span>}
+        {' \u2014 '}burned <span style={{fontWeight:600,color:'var(--text-primary)'}}>{needs.caloriesBurned} kcal</span>
       </div>
       {phaseOrder.map(phase=>{
         const items=progress.filter(g=>g.phase===phase);
@@ -1863,7 +2257,9 @@ function LogDay({data,persist,showToast,mobileView}){
             {phaseLabels[phase]}
           </div>
           {items.map(g=>(
-            <div key={g.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+            <div key={g.id} onClick={()=>!g.met&&onGoToFuel?.()} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4,cursor:g.met?'default':'pointer',borderRadius:6,padding:'2px 0',transition:'background 0.15s'}}
+              onMouseEnter={e=>{if(!g.met)e.currentTarget.style.background='rgba(255,255,255,0.04)';}}
+              onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
               <div style={{
                 width:16,height:16,borderRadius:4,flexShrink:0,
                 display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,
@@ -1882,16 +2278,22 @@ function LogDay({data,persist,showToast,mobileView}){
               <div style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,minWidth:44,textAlign:'right'}}>
                 {g.consumed}/{g.target}{g.unit==='ml'?'ml':'g'}
               </div>
+              {!g.met&&onGoToFuel&&<div style={{fontSize:8,color:'#60a5fa',flexShrink:0,opacity:0.7}}>Log {'\u2192'}</div>}
             </div>
           ))}
         </div>;
       })}
+      {unmet.length>0&&onGoToFuel&&<div style={{textAlign:'center',marginTop:4}}>
+        <button onClick={onGoToFuel} style={{fontSize:10,fontWeight:600,color:'#60a5fa',background:'rgba(96,165,250,0.08)',border:'1px solid rgba(96,165,250,0.15)',borderRadius:8,padding:'6px 16px',cursor:'pointer'}}>
+          Log recovery meal in Fuel {'\u2192'}
+        </button>
+      </div>}
     </>;
   };
 
   const todayStr=td();
   const fitData=(todayFIT&&(!todayFIT.date||todayFIT.date===todayStr))?todayFIT:(()=>{
-    const acts=storage.get('activities')||[];
+    const acts=getUnifiedActivities();
     const row=acts.find(a=>a.date===todayStr);
     if(!row)return null;
     const isRun=/running|trail/i.test(row.activityType||'');
@@ -1922,7 +2324,7 @@ function LogDay({data,persist,showToast,mobileView}){
 
   // Weekly miles for "Vs Goal"
   const weeklyMiles=(()=>{
-    const acts=storage.get('activities')||[];
+    const acts=getUnifiedActivities();
     const monday=new Date();
     monday.setDate(monday.getDate()-(monday.getDay()||7)+1);
     monday.setHours(0,0,0,0);
@@ -1940,10 +2342,10 @@ function LogDay({data,persist,showToast,mobileView}){
     return arr;
   })();
 
-  const allActs=storage.get('activities')||[];
+  const allActs=getUnifiedActivities();
   const allCrono=storage.get('cronometer')||[];
   const allWeight=storage.get('weight')||[];
-  const allSleep=storage.get('sleep')||[];
+  const allSleep=cleanSleepForAveraging(storage.get('sleep')||[]);
   const allHRV=storage.get('hrv')||[];
 
   // Daily miles
@@ -2197,7 +2599,7 @@ function LogDay({data,persist,showToast,mobileView}){
                 </div>
 
                 <HydrationRow fd={fitData}/>
-                <ReplenishTracker fd={fitData} dateStr={todayStr}/>
+                <ReplenishTracker fd={fitData} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>
 
                 {/* Vs goal MiniBars */}
                 <div style={divider}/>
@@ -2255,11 +2657,11 @@ function LogDay({data,persist,showToast,mobileView}){
                 })()}
 
                 <HydrationRow fd={fitData}/>
-                <ReplenishTracker fd={fitData} dateStr={todayStr}/>
+                <ReplenishTracker fd={fitData} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>
 
                 {/* Vs goal MiniBars */}
                 {(()=>{
-                  const acts=storage.get('activities')||[];
+                  const acts=getUnifiedActivities();
                   const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
                   const wkStrength=acts.filter(a=>/strength|weight/i.test(a.activityType||'')&&a.date&&new Date(a.date+'T12:00:00')>=monday);
                   const wkCount=wkStrength.length;
@@ -2291,79 +2693,9 @@ function LogDay({data,persist,showToast,mobileView}){
             accept=".csv" onFile={handleTodayNut} inputRef={nutRef}
             loaded={!!todayNutrition} filename={nutFilename} error={nutError}/>}
 
-          <div style={panelStyle}>
-            {!nutData?(
-              <div style={{textAlign:'center',padding:'32px 0',color:'var(--text-muted)',fontSize:12}}>
-                Upload today's Cronometer CSV to see nutrition summary
-              </div>
-            ):<>
-              {/* Header */}
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>Nutrition</span>
-                <span style={{fontSize:10,color:'var(--text-muted)'}}>{nutData.date}</span>
-              </div>
-
-              {/* 4 macro dials */}
-              <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14}}>
-                <MacroDial color="#4ade80" value={nutData.calories} max={calT} unit="kcal" label="Calories" target={calT}/>
-                <MacroDial color="#60a5fa" value={nutData.protein} max={parseFloat(profile?.dailyProteinTarget)||150} unit="g" label="Protein" target={parseFloat(profile?.dailyProteinTarget)||150}/>
-                <MacroDial color="#fbbf24" value={nutData.carbs} max={parseFloat(profile?.dailyCarbTarget)||180} unit="g" label="Carbs" target={parseFloat(profile?.dailyCarbTarget)||180}/>
-                <MacroDial color="#f87171" value={nutData.fat} max={parseFloat(profile?.dailyFatTarget)||65} unit="g" label="Fat" target={parseFloat(profile?.dailyFatTarget)||65}/>
-              </div>
-
-              {/* Micronutrients */}
-              <div style={divider}/>
-              <div style={subHdr}>Micronutrients</div>
-              <div style={{display:'flex',gap:5,marginBottom:5}}>
-                {[
-                  {label:'fiber',val:nutData.fiber?`${nutData.fiber.toFixed(1)}g`:'—'},
-                  {label:'sugar',val:nutData.sugar?`${nutData.sugar.toFixed(1)}g`:'—'},
-                  {label:'water',val:nutData.water?`${nutData.water.toFixed(1)}L`:'—'},
-                ].map(m=>(
-                  <div key={m.label} style={miniTile}>
-                    <div style={miniVal}>{m.val}</div>
-                    <div style={miniLbl}>{m.label}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{display:'flex',gap:5}}>
-                {[
-                  {label:'magnesium',val:nutData.magnesium?`${Math.round(nutData.magnesium)}mg`:'—',color:nutData.magnesium&&nutData.magnesium<300?'#fbbf24':'var(--text-primary)'},
-                  {label:'potassium',val:nutData.potassium?`${Math.round(nutData.potassium)}mg`:'—'},
-                  {label:'sodium',val:nutData.sodium?`${Math.round(nutData.sodium)}mg`:'—'},
-                ].map(m=>(
-                  <div key={m.label} style={miniTile}>
-                    <div style={{...miniVal,color:m.color||'var(--text-primary)'}}>{m.val}</div>
-                    <div style={miniLbl}>{m.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Macros vs goal MiniBars */}
-              <div style={divider}/>
-              <div style={subHdr}>Macros vs goal</div>
-              <MiniBar label="Calories" displayValue={`${Math.round(nutData.calories||0).toLocaleString()} kcal`}
-                goalLabel={`Goal: ${calT.toLocaleString()} kcal`}
-                pct={(nutData.calories||0)/calT}/>
-              <MiniBar label="Protein" displayValue={`${Math.round(nutData.protein||0)}g`}
-                goalLabel={`Goal: ${profile?.dailyProteinTarget||150}g`}
-                pct={(nutData.protein||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-              <MiniBar label="Carbs" displayValue={`${Math.round(nutData.carbs||0)}g`}
-                goalLabel={`Goal: ${profile?.dailyCarbTarget||180}g`}
-                pct={(nutData.carbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
-              <MiniBar label="Fat" displayValue={`${Math.round(nutData.fat||0)}g`}
-                goalLabel={`Goal: ${profile?.dailyFatTarget||65}g`}
-                pct={(nutData.fat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
-            </>}
-          </div>
-
-          {/* ── Quick Food Log (manual/barcode/voice/photo) ── */}
-          <div style={{...panelStyle,marginTop:10}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Log Food</span>
-              <span style={{fontSize:10,color:'var(--text-muted)'}}>manual · barcode · voice · photo</span>
-            </div>
-            <NutritionInputPanel date={todayStr} onUpdate={()=>{
+          {/* ── New NutritionInput panel (all sections: dials, supplements, systems, micros, macros-vs-goal, water, log food) ── */}
+          <div>
+            <NutritionInputPanel key={nutUploadKey} date={todayStr} onUpdate={()=>{
               // Refresh nutrition data from the new nutrition-log store
               try{
                 const entries=(storage.get('nutritionLog')||[])
@@ -2385,145 +2717,9 @@ function LogDay({data,persist,showToast,mobileView}){
 
       </div>
 
-      {/* ═══ 7-DAY TRENDS (desktop only) ═══ */}
-      {!mobileView&&(()=>{
-        const targetWt=parseFloat(profile?.targetWeight)||175;
-        const maxMiles=Math.max(...dailyMiles,1);
-        const maxCal=Math.max(...dailyCals.filter(c=>c!=null),calT,1);
-        const calColor=calsAvg!=null?(calsAvg>=calT*0.9?'#4ade80':calsAvg>=calT*0.6?'#fbbf24':'#f87171'):'#fbbf24';
-        const sleepValid=dailySleep.filter(s=>s!=null);
-        const maxSleep=Math.max(...sleepValid,9);
-        const hrvValid=dailyHRV.filter(h=>h!=null);
-        const maxHRV=Math.max(...hrvValid,80);
-        const weightValid=dailyWeight.filter(w=>w!=null);
-        return(
-          <div style={panelStyle}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>7-day trends</span>
-              <span style={{fontSize:10,color:'var(--text-muted)'}}>last 7 days</span>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(6, minmax(0,1fr))',gap:12}}>
-
-              {/* Chart 1 — Daily miles */}
-              <TrendChart title="Daily miles" trendLabel={milesTrend!=null?(milesTrend>0.5?`↑ ${milesTrend.toFixed(1)} mi`:milesTrend<-0.5?`↓ ${Math.abs(milesTrend).toFixed(1)} mi`:'→ Stable'):''} trendColor={milesTrend>0.5?'#4ade80':milesTrend<-0.5?'#f87171':'var(--text-muted)'}>
-                {dotsCount(dailyMiles)<2?<div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'var(--text-muted)'}}>No data yet</div>:
-                  <svg width="100%" height="42" viewBox="0 0 100 42" preserveAspectRatio="none">
-                    <polyline fill="none" stroke="#60a5fa" strokeWidth="1.5" points={buildPoints(dailyMiles,maxMiles)}/>
-                    {dailyMiles.map((v,i)=>{if(!v)return null;const x=i===0?2:i===6?98:(i/6)*96+2;const y=42-Math.min(v/maxMiles,1)*36+2;return<circle key={i} cx={x} cy={y} r={i===6?2:1.2} fill="#60a5fa"/>;})}
-                  </svg>
-                }
-              </TrendChart>
-
-              {/* Chart 2 — Avg pace */}
-              <TrendChart title="Avg pace" trendLabel={paceTrend!=null?(paceTrend<-3?`↑ ${Math.abs(paceTrend)}s faster`:paceTrend>3?`↓ ${paceTrend}s slower`:'→ Stable'):''} trendColor={paceTrend<-3?'#4ade80':paceTrend>3?'#f87171':'var(--text-muted)'}>
-                {dotsCount(dailyPaceSecs)<2?<div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'var(--text-muted)'}}>No data yet</div>:
-                  <svg width="100%" height="42" viewBox="0 0 100 42" preserveAspectRatio="none">
-                    {profile?.targetRacePace&&(()=>{
-                      const goal=paceToSecs(profile.targetRacePace);
-                      const valid=dailyPaceSecs.filter(p=>p!=null);
-                      const mn=Math.min(...valid),mx=Math.max(...valid);
-                      if(goal<mn||goal>mx)return null;
-                      const y=42-((mx-goal)/(mx-mn||1))*36+2;
-                      return<line x1="2" y1={y} x2="98" y2={y} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>;
-                    })()}
-                    <polyline fill="none" stroke="#4ade80" strokeWidth="1.5" points={buildPacePoints(dailyPaceSecs)}/>
-                  </svg>
-                }
-              </TrendChart>
-
-              {/* Chart 3 — Daily calories */}
-              <TrendChart title="Daily calories" trendLabel={calsAvg!=null?`avg ${calsAvg.toLocaleString()}`:''} trendColor={calColor}>
-                {dotsCount(dailyCals)<2?<div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'var(--text-muted)'}}>No data yet</div>:
-                  <svg width="100%" height="42" viewBox="0 0 100 42" preserveAspectRatio="none">
-                    <line x1="2" y1={42-(calT/maxCal)*36+2} x2="98" y2={42-(calT/maxCal)*36+2} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>
-                    {dailyCals.map((v,i)=>{if(v==null)return null;const x=i===0?2:i===6?98:(i/6)*96+2;const h=Math.min(v/maxCal,1)*36;const y=44-h;return<rect key={i} x={x-5} y={y} width="10" height={h} fill={calColor} opacity="0.7"/>;})}
-                  </svg>
-                }
-              </TrendChart>
-
-              {/* Chart 4 — Weight */}
-              <TrendChart title="Weight" trendLabel={weightDelta!=null?(weightDelta<-0.1?`↓ ${Math.abs(weightDelta).toFixed(1)} lbs`:weightDelta>0.1?`↑ ${weightDelta.toFixed(1)} lbs`:'→ Stable'):''} trendColor={weightDelta!=null?(weightDelta<0?'#4ade80':'#fbbf24'):'var(--text-muted)'}>
-                {weightValid.length<2?<div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'var(--text-muted)'}}>No data yet</div>:(()=>{
-                  const mn=Math.min(...weightValid,targetWt),mx=Math.max(...weightValid,targetWt),rng=mx-mn||1;
-                  const targetY=42-((targetWt-mn)/rng)*36+2;
-                  return<svg width="100%" height="42" viewBox="0 0 100 42" preserveAspectRatio="none">
-                    <line x1="2" y1={targetY} x2="98" y2={targetY} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>
-                    <polyline fill="none" stroke="#fbbf24" strokeWidth="1.5" points={dailyWeight.map((v,i)=>{if(v==null)return null;const x=i===0?2:i===6?98:(i/6)*96+2;const y=42-((v-mn)/rng)*36+2;return`${x.toFixed(1)},${y.toFixed(1)}`;}).filter(Boolean).join(' ')}/>
-                  </svg>;
-                })()}
-              </TrendChart>
-
-              {/* Chart 5 — Sleep hours */}
-              <TrendChart title="Sleep hours" trendLabel={sleepAvg!=null?`avg ${sleepAvg}h`:''} trendColor={sleepAvg!=null&&parseFloat(sleepAvg)>=7.5?'#4ade80':sleepAvg!=null&&parseFloat(sleepAvg)>=6.5?'#fbbf24':'#f87171'}>
-                {sleepValid.length<2?<div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'var(--text-muted)'}}>No data yet</div>:
-                  <svg width="100%" height="42" viewBox="0 0 100 42" preserveAspectRatio="none">
-                    <line x1="2" y1={42-(8/maxSleep)*36+2} x2="98" y2={42-(8/maxSleep)*36+2} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>
-                    <polyline fill="none" stroke="#a78bfa" strokeWidth="1.5" points={buildPoints(dailySleep,maxSleep)}/>
-                  </svg>
-                }
-              </TrendChart>
-
-              {/* Chart 6 — HRV */}
-              <TrendChart title="HRV" trendLabel={hrvLatest!=null?(hrvBaselineHigh&&hrvLatest>hrvBaselineHigh?'↑ Above baseline':hrvBaselineLow&&hrvLatest<hrvBaselineLow?'↓ Below baseline':`${hrvLatest}ms`):''} trendColor={hrvLatest!=null&&hrvBaselineHigh&&hrvLatest>=hrvBaselineLow&&hrvLatest<=hrvBaselineHigh?'#4ade80':'var(--text-muted)'}>
-                {hrvValid.length<2?<div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'var(--text-muted)'}}>No data yet</div>:
-                  <svg width="100%" height="42" viewBox="0 0 100 42" preserveAspectRatio="none">
-                    {hrvBaselineLow&&hrvBaselineHigh&&(()=>{
-                      const yHi=42-(hrvBaselineHigh/maxHRV)*36+2;
-                      const yLo=42-(hrvBaselineLow/maxHRV)*36+2;
-                      return<rect x="2" y={yHi} width="96" height={yLo-yHi} fill="#4ade80" opacity="0.08"/>;
-                    })()}
-                    <polyline fill="none" stroke="#4ade80" strokeWidth="1.5" points={buildPoints(dailyHRV,maxHRV)}/>
-                  </svg>
-                }
-              </TrendChart>
-
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* ═══ Recovery + Notes row (desktop) ═══ */}
-      {!mobileView&&<div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12}}>
-        {/* Recovery */}
-        <div style={panelStyle}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Recovery</span>
-            <span style={{fontSize:10,color:'var(--text-muted)'}}>today</span>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4, minmax(0,1fr))',gap:5}}>
-            <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestHRV?.overnightHRV?`${latestHRV.overnightHRV}ms`:'--'}</div>
-              <div style={{fontSize:8,color:'var(--text-muted)'}}>HRV</div>
-            </div>
-            <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.durationMinutes?`${Math.floor(latestSleep.durationMinutes/60)}h ${latestSleep.durationMinutes%60}m`:'--'}</div>
-              <div style={{fontSize:8,color:'var(--text-muted)'}}>Sleep {latestSleep?.sleepScore?`\u00b7 ${latestSleep.sleepScore}/100`:''}</div>
-            </div>
-            <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.restingHR?`${latestSleep.restingHR}`:'--'}</div>
-              <div style={{fontSize:8,color:'var(--text-muted)'}}>Resting HR</div>
-            </div>
-            <div style={{background:'var(--bg-elevated)',borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-              <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{latestSleep?.bodyBattery?`${latestSleep.bodyBattery}`:'--'}</div>
-              <div style={{fontSize:8,color:'var(--text-muted)'}}>Body battery</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Notes */}
-        <div style={panelStyle}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-            <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Notes</span>
-            <span style={{fontSize:10,color:'var(--text-muted)'}}>{ts}</span>
-          </div>
-          <textarea value={notes} onChange={e=>setNotes(e.target.value)}
-            placeholder="How did today feel? Energy, mood, reflection..."
-            style={{...S.ta,minHeight:70,marginBottom:8}}/>
-          <button style={{...S.sb,padding:'10px 14px',width:'100%'}} onClick={handleSave}>
-            {saveStatus==='saved'?'\u2713 Saved':'Save daily entry'}
-          </button>
-        </div>
-      </div>}
+      {/* ═══ Training Stress + Notes row (desktop) ═══ */}
+      {!mobileView&&<TrainingStressPanel todayStr={ts} profile={profile} panelStyle={panelStyle}
+        notes={notes} setNotes={setNotes} ts={ts} saveStatus={saveStatus} handleSave={handleSave} S={S}/>}
 
       {/* ═══ Mobile Activity: compact notes + save ═══ */}
       {mobileView==='activity'&&(
@@ -2537,7 +2733,7 @@ function LogDay({data,persist,showToast,mobileView}){
         </div>
       )}
 
-      {!mobileView&&<StackCard dateStr={ts} showToast={showToast}/>}
+      {/* StackCard removed — hydration + stack now combined in DailyLogStrip inside NutritionInput */}
     </div>
   );
 }
@@ -3014,7 +3210,8 @@ function ImportHub({data,persist,showToast,setTab}){
       setZones(z=>({...z,activities:{file:file.name,loading:true}}));
       try{
         const act=await parseFITFile(file);
-        const merged=storage.merge('activities',[act],'date');
+        const {merged}=mergeActivities(storage.get('activities')||[],[act]);
+        storage.set('activities',merged);
         setZones(z=>({...z,activities:{file:file.name,count:merged.length,loading:false}}));
         setBanners(b=>({...b,activities:`Detected: FIT file — ${act.activityType} on ${act.date}`}));
         const newEntry={date:new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}),count:1,source:'fit',file:file.name};
@@ -3031,7 +3228,7 @@ function ImportHub({data,persist,showToast,setTab}){
     const text=await file.text();
     const type=forceType||detectCSVType(text,file.name);
     if(!type){showToast("⚠ Could not detect CSV type");return;}
-    const typeLbl={activities:'Activities',hrv:'HRV Status',sleep:'Sleep',weight:'Weight',cronometer:'Cronometer'}[type]||type;
+    const typeLbl={activities:'Activities',hrv:'HRV Status',sleep:'Sleep',weight:'Weight',resting_hr:'Resting HR',cronometer:'Cronometer'}[type]||type;
     setZones(z=>({...z,[type]:{file:file.name,loading:true}}));
     setBanners(b=>({...b,[type]:null}));
     try{
@@ -3156,16 +3353,120 @@ function ImportHub({data,persist,showToast,setTab}){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// HEALTH SYSTEMS — 10-tile grid for EdgeIQ (moved from NutritionInput)
+// ═══════════════════════════════════════════════════════════════════════════════
+const SYSTEM_ICONS = {
+  brain: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8 2 5 5 5 9c0 2 .5 3.5 1.5 5 .8 1.2 1 2.5 1 4h9c0-1.5.2-2.8 1-4 1-1.5 1.5-3 1.5-5 0-4-3-7-7-7z"/><path d="M9 18h6v2a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2z"/><path d="M12 2v16"/><path d="M6.5 8c2 1 3.5 1.5 5.5 1.5s3.5-.5 5.5-1.5"/><path d="M7 12.5c1.5.8 3 1 5 1s3.5-.2 5-1"/></svg>,
+  heart: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"/></svg>,
+  bones: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="9" width="4" height="6" rx="1"/><rect x="18" y="9" width="4" height="6" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/><rect x="5" y="7" width="2" height="10" rx="0.5"/><rect x="17" y="7" width="2" height="10" rx="0.5"/></svg>,
+  gut: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4h10c1.5 0 2.5 1 2.5 2.5S18.5 9 17 9H7c-1.5 0-2.5 1-2.5 2.5S6 14 7 14h10"/><path d="M17 14c1.5 0 2.5 1 2.5 2.5S18.5 19 17 19H7"/><circle cx="5" cy="19" r="1.2" fill={c} stroke="none"/></svg>,
+  immune: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/></svg>,
+  energy: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>,
+  longevity: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>,
+  sleep: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
+  metabolism: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h4l2-8 4 16 2-8h4"/></svg>,
+  endurance: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c4-6 8-6 12 0s8 6 12 0"/></svg>,
+};
+
+function HealthSystemTile({ sys }) {
+  const { pct, status, comment, color, name, id } = sys;
+  const statusColor = status === 'good' ? '#4ade80' : status === 'focus' ? '#fbbf24' : '#f87171';
+  const fillTint = status === 'good' ? 'rgba(74,222,128,0.15)'
+    : status === 'focus' ? 'rgba(251,191,36,0.15)'
+    : 'rgba(248,113,113,0.18)';
+  const icon = SYSTEM_ICONS[id] ? SYSTEM_ICONS[id](color) : null;
+  return (
+    <div style={{
+      position: 'relative',
+      background: 'var(--bg-elevated)',
+      border: '0.5px solid var(--border-subtle)',
+      borderRadius: 12,
+      padding: '10px 6px 9px',
+      overflow: 'hidden',
+      minHeight: 0,
+    }}>
+      <div style={{
+        position: 'absolute', left: 0, right: 0, bottom: 0,
+        height: `${Math.max(8, pct)}%`,
+        background: `linear-gradient(180deg, transparent, ${fillTint})`,
+        borderRadius: '0 0 12px 12px',
+        transition: 'height 0.6s ease',
+        zIndex: 0,
+      }} />
+      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
+        <div style={{
+          width: 26, height: 26, margin: '0 auto 5px',
+          borderRadius: 7,
+          background: 'var(--bg-elevated)',
+          border: '0.5px solid var(--border-subtle)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>{icon}</div>
+        <div style={{
+          fontSize: 9, fontWeight: 600, color: 'var(--text-primary)',
+          lineHeight: 1.15, marginBottom: 3, minHeight: 22,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>{name.replace(' & ', '/')}</div>
+        <div style={{
+          fontSize: 13, fontWeight: 700, color: statusColor,
+          fontFamily: 'var(--font-mono)', marginBottom: 3,
+        }}>{pct}%</div>
+        <div style={{
+          fontSize: 8, color: 'var(--text-muted)',
+          lineHeight: 1.25, minHeight: 20,
+          overflow: 'hidden', textOverflow: 'ellipsis',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+        }}>{comment}</div>
+      </div>
+    </div>
+  );
+}
+
+function HealthSystemsGrid({ dateStr }) {
+  const report = useMemo(() => getSystemsReport(dateStr), [dateStr]);
+  const goodCount = report.filter(s => s.status === 'good').length;
+  const focusCount = report.filter(s => s.status === 'focus').length;
+  const defCount = report.filter(s => s.status === 'def').length;
+
+  return (
+    <div style={{background:'var(--bg-surface)',border:'0.5px solid var(--border-default)',borderRadius:'var(--radius-md)',padding:'14px 16px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>⬡ Health Systems</span>
+        <div style={{display:'flex',gap:8,fontSize:9,color:'var(--text-muted)'}}>
+          <span style={{display:'flex',alignItems:'center',gap:3}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'#4ade80'}}/>{goodCount}
+          </span>
+          <span style={{display:'flex',alignItems:'center',gap:3}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'#fbbf24'}}/>{focusCount}
+          </span>
+          <span style={{display:'flex',alignItems:'center',gap:3}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'#f87171'}}/>{defCount}
+          </span>
+        </div>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(5, 1fr)',
+        gap: 6,
+      }}>
+        {report.map(sys => <HealthSystemTile key={sys.id} sys={sys} />)}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TRAINING TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
   const profile={...(storage.get('profile')||{}),...getGoals()};
-  const activities=storage.get('activities')||[];
+  const activities=getUnifiedActivities();
   const cronometer=storage.get('cronometer')||[];
   const weightData=storage.get('weight')||[];
   const hrvData=storage.get('hrv')||[];
-  const sleepData=storage.get('sleep')||[];
-  const dailyLogs=storage.get('daily-logs')||[];
+  const sleepData=cleanSleepForAveraging(storage.get('sleep')||[]);
+  const dailyLogs=storage.get('dailyLogs')||[];
 
   // ── Tab-owned AI analysis (persisted) ──
   const AI_KEY='arnold:ai:training';
@@ -3250,14 +3551,7 @@ Structure:
   const nextRaceEmpty=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
   if(!activities.length&&!cronometer.length&&!weightData.length){
     if(isMobile){
-      return <MobileHome
-        data={data} focusItems={[]} weeklyStats={[]} avgWeeklyMi={0} avgWeeklyHrsTotal={0}
-        avgPaceSecs={null} goalPaceSecs={null} fmtPace={s=>s?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`:'—'}
-        totalMi={0} annualRunTarget={800} totalSessions={0}
-        sortedSleep={[]} hrvData={[]} sortedW={[]} currentWeight={null} currentBF={null}
-        latestSleepScore={null} avgHRV30={null} recentNut={[]} avgProtein={null} latestRHR={null}
-        nextRace={nextRaceEmpty} onOpenTab={setTab} initialView={mobileInitView}
-      />;
+      return <MobileHome data={data} onOpenTab={setTab} focusItems={[]} weeklyStats={[]} avgWeeklyMi={0} avgWeeklyHrsTotal={0} avgPaceSecs={null} goalPaceSecs={570} fmtPace={s=>s?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`:'—'} totalMi={0} annualRunTarget={800} totalSessions={0} thisWeek={{mi:0,hrs:0,sessions:0,runs:0}} sortedSleep={[]} hrvData={hrvData} sortedW={[]} currentWeight={null} currentBF={null} latestSleepScore={null} avgHRV30={null} recentNut={[]} avgProtein={null} latestRHR={null} nextRace={null} initialView={mobileInitView} />;
     }
     return(
       <div style={S.sec}>
@@ -3322,12 +3616,44 @@ Structure:
     const wPace=wPaces.length?wPaces.reduce((s,v)=>s+v,0)/wPaces.length:null;
     const wWeights=weightData.filter(w=>{const d=new Date(w.date);return d>=wStart&&d<wEnd;});
     const wWt=wWeights.length?wWeights.reduce((s,w)=>s+(w.weightLbs||0),0)/wWeights.length:null;
-    return{mi:wMi,hrs:wHrs,pace:wPace,weight:wWt};
+    // Sleep / HRV / RHR per week — same window, averaged
+    const wSleep=sleepData.filter(s=>{const d=new Date(s.date);return d>=wStart&&d<wEnd;});
+    const wHRV=hrvData.filter(h=>{const d=new Date(h.date);return d>=wStart&&d<wEnd&&h.overnightHRV;});
+    const wSleepScore=wSleep.filter(s=>s.sleepScore).length?Math.round(wSleep.filter(s=>s.sleepScore).reduce((s,sl)=>s+sl.sleepScore,0)/wSleep.filter(s=>s.sleepScore).length):null;
+    const wHRVAvg=wHRV.length?Math.round(wHRV.reduce((s,h)=>s+h.overnightHRV,0)/wHRV.length):null;
+    const wRHRArr=wSleep.filter(s=>s.restingHR);
+    const wRHR=wRHRArr.length?Math.round(wRHRArr.reduce((s,sl)=>s+sl.restingHR,0)/wRHRArr.length):null;
+    const wSleepMins=wSleep.filter(s=>s.durationMinutes).length?Math.round(wSleep.filter(s=>s.durationMinutes).reduce((s,sl)=>s+sl.durationMinutes,0)/wSleep.filter(s=>s.durationMinutes).length):null;
+    return{mi:wMi,hrs:wHrs,pace:wPace,weight:wWt,sleepScore:wSleepScore,hrv:wHRVAvg,rhr:wRHR,sleepMins:wSleepMins,sessions:wAll.length,runs:wRuns.length};
   });
 
-  // 30-day nutrition
+  // Current week: Mon→Sun window containing today
+  const thisWeekData=(()=>{
+    const d=new Date(today);
+    const dow=d.getDay(); // 0=Sun..6=Sat
+    const mondayOffset=dow===0?6:dow-1; // days since Monday
+    const wkStart=new Date(d);wkStart.setDate(d.getDate()-mondayOffset);wkStart.setHours(0,0,0,0);
+    const wkEnd=new Date(wkStart);wkEnd.setDate(wkStart.getDate()+7);
+    const wRuns=activities.filter(a=>{if(!a.date)return false;const ad=new Date(a.date+'T12:00:00');return ad>=wkStart&&ad<wkEnd&&a.activityType?.toLowerCase().includes('run');});
+    const wAll=activities.filter(a=>{if(!a.date)return false;const ad=new Date(a.date+'T12:00:00');return ad>=wkStart&&ad<wkEnd;});
+    const mi=wRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
+    const hrs=wAll.reduce((s,a)=>s+(a.durationSecs||0),0)/3600;
+    return{mi,hrs,sessions:wAll.length,runs:wRuns.length};
+  })();
+
+  // 30-day nutrition — merge cronometer CSV + manual nutritionLog entries
   const thirtyDays=new Date();thirtyDays.setDate(today.getDate()-30);
-  const recentNut=cronometer.filter(n=>new Date(n.date)>=thirtyDays);
+  const recentNut=(()=>{
+    // Build per-day totals from both sources using the unified dailyTotals()
+    const days=[];
+    for(let i=0;i<30;i++){
+      const d=new Date();d.setDate(today.getDate()-i);
+      const ds=d.toISOString().slice(0,10);
+      const t=nutDailyTotals(ds);
+      if(t.calories>0||t.protein>0) days.push({date:ds,...t});
+    }
+    return days;
+  })();
   const avgCalories=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.calories||0),0)/recentNut.length):null;
   const avgProtein=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.protein||0),0)/recentNut.length):null;
   const avgCarbs=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.carbs||0),0)/recentNut.length):null;
@@ -3339,18 +3665,27 @@ Structure:
   const sevenDays=new Date();sevenDays.setDate(today.getDate()-7);
   const recentHRV=hrvData.filter(h=>new Date(h.date)>=sevenDays);
   const recentSleep=sleepData.filter(s=>new Date(s.date)>=sevenDays);
-  const avgHRV7=recentHRV.length?Math.round(recentHRV.reduce((s,h)=>s+(h.overnightHRV||0),0)/recentHRV.length):null;
-  const avgSleepMins7=recentSleep.length?Math.round(recentSleep.reduce((s,sl)=>s+(sl.durationMinutes||0),0)/recentSleep.length):null;
-  const sortedSleep=[...recentSleep].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const recentHRVValid2=recentHRV.filter(h=>h.overnightHRV);
+  const avgHRV7=recentHRVValid2.length?Math.round(recentHRVValid2.reduce((s,h)=>s+h.overnightHRV,0)/recentHRVValid2.length):null;
+  const recentSleepDur2=recentSleep.filter(s=>s.durationMinutes);
+  const avgSleepMins7=recentSleepDur2.length?Math.round(recentSleepDur2.reduce((s,sl)=>s+sl.durationMinutes,0)/recentSleepDur2.length):null;
+  // sortedSleep uses full cleaned dataset (not just 7-day) — needed for history sparklines and MobileHome
+  const sortedSleep=[...sleepData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const latestRHR=sortedSleep[0]?.restingHR||null;
-  const latestSleepScore=recentSleep.length?Math.round(recentSleep.reduce((s,sl)=>s+(sl.sleepScore||0),0)/recentSleep.length):null;
+  // latestSleepScore = most recent non-null score (not an average — averages inflate when weekly-avg rows exist)
+  const latestSleepScore=(()=>{const s=sortedSleep.find(s=>s.sleepScore!=null);return s?Math.min(s.sleepScore,100):null;})();
+  // 7-day average sleep score for Focus tile threshold checks
+  const avgSleepScore7=recentSleep.filter(s=>s.sleepScore).length?Math.round(recentSleep.filter(s=>s.sleepScore).reduce((s,sl)=>s+sl.sleepScore,0)/recentSleep.filter(s=>s.sleepScore).length):null;
 
   // 30-day recovery averages
   const hrv30=hrvData.filter(h=>new Date(h.date)>=thirtyDays);
   const sleep30=sleepData.filter(s=>new Date(s.date)>=thirtyDays);
-  const avgHRV30=hrv30.length?Math.round(hrv30.reduce((s,h)=>s+(h.overnightHRV||0),0)/hrv30.length):null;
-  const avgSleepMins30=sleep30.length?Math.round(sleep30.reduce((s,sl)=>s+(sl.durationMinutes||0),0)/sleep30.length):null;
-  const avgRHR30=sleep30.filter(s=>s.restingHR).length?Math.round(sleep30.reduce((s,sl)=>s+(sl.restingHR||0),0)/sleep30.filter(s=>s.restingHR).length):null;
+  const hrv30Valid=hrv30.filter(h=>h.overnightHRV);
+  const avgHRV30=hrv30Valid.length?Math.round(hrv30Valid.reduce((s,h)=>s+h.overnightHRV,0)/hrv30Valid.length):null;
+  const sleep30Dur=sleep30.filter(s=>s.durationMinutes);
+  const avgSleepMins30=sleep30Dur.length?Math.round(sleep30Dur.reduce((s,sl)=>s+sl.durationMinutes,0)/sleep30Dur.length):null;
+  const sleep30RHR=sleep30.filter(s=>s.restingHR);
+  const avgRHR30=sleep30RHR.length?Math.round(sleep30RHR.reduce((s,sl)=>s+sl.restingHR,0)/sleep30RHR.length):null;
   const fmtSleep=m=>m?`${Math.floor(m/60)}h ${m%60}m`:'—';
 
   // Latest weight
@@ -3413,9 +3748,9 @@ Structure:
     const hrvDip=1-latestHRV/avgHRV30;
     attention.push({label:'Recovery dip',value:latestHRV,unit:'ms',detail:`HRV ${Math.round(hrvDip*100)}% below 30-day avg`,severity:hrvDip>0.2?'critical':'warn',action:'Easy day or full rest'});
   }
-  // Sleep flag
-  if(latestSleepScore&&latestSleepScore<70){
-    attention.push({label:'Sleep low',value:latestSleepScore,unit:'/100',detail:'Below 70 — recovery compromised',severity:latestSleepScore<50?'critical':'warn',action:'Aim for earlier bedtime tonight'});
+  // Sleep flag — use 7-day average for trend, show latest score as value
+  if(avgSleepScore7&&avgSleepScore7<70){
+    attention.push({label:'Sleep low',value:avgSleepScore7,unit:'/100',detail:'7-day avg below 70 — recovery compromised',severity:avgSleepScore7<50?'critical':'warn',action:'Aim for earlier bedtime tonight'});
   }
   // Nutrition flag — protein under target
   if(avgProtein&&avgProtein<(getGoals().dailyProteinTarget||150)*0.85){
@@ -3489,33 +3824,9 @@ Structure:
   // Next race for mobile home
   const nextRaceMobile=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
 
+  // On mobile, render MobileHome (Start screen) — TrainingTab runs for tab==='training'
   if(isMobile){
-    return <MobileHome
-      data={data}
-      focusItems={attention}
-      weeklyStats={weeklyStats}
-      avgWeeklyMi={avgWeeklyMi}
-      avgWeeklyHrsTotal={avgWeeklyHrsTotal}
-      avgPaceSecs={avgPaceSecs}
-      goalPaceSecs={goalPaceSecs}
-      fmtPace={fmtPace}
-      totalMi={totalMi}
-      annualRunTarget={annualRunTarget}
-      totalSessions={totalSessions}
-      sortedSleep={sortedSleep}
-      hrvData={hrvData}
-      sortedW={sortedW}
-      currentWeight={currentWeight}
-      currentBF={currentBF}
-      latestSleepScore={latestSleepScore}
-      avgHRV30={avgHRV30}
-      recentNut={recentNut}
-      avgProtein={avgProtein}
-      latestRHR={latestRHR}
-      nextRace={nextRaceMobile}
-      onOpenTab={setTab}
-      initialView={mobileInitView}
-    />;
+    return <MobileHome data={data} onOpenTab={setTab} focusItems={focusItems} weeklyStats={weeklyStats} avgWeeklyMi={avgWeeklyMi} avgWeeklyHrsTotal={avgWeeklyHrsTotal} avgPaceSecs={avgPaceSecs} goalPaceSecs={goalPaceSecs} fmtPace={fmtPace} totalMi={totalMi} annualRunTarget={annualRunTarget} totalSessions={totalSessions} thisWeek={thisWeekData} sortedSleep={sortedSleep} hrvData={hrvData} sortedW={sortedW} currentWeight={currentWeight} currentBF={currentBF} latestSleepScore={latestSleepScore} avgHRV30={avgHRV30} recentNut={recentNut} avgProtein={avgProtein} latestRHR={latestRHR} nextRace={nextRaceMobile} initialView={mobileInitView} />;
   }
 
   return(
@@ -3533,18 +3844,18 @@ Structure:
         </div>
       </div>
 
-      {/* Cockpit instrument rail */}
+      {/* ═══════ SECTION 1: HEALTH SYSTEMS — holistic status at a glance ═══════ */}
+      <HealthSystemsGrid dateStr={td()} />
+
+      {/* ═══════ SECTION 2: COCKPIT — short-term signal gauges ═══════ */}
       {(()=>{
-        // Build 8-week history arrays for each gauge from existing weeklyStats
-        // weeklyStats rows: { mi, hrs, pace, weight }
-        const milesHist=weeklyStats.map(w=>w.mi||0).reverse();
-        const hoursHist=weeklyStats.map(w=>w.hrs||0).reverse();
-        const hrvHist=hrvData.slice(0,8).map(h=>h.overnightHRV||null).reverse().filter(Boolean);
-        const bfHist=sortedW.slice(0,8).map(w=>w.bodyFatPct||null).reverse().filter(Boolean);
-        const avgHrHist=ytdRuns.slice(0,8).map(r=>r.avgHR||null).reverse().filter(Boolean);
-        const rhrHist=sortedSleep.slice(0,8).map(s=>s.restingHR||null).reverse().filter(Boolean);
+        const milesHist=weeklyStats.map(w=>w.mi||0);
+        const hoursHist=weeklyStats.map(w=>w.hrs||0);
+        const hrvHist=weeklyStats.map(w=>w.hrv).filter(Boolean);
+        const avgHrHist=ytdRuns.slice(-8).map(r=>r.avgHR||null).filter(Boolean);
+        const rhrHist=weeklyStats.map(w=>w.rhr).filter(Boolean);
         const G=getGoals();
-        const sleepScoreHist=sortedSleep.slice(0,8).map(s=>s.sleepScore||null).reverse().filter(Boolean);
+        const sleepScoreHist=weeklyStats.map(w=>w.sleepScore).filter(Boolean);
         const proteinHist=recentNut.slice(0,8).map(n=>n.protein||null).reverse().filter(Boolean);
         return <CockpitRail gauges={[
           {label:'Weekly miles',  value:Number(avgWeeklyMi.toFixed(1)), unit:'mi', goal:G.weeklyRunDistanceTarget, history:milesHist, color:'#60a5fa'},
@@ -3554,16 +3865,53 @@ Structure:
           {label:'HRV',           value:hrvHist.slice(-1)[0]||null, unit:'ms', goal:G.targetHRV, history:hrvHist, color:'#34d399'},
           {label:'Sleep score',   value:latestSleepScore||null, unit:'/100', goal:G.targetSleepScore, history:sleepScoreHist, color:'#22d3ee'},
           {label:'Protein',       value:avgProtein||null, unit:'g', goal:G.dailyProteinTarget, history:proteinHist, color:'#f472b6'},
-          {label:'Body fat',      value:currentBF?Number(currentBF.toFixed(1)):null, unit:'%', goal:G.targetBodyFat, invert:true, history:bfHist, color:'#f87171'},
         ]}/>;
       })()}
 
-      {/* Section 2: Focus areas */}
+      {/* Focus areas */}
       <div className="arnold-focus-tiles" style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(focusItems.length,4)}, minmax(0,1fr))`,gap:8}}>
         {focusItems.slice(0,4).map((f,i)=><FocusCard key={i} {...f}/>)}
       </div>
 
-      {/* Race Focus + Observations — side by side */}
+      {/* ═══════ SECTION 3: TRAINING SIGNALS ═══════ */}
+      <div style={{...panelStyle,borderLeft:'3px solid #60a5fa'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Training</span>
+          <span style={{fontSize:10,color:'var(--text-muted)'}}>year to date</span>
+        </div>
+
+        {/* 3 arc dials */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:12}}>
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+            <ArcDialSVG value={totalMi} max={annualRunTarget} color="#60a5fa" label="mi" sublabel={Math.round(totalMi)} size={76}/>
+            <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Annual miles</div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+            <ArcDialSVG value={totalSessions} max={annualWorkoutTarget} color="#a78bfa" label="wks" sublabel={totalSessions} size={76}/>
+            <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Workouts</div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+            <DualArcDial aero={aeroPct} ana={anaPct} size={76}/>
+            <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Aero/Ana balance</div>
+          </div>
+        </div>
+
+        <div style={divider}/>
+        <div style={subHdr}>Running</div>
+        <MiniBar label="Avg weekly distance" displayValue={`${avgWeeklyMi.toFixed(1)} mi`} goalLabel={`Goal ${weeklyRunTarget} mi`} pct={avgWeeklyMi/weeklyRunTarget}/>
+        <MiniBar label="Avg weekly hours run" displayValue={`${avgWeeklyHrsRun.toFixed(1)} hrs`} goalLabel="Goal 4 hrs" pct={avgWeeklyHrsRun/4}/>
+        <MiniBar label="Avg pace vs goal" displayValue={fmtPace(avgPaceSecs)} goalLabel={`Goal ${fmtPace(goalPaceSecs)} /mi`} pct={avgPaceSecs?Math.min(goalPaceSecs/avgPaceSecs,1):0} inverted/>
+        <MiniBar label="Avg HR runs" displayValue={avgHR?`${avgHR} bpm`:'—'} goalLabel="Aerobic zone" pct={avgHR?Math.max(0,1-Math.abs(avgHR-140)/40):0}/>
+        <MiniBar label="Long run last 30d" displayValue={`${longRun.toFixed(1)} mi`} goalLabel="Goal 10 mi" pct={longRun/10}/>
+
+        <div style={divider}/>
+        <div style={subHdr}>Strength</div>
+        <MiniBar label="Avg per week" displayValue={`${(ytdStrength.length/weeksElapsed).toFixed(1)} sess`} goalLabel={`Goal ${strTarget}/wk`} pct={(ytdStrength.length/weeksElapsed)/strTarget}/>
+        <MiniBar label="Avg weekly hours strength" displayValue={`${avgWeeklyHrsStr.toFixed(1)} hrs`} goalLabel="Goal 1 hr" pct={avgWeeklyHrsStr/1}/>
+        <MiniBar label="Avg RPE" displayValue={avgRPE||'—'} goalLabel="Self-reported" pct={avgRPE?parseFloat(avgRPE)/10:0}/>
+      </div>
+
+      {/* Race Focus + Observations */}
       {(()=>{
         const races=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
         const nowD=new Date();
@@ -3593,49 +3941,66 @@ Structure:
         </div>
       )}
 
-      {/* Section 3: Two vertical panels */}
-      <div className="arnold-training-grid" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
+      {/* ═══════ SECTION 4: NUTRITION SIGNALS ═══════ */}
+      <div style={{...panelStyle,borderLeft:'3px solid #4ade80'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Nutrition</span>
+          <span style={{fontSize:10,color:'var(--text-muted)'}}>7-day average</span>
+        </div>
 
-        {/* TRAINING PANEL */}
-        <div style={{...panelStyle,display:'flex',flexDirection:'column'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>Training</span>
-            <span style={{fontSize:10,color:'var(--text-muted)'}}>year to date</span>
+        {/* Calorie balance donut */}
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
+          <svg width="68" height="68" viewBox="0 0 68 68" style={{flexShrink:0}}>
+            <circle cx="34" cy="34" r="26" fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
+            <circle cx="34" cy="34" r="26" fill="none" stroke="#4ade80" strokeWidth="6"
+              strokeDasharray={`${Math.min((avgCalories||0)/calT,1)*163} 163`}
+              strokeDashoffset="41" strokeLinecap="round"/>
+            <text x="34" y="32" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>30d avg</text>
+            <text x="34" y="44" textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{avgCalories||'—'}</text>
+            <text x="34" y="54" textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>kcal</text>
+          </svg>
+          <div style={{flex:1,fontSize:10,color:'var(--text-muted)'}}>
+            <div>Consumed: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avgCalories?avgCalories.toLocaleString():'—'}</span></div>
+            <div>Burned: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avgBurned?avgBurned.toLocaleString():'—'}</span></div>
+            <div style={{color:avgCalories&&avgCalories<avgBurned?'#4ade80':'#fbbf24',marginTop:2}}>
+              {avgCalories?`${avgCalories<avgBurned?'↓':'↑'} ${Math.abs(avgCalories-avgBurned).toLocaleString()} kcal/day`:'—'}
+            </div>
           </div>
+        </div>
+        <MiniBar label="Protein" displayValue={`${avgProtein||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avgProtein||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
+        <MiniBar label="Carbs" displayValue={`${avgCarbs||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyCarbTarget)||180}g`} pct={(avgCarbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
+        <MiniBar label="Fat" displayValue={`${avgFat||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyFatTarget)||65}g`} pct={(avgFat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
+      </div>
 
-          {/* 3 arc dials */}
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:12}}>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDialSVG value={totalMi} max={annualRunTarget} color="#60a5fa" label="mi" sublabel={Math.round(totalMi)} size={76}/>
-              <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Annual miles</div>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDialSVG value={totalSessions} max={annualWorkoutTarget} color="#a78bfa" label="wks" sublabel={totalSessions} size={76}/>
-              <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Workouts</div>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <DualArcDial aero={aeroPct} ana={anaPct} size={76}/>
-              <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Aero/Ana balance</div>
+      {/* ═══════ SECTION 5: RECOVERY / READINESS ═══════ */}
+      <div style={{...panelStyle,borderLeft:'3px solid #22d3ee'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Recovery / Readiness</span>
+          <span style={{fontSize:10,color:'var(--text-muted)'}}>this week vs 30-day</span>
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)'}}>
+          {/* This week */}
+          <div>
+            <div style={subHdr}>This Week</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
+              <div style={miniTile}>
+                <div style={miniVal}>{avgHRV7?`${avgHRV7}ms`:'—'}</div>
+                <div style={miniLbl}>HRV</div>
+              </div>
+              <div style={miniTile}>
+                <div style={miniVal}>{fmtSleep(avgSleepMins7)}</div>
+                <div style={miniLbl}>Sleep{latestSleepScore?` · ${latestSleepScore}`:''}</div>
+              </div>
+              <div style={miniTile}>
+                <div style={miniVal}>{latestRHR?`${latestRHR} bpm`:'—'}</div>
+                <div style={miniLbl}>RHR</div>
+              </div>
             </div>
           </div>
-
-          <div style={divider}/>
-          <div style={subHdr}>Running</div>
-          <MiniBar label="Avg weekly distance" displayValue={`${avgWeeklyMi.toFixed(1)} mi`} goalLabel={`Goal ${weeklyRunTarget} mi`} pct={avgWeeklyMi/weeklyRunTarget}/>
-          <MiniBar label="Avg weekly hours run" displayValue={`${avgWeeklyHrsRun.toFixed(1)} hrs`} goalLabel="Goal 4 hrs" pct={avgWeeklyHrsRun/4}/>
-          <MiniBar label="Avg pace vs goal" displayValue={fmtPace(avgPaceSecs)} goalLabel={`Goal ${fmtPace(goalPaceSecs)} /mi`} pct={avgPaceSecs?Math.min(goalPaceSecs/avgPaceSecs,1):0} inverted/>
-          <MiniBar label="Avg HR runs" displayValue={avgHR?`${avgHR} bpm`:'—'} goalLabel="Aerobic zone" pct={avgHR?Math.max(0,1-Math.abs(avgHR-140)/40):0}/>
-          <MiniBar label="Long run last 30d" displayValue={`${longRun.toFixed(1)} mi`} goalLabel="Goal 10 mi" pct={longRun/10}/>
-
-          <div style={divider}/>
-          <div style={subHdr}>Strength</div>
-          <MiniBar label="Avg per week" displayValue={`${(ytdStrength.length/weeksElapsed).toFixed(1)} sess`} goalLabel={`Goal ${strTarget}/wk`} pct={(ytdStrength.length/weeksElapsed)/strTarget}/>
-          <MiniBar label="Avg weekly hours strength" displayValue={`${avgWeeklyHrsStr.toFixed(1)} hrs`} goalLabel="Goal 1 hr" pct={avgWeeklyHrsStr/1}/>
-          <MiniBar label="Avg RPE" displayValue={avgRPE||'—'} goalLabel="Self-reported" pct={avgRPE?parseFloat(avgRPE)/10:0}/>
-
-          <div style={{marginTop:'auto',paddingTop:10}}>
-            <div style={divider}/>
-            <div style={subHdr}>Recovery (30-day avg)</div>
+          {/* 30-day average */}
+          <div>
+            <div style={subHdr}>30-Day Avg</div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
               <div style={miniTile}>
                 <div style={miniVal}>{avgHRV30?`${avgHRV30}ms`:'—'}</div>
@@ -3652,144 +4017,9 @@ Structure:
             </div>
           </div>
         </div>
-
-        {/* BODY PANEL */}
-        <div style={{...panelStyle,display:'flex',flexDirection:'column'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>Body</span>
-            <span style={{fontSize:10,color:'var(--text-muted)'}}>current · weekly view</span>
-          </div>
-
-          {/* 3 arc dials */}
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:12}}>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDialSVG value={currentWeight} max={240} color="#fbbf24" label="lbs" sublabel={currentWeight?currentWeight.toFixed(1):'—'} size={76}/>
-              <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Weight</div>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDialSVG value={currentBF} max={40} color="#f87171" label="%" sublabel={currentBF?currentBF.toFixed(1):'—'} size={76}/>
-              <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Body fat</div>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDialSVG value={latestRHR} max={80} color="#4ade80" label="bpm" sublabel={latestRHR||'—'} size={76}/>
-              <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>RHR</div>
-            </div>
-          </div>
-
-          <div style={divider}/>
-          <div style={subHdr}>Composition</div>
-          <MiniBar label="BMI" displayValue={currentBMI?`${currentBMI.toFixed(1)} → target 22–25`:'—'} goalLabel="Range 22–25" pct={currentBMI?Math.max(0,1-Math.abs(currentBMI-23.5)/8):0} inverted/>
-          <MiniBar label="Lean mass" displayValue={currentLean?`${currentLean.toFixed(1)} lbs`:'—'} goalLabel={`Target ${parseFloat(profile?.targetLeanMassLbs)||138} lbs`} pct={currentLean?currentLean/(parseFloat(profile?.targetLeanMassLbs)||138):0}/>
-          <MiniBar label="Visceral fat" displayValue="1.29 / 0.60 lbs" goalLabel="Target 0.60 lbs" pct={0.46} inverted/>
-
-          <div style={divider}/>
-          <div style={subHdr}>Nutrition (7-day avg)</div>
-          {/* Calorie balance donut */}
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
-            <svg width="68" height="68" viewBox="0 0 68 68" style={{flexShrink:0}}>
-              <circle cx="34" cy="34" r="26" fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
-              <circle cx="34" cy="34" r="26" fill="none" stroke="#4ade80" strokeWidth="6"
-                strokeDasharray={`${Math.min((avgCalories||0)/calT,1)*163} 163`}
-                strokeDashoffset="41" strokeLinecap="round"/>
-              <text x="34" y="32" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>30d avg</text>
-              <text x="34" y="44" textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{avgCalories||'—'}</text>
-              <text x="34" y="54" textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>kcal</text>
-            </svg>
-            <div style={{flex:1,fontSize:10,color:'var(--text-muted)'}}>
-              <div>Consumed: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avgCalories?avgCalories.toLocaleString():'—'}</span></div>
-              <div>Burned: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avgBurned?avgBurned.toLocaleString():'—'}</span></div>
-              <div style={{color:avgCalories&&avgCalories<avgBurned?'#4ade80':'#fbbf24',marginTop:2}}>
-                {avgCalories?`${avgCalories<avgBurned?'↓':'↑'} ${Math.abs(avgCalories-avgBurned).toLocaleString()} kcal/day`:'—'}
-              </div>
-            </div>
-          </div>
-          <MiniBar label="Protein" displayValue={`${avgProtein||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avgProtein||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-          <MiniBar label="Carbs" displayValue={`${avgCarbs||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyCarbTarget)||180}g`} pct={(avgCarbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
-          <MiniBar label="Fat" displayValue={`${avgFat||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyFatTarget)||65}g`} pct={(avgFat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
-
-          <div style={{marginTop:'auto',paddingTop:10}}>
-            <div style={divider}/>
-            <div style={subHdr}>Recovery (this week)</div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
-              <div style={miniTile}>
-                <div style={miniVal}>{avgHRV7?`${avgHRV7}ms`:'—'}</div>
-                <div style={miniLbl}>HRV</div>
-              </div>
-              <div style={miniTile}>
-                <div style={miniVal}>{fmtSleep(avgSleepMins7)}</div>
-                <div style={miniLbl}>Sleep{latestSleepScore?` · ${latestSleepScore}/100`:''}</div>
-              </div>
-              <div style={miniTile}>
-                <div style={miniVal}>{latestRHR?`${latestRHR} bpm`:'—'}</div>
-                <div style={miniLbl}>RHR ↓ good</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
       </div>
 
-      {/* Section 4: Body composition banner */}
-      <div style={{background:'rgba(96,165,250,0.06)',border:'0.5px solid rgba(96,165,250,0.2)',borderRadius:'var(--radius-md)',padding:12}}>
-        <div style={{fontSize:10,color:'#60a5fa',letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:8}}>◉ Body Composition · DexaFit Mar 2025 baseline → current</div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(6,minmax(0,1fr))',gap:6}}>
-          {[
-            {label:'VO₂ Max',val:'51',unit:'',sub:'Elite · 98th',clr:'#34d399'},
-            {label:'Bio Age',val:'33',unit:'y',sub:'17 yrs younger',clr:'#4ade80'},
-            {label:'RMR',val:'1,880',unit:'',sub:'kcal/day',clr:'#facc15'},
-            {label:'Body fat',val:currentBF?currentBF.toFixed(1):'24.7',unit:'%',sub:'Mar: 24.7%',clr:'#fbbf24'},
-            {label:'Visceral fat',val:'1.29',unit:'lbs',sub:'Target 0.60',clr:'#f87171'},
-            {label:'Lean mass',val:currentLean?currentLean.toFixed(0):'134',unit:'lbs',sub:'Target 138',clr:'#a78bfa'},
-          ].map((c,i)=>(
-            <div key={i} style={{textAlign:'center',padding:'4px 2px'}}>
-              <div style={{fontSize:'clamp(15px,1vw + 10px,20px)',fontWeight:500,color:c.clr}}>{c.val}<span style={{fontSize:10,color:'var(--text-muted)',marginLeft:2}}>{c.unit}</span></div>
-              <div style={{fontSize:9,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.05em'}}>{c.label}</div>
-              <div style={{fontSize:9,color:c.clr,marginTop:1}}>{c.sub}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Section 5: Blood panel */}
-      <div style={panelStyle}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>⬡ Blood Panel</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>{labDate}</span>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:8}}>
-          {[
-            {name:'Glucose (mg/dL)',label:'Glucose',unit:'mg/dL',min:72,max:90},
-            {name:'HbA1c (%)',label:'HbA1c',unit:'%',min:4.6,max:5.3},
-            {name:'Insulin (µIU/mL)',label:'Insulin',unit:'µIU/mL',min:2,max:6},
-            {name:'LDL Cholesterol (mg/dL)',label:'LDL',unit:'mg/dL',min:40,max:99},
-            {name:'HDL Cholesterol (mg/dL)',label:'HDL',unit:'mg/dL',min:60,max:100},
-            {name:'Triglycerides (mg/dL)',label:'Triglycerides',unit:'mg/dL',min:40,max:100},
-            {name:'ApoB (mg/dL)',label:'ApoB',unit:'mg/dL',min:40,max:80},
-            {name:'hsCRP (mg/L)',label:'hsCRP',unit:'mg/L',min:0,max:0.5},
-            {name:'Testosterone (ng/dL)',label:'Testosterone',unit:'ng/dL',min:600,max:900},
-            {name:'Free testosterone (ng/dL)',label:'Free T',unit:'ng/dL',min:8,max:15},
-            {name:'Cortisol (µg/dL)',label:'Cortisol',unit:'µg/dL',min:8,max:18},
-            {name:'TSH (µIU/L)',label:'TSH',unit:'µIU/L',min:1,max:2.5},
-            {name:'Vitamin D (ng/mL)',label:'Vit D',unit:'ng/mL',min:50,max:80},
-            {name:'Vitamin B12 (pg/mL)',label:'B12',unit:'pg/mL',min:500,max:900},
-            {name:'Ferritin (ng/mL)',label:'Ferritin',unit:'ng/mL',min:50,max:150},
-            {name:'Magnesium (mg/dL)',label:'Magnesium',unit:'mg/dL',min:2.0,max:2.5},
-          ].map(m=>{
-            const r=bloodMarker(m.name,m.unit,m.min,m.max);
-            return(
-              <div key={m.name} style={{background:'var(--bg-elevated)',borderRadius:6,padding:'7px 9px'}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <span style={{fontSize:9,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.05em'}}>{m.label}</span>
-                  <span style={{fontSize:8,padding:'1px 5px',borderRadius:3,background:`${r.clr}20`,color:r.clr,fontWeight:500}}>{r.status}</span>
-                </div>
-                <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)',marginTop:2}}>{r.val}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Section 6: Annual trends */}
+      {/* ═══════ SECTION 6: ANNUAL TRENDS ═══════ */}
       <div style={panelStyle}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>◦ Annual Trends · Last 8 Weeks</span>
@@ -4378,20 +4608,36 @@ function ProfileSettings({data,persist,showToast}){
           <div style={{flex:1,height:'0.5px',background:'var(--border-subtle)'}}/>
         </div>
 
-        {/* Architecture Map link */}
-        <div style={{...S.lg,marginBottom:8,cursor:'pointer'}} onClick={()=>{
+        {/* Architecture Map link — use a real <a> so browsers + Capacitor webviews open the
+            static asset natively instead of window.open('_blank'), which was being blocked
+            (or redirecting the root webview back to the SPA's default tab). */}
+        {(()=>{
           const base=window.location.pathname.replace(/\/index\.html$/,'').replace(/\/$/,'');
-          window.open(base+'/arnold-architecture.html','_blank');
-        }}>
-          <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:'var(--bg-elevated)',borderRadius:'var(--radius-md)',border:'0.5px solid var(--border-default)'}}>
-            <span style={{fontSize:16}}>&#9783;</span>
-            <div style={{flex:1}}>
-              <div style={{fontSize:12,fontWeight:500,color:'var(--text-primary)'}}>Architecture Map</div>
-              <div style={{fontSize:10,color:'var(--text-muted)'}}>Component dependencies, storage keys, data flow, security audit</div>
-            </div>
-            <span style={{fontSize:11,color:'var(--text-muted)'}}>&#8599;</span>
-          </div>
-        </div>
+          const isMobileUA=/android|iphone|ipad|ipod/i.test(navigator.userAgent);
+          const href=base+(isMobileUA?'/arnold-mobile-architecture.html':'/arnold-architecture.html');
+          return(
+            <a href={href} target="_blank" rel="noopener noreferrer"
+              onClick={e=>{
+                // Defensive: if something upstream tries to preventDefault or the target=_blank
+                // fails silently in a constrained webview, fall back to an explicit window.open
+                // in the current tab so the user at least reaches the page.
+                try{
+                  const popup=window.open(href,'_blank','noopener,noreferrer');
+                  if(popup){e.preventDefault();}
+                }catch{/* let the native anchor take over */}
+              }}
+              style={{...S.lg,marginBottom:8,cursor:'pointer',textDecoration:'none',display:'block'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:'var(--bg-elevated)',borderRadius:'var(--radius-md)',border:'0.5px solid var(--border-default)'}}>
+                <span style={{fontSize:16}}>&#9783;</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:500,color:'var(--text-primary)'}}>Architecture Map</div>
+                  <div style={{fontSize:10,color:'var(--text-muted)'}}>Component dependencies, storage keys, data flow, security audit</div>
+                </div>
+                <span style={{fontSize:11,color:'var(--text-muted)'}}>&#8599;</span>
+              </div>
+            </a>
+          );
+        })()}
 
         {/* Backup & Restore */}
         <BackupPanel showToast={showToast}/>
@@ -4558,8 +4804,8 @@ const SEED_CLINICAL=[
 ];
 
 const SEED_LABS=[
-  {date:"2025-12-06",source:"csv",markers:{"Glucose (mg/dL)":85,"Calcium (mg/dL)":9.4,"Magnesium (mg/dL)":2.2,"Creatine kinase (U/L)":251,"Vitamin B12 (pg/mL)":696,"Folate (ng/mL)":19.1,"Vitamin D (ng/mL)":67,"Ferritin (ng/mL)":65,"Total Cholesterol (mg/dL)":164,"Hemoglobin (g/dL)":15,"HDL Cholesterol (mg/dL)":71,"LDL Cholesterol (mg/dL)":74,"Triglycerides (mg/dL)":102,"Testosterone (ng/dL)":756,"Potassium (mmol/L)":4,"Sodium (mmol/L)":139,"White blood cells (thousands/uL)":4.7,"HbA1c (%)":5.1,"ALT (U/L)":21,"Cortisol (µg/dL)":15.2,"Iron (ug/dL)":94,"TIBC (ug/dL)":324,"Albumin (g/dL)":4.6,"Free testosterone (ng/dL)":9.42,"AST (U/L)":27,"GGT (U/L)":18,"Transferrin saturation (%)":29,"SHBG (nmol/L)":57,"hsCRP (mg/L)":0.2,"TSH (µIU/L)":1.88,"RBC (x10E6/µL)":5.09,"Hematocrit (%)":45,"Platelets (thousands/uL)":183,"RBC Magnesium (mg/dL)":4.6,"Insulin (µIU/mL)":4,"ApoB (mg/dL)":47,"Testosterone:Cortisol Ratio (Units)":64.56}},
-  {date:"2025-07-30",source:"csv",markers:{"Glucose (mg/dL)":82,"Magnesium (mg/dL)":2.3,"Creatine kinase (U/L)":292,"Vitamin B12 (pg/mL)":599,"Folate (ng/mL)":19.6,"Vitamin D (ng/mL)":85,"Ferritin (ng/mL)":59,"Total Cholesterol (mg/dL)":162,"Hemoglobin (g/dL)":14.6,"HDL Cholesterol (mg/dL)":71,"LDL Cholesterol (mg/dL)":71,"Triglycerides (mg/dL)":110,"Testosterone (ng/dL)":593,"HbA1c (%)":5.2,"ALT (U/L)":26,"Cortisol (µg/dL)":18.4,"Iron (ug/dL)":67,"Albumin (g/dL)":4.7,"Free testosterone (ng/dL)":7.34,"AST (U/L)":24,"GGT (U/L)":23,"SHBG (nmol/L)":63,"hsCRP (mg/L)":0.3,"TSH (µIU/L)":3.5,"RBC (x10E6/µL)":5.01,"Hematocrit (%)":45.1,"Platelets (thousands/uL)":200,"RBC Magnesium (mg/dL)":4.8,"Insulin (µIU/mL)":8,"ApoB (mg/dL)":50,"Testosterone:Cortisol Ratio (Units)":42.91}},
+  {date:"2025-12-06",source:"csv",markers:{"Glucose (mg/dL)":85,"Calcium (mg/dL)":9.4,"Magnesium (mg/dL)":2.2,"Creatine kinase (U/L)":251,"Vitamin B12 (pg/mL)":696,"Folate (ng/mL)":19.1,"Vitamin D (ng/mL)":67,"Ferritin (ng/mL)":65,"Total Cholesterol (mg/dL)":164,"Hemoglobin (g/dL)":15,"HDL Cholesterol (mg/dL)":71,"LDL Cholesterol (mg/dL)":74,"Triglycerides (mg/dL)":102,"Testosterone (ng/dL)":756,"Potassium (mmol/L)":4,"Sodium (mmol/L)":139,"White blood cells (thousands/uL)":4.7,"HbA1c (%)":5.1,"ALT (U/L)":21,"Cortisol (µg/dL)":15.2,"Iron (ug/dL)":94,"TIBC (ug/dL)":324,"Albumin (g/dL)":4.6,"Free testosterone (ng/dL)":9.42,"AST (U/L)":27,"GGT (U/L)":18,"Transferrin saturation (%)":29,"SHBG (nmol/L)":57,"hsCRP (mg/L)":0.2,"TSH (µIU/L)":1.88,"RBC (x10E6/µL)":5.09,"Hematocrit (%)":45,"Platelets (thousands/uL)":183,"RBC Magnesium (mg/dL)":4.6,"Insulin (µIU/mL)":4,"ApoB (mg/dL)":47,"Testosterone:Cortisol Ratio (Units)":64.56,"eGFR (mL/min)":104,"Creatinine (mg/dL)":0.95}},
+  {date:"2025-07-30",source:"csv",markers:{"Glucose (mg/dL)":82,"Magnesium (mg/dL)":2.3,"Creatine kinase (U/L)":292,"Vitamin B12 (pg/mL)":599,"Folate (ng/mL)":19.6,"Vitamin D (ng/mL)":85,"Ferritin (ng/mL)":59,"Total Cholesterol (mg/dL)":162,"Hemoglobin (g/dL)":14.6,"HDL Cholesterol (mg/dL)":71,"LDL Cholesterol (mg/dL)":71,"Triglycerides (mg/dL)":110,"Testosterone (ng/dL)":593,"HbA1c (%)":5.2,"ALT (U/L)":26,"Cortisol (µg/dL)":18.4,"Iron (ug/dL)":67,"Albumin (g/dL)":4.7,"Free testosterone (ng/dL)":7.34,"AST (U/L)":24,"GGT (U/L)":23,"SHBG (nmol/L)":63,"hsCRP (mg/L)":0.3,"TSH (µIU/L)":3.5,"RBC (x10E6/µL)":5.01,"Hematocrit (%)":45.1,"Platelets (thousands/uL)":200,"RBC Magnesium (mg/dL)":4.8,"Insulin (µIU/mL)":8,"ApoB (mg/dL)":50,"Testosterone:Cortisol Ratio (Units)":42.91,"eGFR (mL/min)":101,"Creatinine (mg/dL)":0.98}},
   {date:"2025-04-16",source:"csv",markers:{"Glucose (mg/dL)":84,"Vitamin D (ng/mL)":62,"Vitamin B12 (pg/mL)":534,"Ferritin (ng/mL)":65,"Total Cholesterol (mg/dL)":152,"HDL Cholesterol (mg/dL)":76,"LDL Cholesterol (mg/dL)":62,"Triglycerides (mg/dL)":67,"Testosterone (ng/dL)":645,"HbA1c (%)":5.2,"ALT (U/L)":24,"Cortisol (µg/dL)":12.3,"Free testosterone (ng/dL)":8.11,"SHBG (nmol/L)":58,"hsCRP (mg/L)":0.2,"TSH (µIU/L)":2.0,"Insulin (µIU/mL)":2.5,"ApoB (mg/dL)":55,"Testosterone:Cortisol Ratio (Units)":65.58,"RBC Magnesium (mg/dL)":4.2}},
   {date:"2024-11-16",source:"csv",markers:{"Glucose (mg/dL)":82,"Vitamin D (ng/mL)":61,"Vitamin B12 (pg/mL)":381,"Ferritin (ng/mL)":63,"Total Cholesterol (mg/dL)":173,"HDL Cholesterol (mg/dL)":75,"LDL Cholesterol (mg/dL)":84,"Triglycerides (mg/dL)":68,"Testosterone (ng/dL)":599,"HbA1c (%)":5.1,"ALT (U/L)":28,"Cortisol (µg/dL)":9.2,"Free testosterone (ng/dL)":7.8,"SHBG (nmol/L)":52,"hsCRP (mg/L)":0.2,"TSH (µIU/L)":2.24,"Insulin (µIU/mL)":4.8,"ApoB (mg/dL)":65,"Testosterone:Cortisol Ratio (Units)":70.39,"RBC Magnesium (mg/dL)":5.0}},
   {date:"2024-06-21",source:"csv",markers:{"Glucose (mg/dL)":56,"Vitamin D (ng/mL)":44,"Vitamin B12 (pg/mL)":383,"Ferritin (ng/mL)":66,"Total Cholesterol (mg/dL)":177,"HDL Cholesterol (mg/dL)":72,"LDL Cholesterol (mg/dL)":86,"Triglycerides (mg/dL)":95,"Testosterone (ng/dL)":630,"HbA1c (%)":5.1,"ALT (U/L)":21,"Cortisol (µg/dL)":14,"Free testosterone (ng/dL)":8.17,"SHBG (nmol/L)":52,"hsCRP (mg/L)":0.2,"TSH (µIU/L)":2.89,"Insulin (µIU/mL)":4.5,"ApoB (mg/dL)":53,"Testosterone:Cortisol Ratio (Units)":62.76,"RBC Magnesium (mg/dL)":5.1}},

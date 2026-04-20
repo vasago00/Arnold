@@ -3,12 +3,12 @@
 // ring, sleep insight, co-pilot gauges, weekly/monthly/annual sections, and
 // multi-item today's plan with workout-type icons.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Sparkline } from "./Sparkline.jsx";
-import { STATUS, statusFromPct } from "../core/semantics.js";
+// STATUS/statusFromPct removed — readiness now computed by trainingStress.js
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
-import { computeReadiness } from "../core/trainingIntelligence.js";
+import { computeDailyScore, computeRolling7d, computeRolling30d } from "../core/trainingStress.js";
 import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
@@ -98,21 +98,27 @@ const Icon = {
       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
     </svg>
   ),
-  // Angled nozzle with hose — Fuel (Option C)
+  // Vintage gas station pump — Fuel
   GasPump: ({ color = T4, size = 19 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      {/* Spout tip */}
-      <path d="M16 4l3-1.5" strokeWidth="2" />
-      {/* Spout to handle */}
-      <path d="M10 8l6-4" strokeWidth="2" />
-      {/* Handle */}
-      <rect x="6" y="8" width="5" height="7" rx="1.5" strokeWidth="1.5" fill={color} fillOpacity="0.06" />
-      {/* Trigger */}
-      <path d="M6 12H4" strokeWidth="1.5" />
-      {/* Hose */}
-      <path d="M8.5 15c0 3-2 5-4 5.5" strokeWidth="2.5" />
-      {/* Drip from spout */}
-      <circle cx="18.5" cy="3.5" r="0.6" fill={color} opacity="0.6" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      {/* Pump body */}
+      <rect x="4" y="4" width="11" height="17" rx="1.5" fill={color} fillOpacity="0.06" />
+      {/* Base */}
+      <rect x="3" y="20" width="13" height="2" rx="0.5" fill={color} fillOpacity="0.15" />
+      {/* Display panel */}
+      <rect x="6" y="6.5" width="7" height="5" rx="1" strokeWidth="1.2" />
+      {/* Display line */}
+      <line x1="7.5" y1="9" x2="11.5" y2="9" strokeWidth="0.8" opacity="0.5" />
+      {/* Crown / top cap */}
+      <rect x="6" y="2.5" width="7" height="2" rx="0.8" strokeWidth="1.2" fill={color} fillOpacity="0.1" />
+      {/* Hose arm — extends right from body */}
+      <path d="M15 8h2.5a2 2 0 0 1 2 2v4" strokeWidth="1.8" />
+      {/* Nozzle */}
+      <path d="M19.5 14v3" strokeWidth="2" />
+      {/* Nozzle hook */}
+      <path d="M18 14h3" strokeWidth="1.4" />
+      {/* Drip */}
+      <circle cx="19.5" cy="18.5" r="0.7" fill={color} opacity="0.5" />
     </svg>
   ),
   // Heartbeat pulse — Core
@@ -245,9 +251,35 @@ function Header({ greeting, profileName }) {
 }
 
 // ─── HERO RAIL ──────────────────────────────────────────────────────────────
-function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceLabel, stats }) {
-  const circumference = 2 * Math.PI * 24;
-  const offset = circumference * (1 - Math.min(Math.max(score / 100, 0), 1));
+// Shorten race names: strip parentheticals, known suffixes, and cap length
+// "RBC Brooklyn Half (Popular® Brooklyn Half)" → "RBC Brooklyn Half"
+// "Run as One JP Morgan" → "Run as One"
+function shortRaceName(name, max = 22) {
+  if (!name) return 'Race';
+  let s = name.replace(/\s*\(.*\)\s*$/, '').trim();
+  // Remove common sponsor/org suffixes
+  s = s.replace(/\s+(JP\s*Morgan|Chase|Corporate\s*Challenge)\s*$/i, '').trim();
+  if (s.length > max) s = s.slice(0, max - 1).trim() + '…';
+  return s;
+}
+
+function HeroRail({ score, moonScore, scoreSuffix, statusWord, statusColor, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance }) {
+  // Main ring (7-day) geometry
+  const mainR = 24, mainSW = 4, mainSize = 58;
+  const mainCX = mainSize / 2, mainCY = mainSize / 2;
+  const mainCirc = 2 * Math.PI * mainR;
+  const mainOffset = mainCirc * (1 - Math.min(Math.max(score / 100, 0), 1));
+
+  // Moon ring (30-day) geometry — small satellite orbiting main ring
+  const moonR = 10;
+  const moonCirc = 2 * Math.PI * moonR;
+  const ms = moonScore || 0;
+  const moonOffset = moonCirc * (1 - Math.min(Math.max(ms / 100, 0), 1));
+  const moonColor = ms >= 70 ? C.green : ms >= 45 ? C.amber : ms > 0 ? C.red : T3;
+
+  const hasRace = raceDaysLeft != null && raceDaysLeft >= 0 && raceDaysLeft <= 120;
+  const raceDateStr = raceDate ? new Date(raceDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  const shortName = shortRaceName(raceName);
 
   return (
     <div style={{
@@ -262,23 +294,42 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
         background: `linear-gradient(90deg, transparent, ${statusColor}33, transparent)`,
       }} />
 
-      {/* Ring + Info + Race */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-        {/* Readiness Ring */}
-        <div style={{ width: 58, height: 58, position: 'relative', flexShrink: 0 }}>
-          <svg width={58} height={58} style={{ transform: 'rotate(-90deg)' }}>
-            <circle cx={29} cy={29} r={24} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={4} />
-            <circle cx={29} cy={29} r={24} fill="none" stroke={statusColor} strokeWidth={4}
-              strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round"
+      {/* Rings + Info + Race */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+
+        {/* Ring cluster: main 7d ring with moon 30d satellite */}
+        <div style={{ position: 'relative', width: 62, height: 62, flexShrink: 0, alignSelf: 'center' }}>
+          {/* Main ring (7-day) */}
+          <svg width="58" height="58" viewBox="0 0 58 58" style={{ position: 'absolute', top: 2, left: 0, transform: 'rotate(-90deg)' }}>
+            <circle cx="29" cy="29" r="24" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+            <circle cx="29" cy="29" r="24" fill="none" stroke={statusColor} strokeWidth="4"
+              strokeDasharray={mainCirc} strokeDashoffset={mainOffset} strokeLinecap="round"
               style={{ transition: 'stroke-dashoffset 0.8s ease' }} />
           </svg>
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <span style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>{score}</span>
+          <div style={{ position: 'absolute', top: 2, left: 0, width: 58, height: 58, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
+            <span style={{ fontSize: 20, fontWeight: 800, lineHeight: 1, color: T1 }}>{score}</span>
+            <span style={{ fontSize: 7, fontWeight: 600, color: T4, marginTop: 1 }}>7d</span>
+          </div>
+
+          {/* Moon ring (30-day) — small satellite, top-left (10 o'clock) of main ring */}
+          <div style={{
+            position: 'absolute', top: -4, left: -8, width: 28, height: 28,
+            borderRadius: '50%', background: BG,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg width="26" height="26" viewBox="0 0 26 26" style={{ position: 'absolute', transform: 'rotate(-90deg)' }}>
+              <circle cx="13" cy="13" r="10" fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth="2.5" />
+              {ms > 0 && <circle cx="13" cy="13" r="10" fill="none" stroke={moonColor} strokeWidth="2.5"
+                strokeDasharray={moonCirc} strokeDashoffset={moonOffset} strokeLinecap="round"
+                style={{ transition: 'stroke-dashoffset 0.8s ease' }} />}
+            </svg>
+            <span style={{ fontSize: 9, fontWeight: 800, color: T1, zIndex: 1 }}>{ms}</span>
           </div>
         </div>
 
         {/* Status + Pills */}
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, alignSelf: 'center' }}>
+          <div style={{ fontSize: 9, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>Daily Score{scoreSuffix || ''}</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: statusColor }}>{statusWord}</div>
           <div style={{ display: 'flex', gap: 3, marginTop: 5, flexWrap: 'wrap' }}>
             {factors.map((f, i) => (
@@ -296,14 +347,21 @@ function HeroRail({ score, statusWord, statusColor, factors, raceDaysLeft, raceL
           </div>
         </div>
 
-        {/* Race badge */}
-        {raceDaysLeft != null && raceDaysLeft > 0 && raceDaysLeft <= 120 && (
+        {/* Race countdown — compact pill, top-aligned */}
+        {hasRace && (
           <div style={{
-            flexShrink: 0, textAlign: 'center', padding: '5px 10px', borderRadius: 10,
-            background: 'rgba(212,139,78,0.06)', border: '1px solid rgba(212,139,78,0.1)',
+            flexShrink: 0, padding: '5px 9px', borderRadius: 10,
+            background: 'rgba(224,155,94,0.06)', border: '1px solid rgba(224,155,94,0.12)',
+            display: 'flex', alignItems: 'center', gap: 6,
+            marginTop: -2,
           }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: C.orange, lineHeight: 1 }}>{raceDaysLeft}d</div>
-            <div style={{ fontSize: 7, color: T3, marginTop: 2 }}>{raceLabel}</div>
+            <span style={{ fontSize: 16, fontWeight: 900, color: C.orange, lineHeight: 1 }}>
+              {raceDaysLeft}<span style={{ fontSize: 8, fontWeight: 700 }}>d</span>
+            </span>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 8, fontWeight: 700, color: '#e6e8ec', lineHeight: 1 }}>{shortName}</div>
+              <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{raceDateStr}</div>
+            </div>
           </div>
         )}
       </div>
@@ -345,22 +403,30 @@ function SleepInsight({ headline, detail }) {
 }
 
 // ─── MINI ARC GAUGE ─────────────────────────────────────────────────────────
-// Semi-circle SVG arc showing 30d avg progress toward goal
+// Semi-circle gauge using <circle> + strokeDasharray (same technique as SmallDial)
+// Both track and fill share the exact same circle geometry — guaranteed alignment.
 function MiniArcGauge({ pct, color }) {
-  // Arc from 180° semicircle, radius=18, center at (22,24)
-  const clampPct = Math.max(0, Math.min(pct || 0, 1));
-  // Start at (4,24), end varies along the arc
-  const angle = Math.PI * clampPct; // 0 to PI
-  const endX = 22 - 18 * Math.cos(angle);
-  const endY = 24 - 18 * Math.sin(angle);
-  const largeArc = clampPct > 0.5 ? 1 : 0;
+  const R = 17, CX = 22, CY = 22, SW = 3.5;
+  const halfCirc = Math.PI * R;                   // 180° arc length
+  const fullCirc = 2 * Math.PI * R;               // full circumference
+  const clamp = Math.max(0, Math.min(pct || 0, 1));
+  const fill = halfCirc * clamp;
 
   return (
-    <svg width={44} height={26} viewBox="0 0 44 26">
-      <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={3} strokeLinecap="round" />
-      {clampPct > 0.01 && (
-        <path d={`M 4 24 A 18 18 0 ${largeArc} 1 ${endX.toFixed(1)} ${endY.toFixed(1)}`}
-          fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" opacity={0.8} />
+    <svg width={44} height={26} viewBox="0 0 44 26" style={{ display: 'block' }}>
+      {/* Track: show top 180° of circle, hide bottom 180° */}
+      <circle cx={CX} cy={CY} r={R} fill="none"
+        stroke="rgba(255,255,255,0.12)" strokeWidth={SW}
+        strokeDasharray={`${halfCirc} ${halfCirc}`}
+        strokeLinecap="round"
+        transform={`rotate(180 ${CX} ${CY})`} />
+      {/* Fill: show pct portion of the top 180° */}
+      {clamp > 0.005 && (
+        <circle cx={CX} cy={CY} r={R} fill="none"
+          stroke={color} strokeWidth={SW}
+          strokeDasharray={`${fill} ${fullCirc - fill}`}
+          strokeLinecap="round"
+          transform={`rotate(180 ${CX} ${CY})`} />
       )}
     </svg>
   );
@@ -411,39 +477,39 @@ function CategoryLabel({ label, color }) {
   );
 }
 
-// ─── METRIC TILE (Today value + mini arc gauge for 30d avg) ─────────────────
+// ─── METRIC TILE (Today value + semicircle gauge for 30d avg) ────────────────
 function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, avg30Label, gaugePct, color, onTap }) {
   return (
     <div onClick={onTap} style={{
-      ...card, borderRadius: 14, padding: '8px 10px 8px',
-      cursor: onTap ? 'pointer' : 'default', minHeight: 80,
+      ...card, borderRadius: 14, padding: '8px 10px 6px',
+      cursor: onTap ? 'pointer' : 'default',
     }}>
       {/* Top accent */}
       <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.7 }} />
 
       {/* Label */}
-      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
 
-      {/* Body: today value + mini gauge */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        {/* Today col */}
-        <div style={{ flex: 1 }}>
-          <div>
+      {/* Body: value left, gauge right */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {/* Left: value + trend */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ whiteSpace: 'nowrap' }}>
             <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1 }}>{todayVal}</span>
-            {' '}<span style={{ fontSize: 9, color: T3 }}>{todayUnit}</span>
+            {todayUnit ? <span style={{ fontSize: 9, color: T3, marginLeft: 2 }}>{todayUnit}</span> : null}
           </div>
-          {trendText && (
-            <div style={{ fontSize: 8, fontWeight: 600, color: trendColor || T3, marginTop: 3 }}>{trendText}</div>
-          )}
+          <div style={{ fontSize: 8, fontWeight: 600, color: trendColor || T3, marginTop: 3, height: 12 }}>
+            {trendText || '\u00A0'}
+          </div>
         </div>
 
-        {/* Gauge col */}
-        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ width: 44, height: 26, overflow: 'hidden' }}>
-            <MiniArcGauge pct={gaugePct} color={color} />
+        {/* Right: semicircle arc + value below + label */}
+        <div style={{ flexShrink: 0, width: 44, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <MiniArcGauge pct={gaugePct} color={color} />
+          <div style={{ fontSize: 10, fontWeight: 700, color, lineHeight: 1, marginTop: 0 }}>{avg30}</div>
+          <div style={{ fontSize: 7, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>
+            {avg30Label || '30d avg'}
           </div>
-          <div style={{ fontSize: 10, fontWeight: 700, color, lineHeight: 1, marginTop: -1 }}>{avg30}</div>
-          <div style={{ fontSize: 7, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>{avg30Label || '30d avg'}</div>
         </div>
       </div>
     </div>
@@ -451,12 +517,12 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
 }
 
 // ─── THIS WEEK CARD ─────────────────────────────────────────────────────────
-function ThisWeekCard({ headline, miles, sessions, time, weeklyMiPct, weeklyTarget }) {
+function ThisWeekCard({ headline, miles, sessions, runs, time, weeklyMiPct, weeklyTarget }) {
   return (
     <div style={card}>
       <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(91,155,213,0.15), transparent)` }} />
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
-        {headline} <span style={{ fontWeight: 400, color: T3, fontSize: 11 }}>— {sessions} runs, {miles} mi</span>
+        {headline} <span style={{ fontWeight: 400, color: T3, fontSize: 11 }}>— {sessions} sessions, {miles} mi</span>
       </div>
       <div style={{ display: 'flex', marginBottom: 8 }}>
         {[
@@ -487,14 +553,23 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
   const yearProgress = (now - yearStart) / (yearEnd - yearStart);
   const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
 
-  // Parse races into markers with positions
+  // Parse races into markers with positions — deduplicate by date, truncate names, fix UTC
+  const seen = new Set();
   const raceMarkers = (races || [])
-    .filter(r => r.date && new Date(r.date).getFullYear() === now.getFullYear())
+    .filter(r => {
+      if (!r.date) return false;
+      const d = new Date(r.date + 'T12:00:00');
+      if (d.getFullYear() !== now.getFullYear()) return false;
+      const key = r.date;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map(r => {
-      const d = new Date(r.date);
+      const d = new Date(r.date + 'T12:00:00');
       const pct = (d - yearStart) / (yearEnd - yearStart);
       const isPast = d < now;
-      return { name: r.name || 'Race', date: d, pct: Math.max(0, Math.min(1, pct)), isPast, distMi: r.distanceMi };
+      return { name: shortRaceName(r.name), date: d, pct: Math.max(0, Math.min(1, pct)), isPast, distMi: r.distanceMi };
     })
     .sort((a, b) => a.pct - b.pct);
 
@@ -515,8 +590,8 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         ))}
       </div>
 
-      {/* Timeline bar */}
-      <div style={{ position: 'relative', height: 20, marginBottom: 10 }}>
+      {/* Timeline bar with markers */}
+      <div style={{ position: 'relative', height: 20, marginBottom: 4 }}>
         {/* Track */}
         <div style={{ position: 'absolute', top: 8, left: 0, right: 0, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)' }} />
         {/* Progress fill */}
@@ -524,11 +599,10 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         {/* Today marker */}
         <div style={{ position: 'absolute', top: 4, left: `${yearProgress * 100}%`, width: 2, height: 12, borderRadius: 1, background: T1, transform: 'translateX(-1px)' }} />
 
-        {/* Race markers */}
+        {/* Race marker dots */}
         {raceMarkers.map((r, i) => (
           <div key={i} style={{
             position: 'absolute', top: -1, left: `${r.pct * 100}%`, transform: 'translateX(-6px)',
-            display: 'flex', flexDirection: 'column', alignItems: 'center',
           }}>
             <div style={{
               width: 12, height: 12, borderRadius: 6,
@@ -542,18 +616,16 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         ))}
       </div>
 
-      {/* Race labels below timeline */}
+      {/* Race dates positioned under their markers */}
       {raceMarkers.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+        <div style={{ position: 'relative', height: 14, marginBottom: 8 }}>
           {raceMarkers.map((r, i) => (
-            <span key={i} style={{
-              fontSize: 7, padding: '2px 6px', borderRadius: 4,
-              background: r.isPast ? 'rgba(91,191,138,0.06)' : 'rgba(212,139,78,0.06)',
-              color: r.isPast ? C.green : C.orange, fontWeight: 600,
+            <div key={i} style={{
+              position: 'absolute', left: `${r.pct * 100}%`, transform: 'translateX(-50%)',
+              fontSize: 7, fontWeight: 600, color: r.isPast ? C.green : C.orange, whiteSpace: 'nowrap',
             }}>
-              {r.name} · {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-              {r.distMi ? ` · ${r.distMi}mi` : ''}
-            </span>
+              {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </div>
           ))}
         </div>
       )}
@@ -714,7 +786,7 @@ function MoreMenu({ onClose, onMenuTap }) {
     { id: 'goals', label: 'Goals', icon: '🎯' },
     { id: 'races', label: 'Races', icon: '🏁' },
     { id: 'stack', label: 'Stack', icon: '💊' },
-    { id: 'sync',  label: 'Sync',  icon: '🔄' },
+    { id: 'sync',  label: 'Cloud Sync',  icon: '☁️' },
     { id: 'profile', label: 'Profile', icon: '👤' },
   ];
 
@@ -807,7 +879,7 @@ function hexToRgb(hex) {
 function MobileHomeInner({
   data, focusItems, weeklyStats, avgWeeklyMi, avgWeeklyHrsTotal,
   avgPaceSecs, goalPaceSecs, fmtPace, totalMi, annualRunTarget, totalSessions,
-  sortedSleep, hrvData, sortedW, currentWeight, currentBF, latestSleepScore,
+  thisWeek, sortedSleep, hrvData, sortedW, currentWeight, currentBF, latestSleepScore,
   avgHRV30, recentNut, avgProtein, latestRHR, nextRace, onOpenTab, initialView
 }) {
   const [activeNav, setActiveNav] = useState(initialView || 'start');
@@ -840,27 +912,37 @@ function MobileHomeInner({
   // ── Format pace helper (fmtPace may be a function or a string) ──
   const paceStr = typeof fmtPace === 'function' ? fmtPace(avgPaceSecs) : (fmtPace || '—');
 
-  // ── Readiness ──
-  const readinessScore = (() => {
-    try { return Math.round(computeReadiness().score) || 75; } catch { return 75; }
-  })();
+  // ── Rolling Scores (7-day weighted + 30-day average) ──
+  const rolling7 = useMemo(() => {
+    try { return computeRolling7d(); } catch { return { score: 0, daily: [], todayScore: { score: 0, sessionType: 'rest', sessionMetric: null, factors: [] } }; }
+  }, []);
+  const rolling30 = useMemo(() => {
+    try { return computeRolling30d(); } catch { return { score: 0, daily: [] }; }
+  }, []);
 
-  const readinessStatus = statusFromPct(readinessScore / 100);
+  const mainScore = rolling7.score;
+  const moonScore = rolling30.score;
+  const todayResult = rolling7.todayScore || {};
+
+  // Today's deposit for the parenthetical
+  const scoreSuffix = todayResult.sessionMetric
+    ? ` (${todayResult.sessionMetric.label} ${todayResult.sessionMetric.value})`
+    : '';
+
   let statusColor = C.blue, statusWord = 'On Track';
-  if (readinessStatus === 'ok') { statusColor = C.green; statusWord = 'On Track'; }
-  else if (readinessStatus === 'warn') { statusColor = C.amber; statusWord = 'Needs Work'; }
-  else if (readinessStatus === 'critical') { statusColor = C.red; statusWord = 'Behind'; }
+  if (mainScore >= 70) { statusColor = C.green; statusWord = 'On Track'; }
+  else if (mainScore >= 45) { statusColor = C.amber; statusWord = 'Needs Work'; }
+  else if (mainScore > 0) { statusColor = C.red; statusWord = 'Behind'; }
+  else { statusColor = C.blue; statusWord = 'No Data'; }
 
-  // ── Factor pills ──
-  const factors = (() => {
-    const f = [];
-    const volPct = avgWeeklyMi / (G.weeklyRunDistanceTarget || 50);
-    f.push({ label: 'Volume', type: volPct > 0.9 ? 'ok' : volPct > 0.7 ? 'neutral' : 'warn' });
-    f.push({ label: 'Pace', type: avgPaceSecs <= (goalPaceSecs || 600) * 1.1 ? 'ok' : avgPaceSecs <= (goalPaceSecs || 600) * 1.2 ? 'neutral' : 'warn' });
-    f.push({ label: 'Sleep', type: (latestSleepScore || 0) >= 85 ? 'ok' : (latestSleepScore || 0) >= 70 ? 'neutral' : 'warn' });
-    f.push({ label: 'Protein', type: (avgProtein || 0) >= 120 ? 'ok' : (avgProtein || 0) >= 80 ? 'neutral' : 'warn' });
-    return f;
-  })();
+  // ── Factor pills from today's score ──
+  const factors = useMemo(() => {
+    if (!todayResult.factors?.length) return [{ label: 'No data', type: 'neutral' }];
+    return todayResult.factors.map(f => ({
+      label: f.label,
+      type: f.status === 'good' ? 'ok' : f.status === 'poor' ? 'warn' : 'neutral',
+    }));
+  }, [todayResult]);
 
   // ── Race countdown ──
   const raceDaysLeft = nextRace?.date ? Math.ceil((new Date(nextRace.date) - new Date()) / 86400000) : null;
@@ -868,14 +950,19 @@ function MobileHomeInner({
 
   // ── Hero stats ──
   const heroStats = [
-    { label: 'Miles/wk', value: avgWeeklyMi?.toFixed(1) || '0', unit: 'mi' },
+    { label: 'Miles/wk', value: (thisWeek?.mi || 0).toFixed(1), unit: 'mi' },
     { label: 'Sleep', value: latestSleepScore || '—', unit: '/100' },
     { label: 'Protein', value: avgProtein?.toFixed(0) || '0', unit: 'g' },
     { label: 'Weight', value: currentWeight?.toFixed(1) || '—', unit: 'lb' },
   ];
 
   // ── Sleep insight ──
-  const sleepHrs = sortedSleep?.length > 0 ? (sortedSleep[sortedSleep.length - 1] / 100 * 8).toFixed(0) : '7';
+  const sleepHrs = (() => {
+    if (!sortedSleep?.length) return '7';
+    const last = sortedSleep[sortedSleep.length - 1];
+    const score = typeof last === 'number' ? last : last?.sleepScore;
+    return typeof score === 'number' && !isNaN(score) ? (score / 100 * 8).toFixed(0) : '7';
+  })();
   const sleepInsight = (() => {
     const score = latestSleepScore || 0;
     if (score >= 85) return { hl: 'Great sleep — ready to push', detail: `${score}/100 recovery` };
@@ -898,7 +985,19 @@ function MobileHomeInner({
   // ── 30-day averages for gauge tiles ──
   const avg30Mi = (() => {
     try {
-      const acts = storage.get('activities') || [];
+      // Merge CSV activities + dailyLogs FIT data (same logic as getUnifiedActivities)
+      const csvActs = (storage.get('activities') || []).filter(a => a.source !== 'health_connect');
+      const dlogs = storage.get('dailyLogs') || [];
+      const byKey = new Map(csvActs.map(a => [`${a.date}|${a.title || a.activityType || ''}`, a]));
+      for (const log of dlogs) {
+        const fd = log.fitData;
+        if (!fd || !log.date) continue;
+        const type = fd.activityType || fd.type || 'workout';
+        const key = `${log.date}|${type}`;
+        if (byKey.has(key)) continue;
+        byKey.set(key, { date: log.date, distanceMi: fd.distanceMi || null, activityType: type });
+      }
+      const acts = [...byKey.values()];
       const now = new Date();
       const d30 = new Date(now - 30 * 86400000);
       const recent = acts.filter(a => a.date && new Date(a.date) >= d30);
@@ -911,7 +1010,8 @@ function MobileHomeInner({
   const avg30Sleep = (() => {
     try {
       if (!sortedSleep || sortedSleep.length < 2) return '—';
-      const last30 = sortedSleep.slice(-30).filter(v => typeof v === 'number' && !isNaN(v));
+      // sortedSleep may be objects with .sleepScore or plain numbers
+      const last30 = sortedSleep.slice(-30).map(v => typeof v === 'number' ? v : v?.sleepScore).filter(v => typeof v === 'number' && !isNaN(v));
       if (!last30.length) return '—';
       const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
       return isNaN(avg) ? '—' : avg.toFixed(0);
@@ -930,7 +1030,8 @@ function MobileHomeInner({
   const avg30Weight = (() => {
     try {
       if (!sortedW || sortedW.length < 2) return '—';
-      const last30 = sortedW.slice(-30).filter(v => typeof v === 'number' && !isNaN(v));
+      // sortedW may be objects with .weightLbs or plain numbers
+      const last30 = sortedW.slice(-30).map(v => typeof v === 'number' ? v : v?.weightLbs).filter(v => typeof v === 'number' && !isNaN(v));
       if (!last30.length) return '—';
       const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
       return isNaN(avg) ? '—' : avg.toFixed(1);
@@ -940,7 +1041,8 @@ function MobileHomeInner({
   const avg30HRV = (() => {
     try {
       if (!hrvData || hrvData.length < 2) return '—';
-      const last30 = hrvData.slice(-30).filter(v => typeof v === 'number' && !isNaN(v));
+      // hrvData may be objects with .overnightHRV or plain numbers
+      const last30 = hrvData.slice(-30).map(v => typeof v === 'number' ? v : v?.overnightHRV).filter(v => typeof v === 'number' && !isNaN(v));
       if (!last30.length) return '—';
       const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
       return isNaN(avg) ? '—' : avg.toFixed(0);
@@ -964,10 +1066,17 @@ function MobileHomeInner({
     tileColor, tapTab,
   });
 
+  // ── This Week (actual current week, not YTD averages) ──
+  const twMi = thisWeek?.mi || 0;
+  const twSessions = thisWeek?.sessions || 0;
+  const twRuns = thisWeek?.runs || 0;
+  const twHrs = thisWeek?.hrs || 0;
+  const weeklyMiPct = twMi / (G.weeklyRunDistanceTarget || 50);
+
   // RUN
   const runTiles = [
-    buildTile('Weekly Miles', avgWeeklyMi?.toFixed(1) || '0', 'mi',
-      trendVsLastWk(avgWeeklyMi, weeklyStats?.map(w => w.miles)),
+    buildTile('Weekly Miles', twMi.toFixed(1), 'mi',
+      trendVsLastWk(twMi, weeklyStats?.map(w => w.mi ?? w.miles)),
       avg30Mi, parseFloat(avg30Mi) / (G.weeklyRunDistanceTarget || 20), C.blue, 'activity'),
     buildTile('Avg Pace', paceStr, '/mi',
       { text: '→ tracking', color: T3 },
@@ -988,16 +1097,16 @@ function MobileHomeInner({
   // RECOVERY
   const recoveryTiles = [
     buildTile('Sleep Score', latestSleepScore || '—', 'pts',
-      trendVsLastWk(latestSleepScore, sortedSleep?.slice(-8)),
+      trendVsLastWk(latestSleepScore, sortedSleep?.slice(-8).map(s => typeof s === 'number' ? s : s?.sleepScore)),
       avg30Sleep, parseFloat(avg30Sleep) / (G.targetSleepScore || 85), C.cyan, 'clinical'),
     buildTile('HRV', avgHRV30?.toFixed(0) || '—', 'ms',
-      trendVsLastWk(avgHRV30, hrvData?.slice(-8)),
+      trendVsLastWk(avgHRV30, hrvData?.slice(-8).map(h => typeof h === 'number' ? h : h?.overnightHRV)),
       avg30HRV, parseFloat(avg30HRV) / (G.targetHRV || 70), C.green, 'clinical'),
   ];
 
   // BODY (weight: down is good, so invert trend color)
   const weightTrend = (() => {
-    const t = trendVsLastWk(currentWeight, sortedW?.slice(-8));
+    const t = trendVsLastWk(currentWeight, sortedW?.slice(-8).map(w => typeof w === 'number' ? w : w?.weightLbs));
     if (t.color === C.red) return { ...t, color: C.green };
     if (t.color === C.green) return { ...t, color: C.red };
     return t;
@@ -1013,11 +1122,8 @@ function MobileHomeInner({
       avg30Protein, parseFloat(avg30Protein || 0) / (G.dailyProteinTarget || 150),
       C.pink, 'nutrition_mobile'),
   ];
-
-  // ── Weekly ──
-  const weeklyMiPct = avgWeeklyMi / (G.weeklyRunDistanceTarget || 50);
   const weeklyHeadline = weeklyMiPct > 0.8 ? 'Strong week' : weeklyMiPct > 0.6 ? 'Building momentum' : 'Light week';
-  const weeklyTime = `${Math.floor((avgWeeklyHrsTotal || 0))}h ${Math.round(((avgWeeklyHrsTotal || 0) % 1) * 60)}m`;
+  const weeklyTime = `${Math.floor(twHrs)}h ${Math.round((twHrs % 1) * 60)}m`;
 
   // ── Annual goals from Goals system ──
   const annualRunMiGoal = G.annualRunDistanceTarget || 800;
@@ -1070,9 +1176,9 @@ function MobileHomeInner({
   const handleMoreMenuTap = (id) => {
     if (id === 'goals') onOpenTab?.('goals');
     else if (id === 'races') onOpenTab?.('races');
-    else if (id === 'stack') onOpenTab?.('stack');
-    else if (id === 'sync') onOpenTab?.('sync');
-    else if (id === 'profile') onOpenTab?.('profile');
+    else if (id === 'stack') onOpenTab?.('supplements');
+    else if (id === 'sync') onOpenTab?.('settings');
+    else if (id === 'profile') onOpenTab?.('settings');
   };
 
   // Non-start tabs: Arnold.jsx renders both the tab content and the BottomNavBar
@@ -1092,13 +1198,17 @@ function MobileHomeInner({
       <Header greeting={greeting} profileName={profileName} />
 
       <HeroRail
-        score={readinessScore}
+        score={mainScore}
+        moonScore={moonScore}
+        scoreSuffix={scoreSuffix}
         statusWord={statusWord}
         statusColor={statusColor}
         factors={factors}
-        raceDaysLeft={raceDaysLeft}
-        raceLabel={raceLabel}
         stats={heroStats}
+        raceDaysLeft={raceDaysLeft}
+        raceName={raceLabel}
+        raceDate={nextRace?.date}
+        raceDistance={nextRace?.distanceMi ? `${nextRace.distanceMi} mi` : nextRace?.distanceKm ? `${nextRace.distanceKm} km` : ''}
       />
 
       <SleepInsight headline={sleepInsight.hl} detail={sleepInsight.detail} />
@@ -1159,8 +1269,9 @@ function MobileHomeInner({
       <div style={sectionHeader}>This Week <div style={shLine} /></div>
       <ThisWeekCard
         headline={weeklyHeadline}
-        miles={avgWeeklyMi?.toFixed(1) || '0'}
-        sessions={totalSessions || 0}
+        miles={twMi.toFixed(1)}
+        sessions={twSessions}
+        runs={twRuns}
         time={weeklyTime}
         weeklyMiPct={weeklyMiPct}
         weeklyTarget={G.weeklyRunDistanceTarget || 50}
@@ -1249,5 +1360,202 @@ export function MobileHome(props) {
     <MobileHomeErrorBoundary>
       <MobileHomeInner {...props} />
     </MobileHomeErrorBoundary>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MOBILE EDGEIQ — standalone screen for the EdgeIQ tab on mobile
+// ═══════════════════════════════════════════════════════════════════════════════
+import { getSystemsReport } from "../core/healthSystems.js";
+import { cleanSleepForAveraging } from "../core/parsers/sleepParser.js";
+
+// Keys must match system IDs from healthSystems.js: brain, heart, bones, gut, immune, energy, longevity, sleep, metabolism, endurance
+const SYSTEM_ICONS_M = {
+  brain: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8 2 5 5 5 9c0 2 .5 3.5 1.5 5 .8 1.2 1 2.5 1 4h9c0-1.5.2-2.8 1-4 1-1.5 1.5-3 1.5-5 0-4-3-7-7-7z"/><path d="M9 18h6v2a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2z"/><path d="M12 2v16"/><path d="M6.5 8c2 1 3.5 1.5 5.5 1.5s3.5-.5 5.5-1.5"/><path d="M7 12.5c1.5.8 3 1 5 1s3.5-.2 5-1"/></svg>,
+  heart: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"/></svg>,
+  bones: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="9" width="4" height="6" rx="1"/><rect x="18" y="9" width="4" height="6" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/><rect x="5" y="7" width="2" height="10" rx="0.5"/><rect x="17" y="7" width="2" height="10" rx="0.5"/></svg>,
+  gut: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4h10c1.5 0 2.5 1 2.5 2.5S18.5 9 17 9H7c-1.5 0-2.5 1-2.5 2.5S6 14 7 14h10"/><path d="M17 14c1.5 0 2.5 1 2.5 2.5S18.5 19 17 19H7"/><circle cx="5" cy="19" r="1.2" fill={c} stroke="none"/></svg>,
+  immune: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/></svg>,
+  energy: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>,
+  longevity: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>,
+  sleep: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
+  metabolism: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h4l2-8 4 16 2-8h4"/></svg>,
+  endurance: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c4-6 8-6 12 0s8 6 12 0"/></svg>,
+};
+
+function MobileSystemTile({ sys }) {
+  const statusColor = sys.status === 'good' ? '#4ade80' : sys.status === 'focus' ? '#fbbf24' : '#f87171';
+  const fillTint = sys.status === 'good' ? 'rgba(74,222,128,0.12)'
+    : sys.status === 'focus' ? 'rgba(251,191,36,0.12)' : 'rgba(248,113,113,0.15)';
+  const icon = SYSTEM_ICONS_M[sys.id]?.(sys.color) || null;
+  return (
+    <div style={{
+      position: 'relative', background: CARD_BG, border: `0.5px solid ${BORDER}`,
+      borderRadius: 10, padding: '8px 4px 7px', overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'absolute', left: 0, right: 0, bottom: 0,
+        height: `${Math.max(8, sys.pct)}%`,
+        background: `linear-gradient(180deg, transparent, ${fillTint})`,
+        borderRadius: '0 0 10px 10px', transition: 'height 0.6s ease', zIndex: 0,
+      }} />
+      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
+        <div style={{
+          width: 22, height: 22, margin: '0 auto 4px', borderRadius: 6,
+          background: CARD_BG, border: `0.5px solid ${BORDER}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>{icon}</div>
+        <div style={{ fontSize: 8, fontWeight: 600, color: T1, lineHeight: 1.15, marginBottom: 2, minHeight: 18 }}>
+          {sys.name.replace(' & ', '/')}
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: statusColor, marginBottom: 2 }}>{sys.pct}%</div>
+        <div style={{ fontSize: 7, color: T3, lineHeight: 1.2, minHeight: 16 }}>{sys.comment}</div>
+      </div>
+    </div>
+  );
+}
+
+export function MobileEdgeIQ({ data, onOpenTab }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const report = useMemo(() => getSystemsReport(today), [today]);
+  const goodCount = report.filter(s => s.status === 'good').length;
+  const focusCount = report.filter(s => s.status === 'focus').length;
+  const defCount = report.filter(s => s.status === 'def').length;
+
+  // Cockpit data
+  const G = getGoals();
+  const activities = storage.get('activities') || [];
+  const hrvData = storage.get('hrv') || [];
+  const sleepData = cleanSleepForAveraging(storage.get('sleep') || []);
+  const cronometer = storage.get('cronometer') || [];
+
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const ytdRuns = activities.filter(a => a.date && new Date(a.date) >= yearStart && /run/i.test(a.activityType || ''));
+  const totalMi = ytdRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
+  const totalSessions = activities.filter(a => a.date && new Date(a.date) >= yearStart).length;
+
+  // 8-week stats
+  const weeklyStats = Array.from({ length: 8 }, (_, i) => {
+    const wStart = new Date(now); wStart.setDate(now.getDate() - (7 * (7 - i) + now.getDay())); wStart.setHours(0, 0, 0, 0);
+    const wEnd = new Date(wStart); wEnd.setDate(wStart.getDate() + 7);
+    const wAll = activities.filter(a => { const d = new Date(a.date); return d >= wStart && d < wEnd; });
+    const wRuns = wAll.filter(a => /run/i.test(a.activityType || ''));
+    const mi = wRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
+    const hrs = wAll.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
+    return { mi, hrs, sessions: wAll.length };
+  });
+  const avgWeeklyMi = weeklyStats.reduce((s, w) => s + w.mi, 0) / 8;
+  const avgWeeklyHrs = weeklyStats.reduce((s, w) => s + w.hrs, 0) / 8;
+
+  // Recent biometrics
+  const recentHRV = [...hrvData].filter(h => h.overnightHRV).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const latestHRV = recentHRV[0]?.overnightHRV || null;
+  const recentSleep = [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const latestSleepScore = recentSleep.find(s => s.sleepScore)?.sleepScore || null;
+  const latestRHR = recentSleep.find(s => s.restingHR)?.restingHR || null;
+
+  // Nutrition
+  const d30 = new Date(); d30.setDate(d30.getDate() - 30);
+  const recentNut = cronometer.filter(c => c.date >= d30.toISOString().slice(0, 10) && c.calories);
+  const avgProtein = recentNut.length ? Math.round(recentNut.reduce((s, c) => s + (parseFloat(c.protein) || 0), 0) / recentNut.length) : null;
+
+  const cockpitItems = [
+    { label: 'Avg Miles/wk', value: avgWeeklyMi.toFixed(1), unit: 'mi', goal: G.weeklyRunDistanceTarget, color: C.blue },
+    { label: 'Avg Hours/wk', value: avgWeeklyHrs.toFixed(1), unit: 'hrs', goal: G.weeklyTimeTargetHrs, color: C.purple },
+    { label: 'HRV', value: latestHRV || '—', unit: 'ms', goal: G.targetHRV, color: C.green },
+    { label: 'RHR', value: latestRHR || '—', unit: 'bpm', goal: G.targetRHR, color: C.amber },
+    { label: 'Sleep', value: latestSleepScore || '—', unit: '/100', goal: G.targetSleepScore, color: C.cyan },
+    { label: 'Protein', value: avgProtein || '—', unit: 'g', goal: G.dailyProteinTarget, color: C.pink },
+  ];
+
+  return (
+    <div style={{
+      background: BG, color: T1, minHeight: '100vh',
+      fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
+      padding: '12px 10px 76px', WebkitFontSmoothing: 'antialiased',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T1 }}>◈ EdgeIQ</div>
+          <div style={{ fontSize: 9, color: T3, marginTop: 1 }}>Intelligence · Signals · Systems</div>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 6, background: 'rgba(96,165,250,0.12)', color: C.blue }}>YTD</span>
+          <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 6, background: 'rgba(107,171,223,0.12)', color: C.blue }}>{totalMi.toFixed(0)} mi</span>
+        </div>
+      </div>
+
+      {/* Health Systems */}
+      <div style={{ ...card, borderRadius: 12, padding: '10px 8px', marginBottom: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: T1 }}>⬡ Health Systems</span>
+          <div style={{ display: 'flex', gap: 6, fontSize: 8, color: T3 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />{focusCount}
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171' }} />{defCount}
+            </span>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
+          {report.map(sys => <MobileSystemTile key={sys.id} sys={sys} />)}
+        </div>
+      </div>
+
+      {/* Cockpit — signal gauges */}
+      <div style={{ ...card, borderRadius: 12, padding: '10px 8px', marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: T1, marginBottom: 8 }}>◈ Signal Cockpit</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+          {cockpitItems.map((item, i) => {
+            const goalVal = parseFloat(item.goal) || 0;
+            const val = parseFloat(item.value) || 0;
+            const pct = goalVal > 0 ? Math.min(val / goalVal, 1) : 0;
+            return (
+              <div key={i} style={{
+                background: CARD_BG, borderRadius: 8, padding: '8px 6px', textAlign: 'center',
+                border: `0.5px solid ${BORDER}`,
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: item.color, lineHeight: 1 }}>{item.value}</div>
+                <div style={{ fontSize: 7, color: T3, marginTop: 2 }}>{item.unit}</div>
+                <div style={{ fontSize: 8, fontWeight: 600, color: T2, marginTop: 3 }}>{item.label}</div>
+                {goalVal > 0 && (
+                  <div style={{ height: 2, background: 'rgba(255,255,255,0.06)', borderRadius: 1, marginTop: 4 }}>
+                    <div style={{ height: 2, background: item.color, borderRadius: 1, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Annual progress */}
+      <div style={{ ...card, borderRadius: 12, padding: '10px 8px' }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: T1, marginBottom: 8 }}>◈ Annual Progress</div>
+        {[
+          { label: 'Run distance', actual: totalMi.toFixed(0), target: G.annualRunDistanceTarget || 800, unit: 'mi', color: C.blue },
+          { label: 'Workouts', actual: totalSessions, target: G.annualWorkoutsTarget || 200, unit: '', color: C.purple },
+        ].map((p, i) => {
+          const pct = Math.min(parseFloat(p.actual) / parseFloat(p.target), 1);
+          return (
+            <div key={i} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: T2, marginBottom: 3 }}>
+                <span>{p.label}</span>
+                <span>{p.actual} / {p.target} {p.unit} <span style={{ color: T4 }}>({Math.round(pct * 100)}%)</span></span>
+              </div>
+              <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
+                <div style={{ height: 3, background: p.color, borderRadius: 2, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
