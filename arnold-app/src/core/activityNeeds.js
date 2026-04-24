@@ -138,12 +138,16 @@ export function computeActivityNeeds(activity, profile = {}) {
 export function trackReplenishment(activityNeeds, dateStr) {
   if (!activityNeeds) return [];
 
-  const entries = (storage.get('nutritionLog') || []).filter(e => e.date === dateStr);
+  // Merge nutrition-log entries (manual/barcode/photo/voice)
+  const logEntries = (storage.get('nutritionLog') || []).filter(e => e.date === dateStr);
 
-  // Sum macros by meal phase
+  // Also check Cronometer CSV data for the same date
+  const cronoRow = (storage.get('cronometer') || []).find(c => c.date === dateStr);
+
+  // Sum macros by meal phase from nutrition-log
   const phaseTotals = {};
-  for (const e of entries) {
-    const phase = e.meal; // 'pre_workout', 'during_workout', 'post_workout', etc.
+  for (const e of logEntries) {
+    const phase = e.meal;
     if (!phase) continue;
     if (!phaseTotals[phase]) phaseTotals[phase] = { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0 };
     const s = e.servings || 1;
@@ -152,25 +156,32 @@ export function trackReplenishment(activityNeeds, dateStr) {
     }
   }
 
-  // Also collect all-day totals for overall water tracking
+  // All-day totals from nutrition-log
   const allDayTotals = { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0 };
-  for (const e of entries) {
+  for (const e of logEntries) {
     const s = e.servings || 1;
     for (const k of ['calories', 'protein', 'carbs', 'fat', 'water']) {
       allDayTotals[k] += (e.macros?.[k] || 0) * s;
     }
   }
 
-  return activityNeeds.goals.map(goal => {
-    const phaseData = phaseTotals[goal.phase] || {};
-    let consumed = 0;
+  // Merge Cronometer totals (use the higher of nutrition-log vs Cronometer)
+  if (cronoRow) {
+    allDayTotals.calories = Math.max(allDayTotals.calories, parseFloat(cronoRow.calories) || 0);
+    allDayTotals.protein = Math.max(allDayTotals.protein, parseFloat(cronoRow.protein) || 0);
+    allDayTotals.carbs = Math.max(allDayTotals.carbs, parseFloat(cronoRow.carbs) || 0);
+    allDayTotals.fat = Math.max(allDayTotals.fat, parseFloat(cronoRow.fat) || 0);
+    allDayTotals.water = Math.max(allDayTotals.water, (parseFloat(cronoRow.water) || 0) * 1000); // Cronometer water is in L
+  }
 
-    if (goal.macro === 'water') {
-      // Water tracked across all meals for hydration goal
-      consumed = allDayTotals.water || 0;
-    } else {
-      consumed = phaseData[goal.macro] || 0;
-    }
+  return activityNeeds.goals.map(goal => {
+    // Use all-day totals for all macros. Most users tag meals as breakfast/
+    // lunch/snack, not "post_workout", so phase-only tracking misses intake.
+    // Phase-specific totals kept for future detail view.
+    const phaseConsumed = (phaseTotals[goal.phase] || {})[goal.macro] || 0;
+    const dayConsumed = allDayTotals[goal.macro] || 0;
+    // Use the higher of phase-specific or all-day (all-day always >= phase)
+    const consumed = Math.max(phaseConsumed, dayConsumed);
 
     const pct = goal.target > 0 ? Math.min(consumed / goal.target, 1) : 0;
     const met = pct >= 0.9; // 90% threshold = goal met

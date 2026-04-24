@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Category Icon Preview — Arnold</title>
+<style>
+  body { background: #0b0c12; color: #fff; font-family: 'Inter', -apple-system, system-ui, sans-serif; margin: 0; padding: 20px; }
+  h2 { font-size: 14px; color: rgba(255,255,255,0.65); margin: 30px 0 10px; font-weight: 600; letter-spacing: 0.05em; }
+  h3 { font-size: 11px; color: rgba(255,255,255,0.45); margin: 20px 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .icon-card {
+    width: 72px; text-align: center; padding: 14px 6px; border-radius: 12px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  }
+  .icon-card .label { font-size: 8px; color: rgba(255,255,255,0.5); margin-top: 6px; font-weight: 600; letter-spacing: 0.04em; }
+  .icon-card.pick { border-color: rgba(107,171,223,0.3); background: rgba(107,171,223,0.06); }
+  .icon-card.pick .label { color: #6babdf; }
+
+  /* Category label simulation */
+  .cat-label {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 9px; font-weight: 700; color: rgba(255,255,255,0.88);
+    text-transform: uppercase; letter-spacing: 0.12em; padding: 3px 0;
+  }
+  .cat-dot { width: 5px; height: 5px; border-radius: 50%; }
+  .preview-section { margin: 40px 0; padding: 16px; border-radius: 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); }
+</style>
+</head>
+<body>
+
+<h1 style="font-size: 18px; margin-bottom: 5px;">Category Label Icons</h1>
+<p style="font-size: 11px; color: rgba(255,255,255,0.4); margin-bottom: 30px;">Small icons next to the colored dot + category name</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 style="color: #6babdf;">RUN</h2>
+<div class="row">
+
+  <!-- A: Running shoe -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6babdf" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 18h15a3 3 0 0 0 3-3v-1l-3-3-4 1-3-2-5 2v3" />
+      <path d="M3 18c0 1 .5 2 2 2h12a3 3 0 0 0 3-2" stroke-width="2" />
+      <line x1="8" y1="12" x2="8" y2="15" stroke-width="1.2" opacity="0.4" />
+      <line x1="12" y1="11" x2="12" y2="14" stroke-width="1.2" opacity="0.4" />
+    </svg>
+    <div class="label">A: Shoe</div>
+  </div>
+
+  <!-- B: Running figure -->
+  <div class="icon-card pick">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6babdf" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="15" cy="4" r="2.5" stroke-width="1.6" />
+      <path d="M9 21l2-6 3 2" />
+      <path d="M18 13l-4-4-3-1-3 4" />
+      <path d="M18 21l-2-7" />
+    </svg>
+    <div class="label">B: Runner ★</div>
+  </div>
+
+  <!-- C: Road/path -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6babdf" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 20L10 4" />
+      <path d="M20 20L14 4" />
+      <line x1="11" y1="8" x2="13" y2="8" stroke-width="2" opacity="0.4" />
+      <line x1="11.5" y1="13" x2="12.5" y2="13" stroke-width="2" opacity="0.4" />
+      <line x1="10.5" y1="18" x2="13.5" y2="18" stroke-width="2" opacity="0.4" />
+    </svg>
+    <div class="label">C: Road</div>
+  </div>
+
+  <!-- D: Stopwatch -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6babdf" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="13" r="8" />
+      <line x1="12" y1="9" x2="12" y2="13" stroke-width="2" />
+      <line x1="12" y1="13" x2="15" y2="13" stroke-width="1.5" />
+      <line x1="10" y1="2" x2="14" y2="2" stroke-width="2.2" />
+      <line x1="12" y1="2" x2="12" y2="5" stroke-width="1.5" />
+      <line x1="19" y1="5" x2="20.5" y2="6.5" stroke-width="1.8" />
+    </svg>
+    <div class="label">D: Timer</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 style="color: #ab9ed4;">STRENGTH</h2>
+<div class="row">
+
+  <!-- A: Dumbbell -->
+  <div class="icon-card pick">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ab9ed4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="9" width="4" height="6" rx="1" />
+      <rect x="18" y="9" width="4" height="6" rx="1" />
+      <line x1="6" y1="12" x2="18" y2="12" stroke-width="2" />
+      <line x1="6" y1="10" x2="6" y2="14" stroke-width="1.6" />
+      <line x1="18" y1="10" x2="18" y2="14" stroke-width="1.6" />
+    </svg>
+    <div class="label">A: Dumbbell ★</div>
+  </div>
+
+  <!-- B: Kettlebell -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ab9ed4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 5a3 3 0 0 1 6 0" />
+      <circle cx="12" cy="14" r="6" fill="#ab9ed4" fill-opacity="0.06" />
+      <line x1="12" y1="20" x2="12" y2="21" stroke-width="2.5" />
+    </svg>
+    <div class="label">B: Kettlebell</div>
+  </div>
+
+  <!-- C: Flexed bicep -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ab9ed4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 18c0-3 1-5 3-7" />
+      <path d="M8 11c1-2 3-3 5-3" />
+      <path d="M13 8c2 0 3 1 4 3" />
+      <path d="M17 11c1 2 1 4 0 6" />
+      <path d="M17 17c-1 2-3 3-5 3" />
+      <path d="M12 20c-3 0-5-1-7-2" />
+      <!-- Muscle bump -->
+      <path d="M10 9c1-2 4-2 5 0" stroke-width="1.5" opacity="0.5" />
+    </svg>
+    <div class="label">C: Bicep</div>
+  </div>
+
+  <!-- D: Weight plate -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ab9ed4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="5" opacity="0.5" />
+      <circle cx="12" cy="12" r="2" fill="#ab9ed4" fill-opacity="0.15" />
+    </svg>
+    <div class="label">D: Plate</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 style="color: #6bcf9a;">RECOVERY</h2>
+<div class="row">
+
+  <!-- A: Moon/sleep -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6bcf9a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+    <div class="label">A: Moon</div>
+  </div>
+
+  <!-- B: Battery charging -->
+  <div class="icon-card pick">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6bcf9a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="7" width="16" height="10" rx="2" />
+      <path d="M19 10h2v4h-2" stroke-width="1.5" />
+      <!-- Lightning inside -->
+      <path d="M11 9l-2 4h3l-1 3" stroke-width="1.8" />
+    </svg>
+    <div class="label">B: Recharge ★</div>
+  </div>
+
+  <!-- C: Heart pulse -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6bcf9a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z" />
+      <path d="M7 12h2l2 3 2-6 2 3h2" stroke-width="1.5" />
+    </svg>
+    <div class="label">C: Heart+pulse</div>
+  </div>
+
+  <!-- D: Leaf / zen -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6bcf9a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 21c4-4 6-10 14-14" />
+      <path d="M6 21c0-6 2-10 6-13" />
+      <path d="M20 7c-4 1-8 4-10 8" opacity="0.4" />
+      <path d="M17 4c1 2 2 4 3 3" />
+    </svg>
+    <div class="label">D: Leaf</div>
+  </div>
+
+  <!-- E: Shield -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6bcf9a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2l8 4v5c0 5-3 9-8 11-5-2-8-6-8-11V6z" fill="#6bcf9a" fill-opacity="0.06" />
+      <path d="M9 12l2 2 4-4" stroke-width="2" />
+    </svg>
+    <div class="label">E: Shield</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 style="color: #e0b45e;">BODY</h2>
+<div class="row">
+
+  <!-- A: Scale -->
+  <div class="icon-card pick">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e0b45e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="10" width="18" height="11" rx="3" fill="#e0b45e" fill-opacity="0.06" />
+      <circle cx="12" cy="15" r="4" stroke-width="1.5" />
+      <path d="M12 13v2l1.5 1" stroke-width="1.5" />
+      <line x1="8" y1="10" x2="8" y2="8" stroke-width="1.5" opacity="0.4" />
+      <line x1="16" y1="10" x2="16" y2="8" stroke-width="1.5" opacity="0.4" />
+    </svg>
+    <div class="label">A: Scale ★</div>
+  </div>
+
+  <!-- B: Body outline -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e0b45e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="4" r="2.5" />
+      <path d="M8 9h8" stroke-width="2" />
+      <path d="M12 9v6" stroke-width="1.8" />
+      <path d="M12 15l-3 6" />
+      <path d="M12 15l3 6" />
+      <path d="M8 9l-3 5" />
+      <path d="M16 9l3 5" />
+    </svg>
+    <div class="label">B: Figure</div>
+  </div>
+
+  <!-- C: Target/bullseye -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e0b45e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="5.5" opacity="0.6" />
+      <circle cx="12" cy="12" r="2" fill="#e0b45e" fill-opacity="0.3" />
+    </svg>
+    <div class="label">C: Target</div>
+  </div>
+
+  <!-- D: Measuring tape -->
+  <div class="icon-card">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e0b45e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="6" width="20" height="12" rx="2" fill="#e0b45e" fill-opacity="0.05" />
+      <line x1="6" y1="6" x2="6" y2="10" stroke-width="1.3" opacity="0.5" />
+      <line x1="10" y1="6" x2="10" y2="12" stroke-width="1.5" />
+      <line x1="14" y1="6" x2="14" y2="10" stroke-width="1.3" opacity="0.5" />
+      <line x1="18" y1="6" x2="18" y2="12" stroke-width="1.5" />
+    </svg>
+    <div class="label">D: Tape</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="preview-section">
+<h2 style="margin-top: 0;">Preview: How they look as category labels</h2>
+<p style="font-size: 10px; color: rgba(255,255,255,0.35); margin-bottom: 20px;">Using recommended picks (★) at 11px next to the dot + label</p>
+
+<div style="display: flex; flex-direction: column; gap: 24px;">
+
+  <!-- RUN -->
+  <div>
+    <div class="cat-label">
+      <div class="cat-dot" style="background: #6babdf;"></div>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#6babdf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="15" cy="4" r="2.5" stroke-width="1.8" />
+        <path d="M9 21l2-6 3 2" /><path d="M18 13l-4-4-3-1-3 4" /><path d="M18 21l-2-7" />
+      </svg>
+      Run
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px;">
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #6babdf; text-transform: uppercase; letter-spacing: 0.06em;">Weekly Miles</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">1.7 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">mi</span></div>
+      </div>
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #6fd4e4; text-transform: uppercase; letter-spacing: 0.06em;">Avg Pace</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">10:08 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">/mi</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STRENGTH -->
+  <div>
+    <div class="cat-label">
+      <div class="cat-dot" style="background: #ab9ed4;"></div>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ab9ed4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="9" width="4" height="6" rx="1" /><rect x="18" y="9" width="4" height="6" rx="1" />
+        <line x1="6" y1="12" x2="18" y2="12" stroke-width="2.2" />
+        <line x1="6" y1="10" x2="6" y2="14" stroke-width="1.8" /><line x1="18" y1="10" x2="18" y2="14" stroke-width="1.8" />
+      </svg>
+      Strength
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px;">
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #ab9ed4; text-transform: uppercase; letter-spacing: 0.06em;">Sessions</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">2 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">/wk</span></div>
+      </div>
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #e088ab; text-transform: uppercase; letter-spacing: 0.06em;">Pull-ups</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">10 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">reps</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECOVERY -->
+  <div>
+    <div class="cat-label">
+      <div class="cat-dot" style="background: #6bcf9a;"></div>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#6bcf9a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="7" width="16" height="10" rx="2" />
+        <path d="M19 10h2v4h-2" stroke-width="1.6" />
+        <path d="M11 9l-2 4h3l-1 3" stroke-width="2" />
+      </svg>
+      Recovery
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px;">
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #6fd4e4; text-transform: uppercase; letter-spacing: 0.06em;">Sleep Score</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">83 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">pts</span></div>
+      </div>
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #6bcf9a; text-transform: uppercase; letter-spacing: 0.06em;">HRV</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">42 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">ms</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BODY -->
+  <div>
+    <div class="cat-label">
+      <div class="cat-dot" style="background: #e0b45e;"></div>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#e0b45e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="10" width="18" height="11" rx="3" fill="#e0b45e" fill-opacity="0.06" />
+        <circle cx="12" cy="15" r="4" stroke-width="1.6" />
+        <path d="M12 13v2l1.5 1" stroke-width="1.6" />
+      </svg>
+      Body
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px;">
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #e0b45e; text-transform: uppercase; letter-spacing: 0.06em;">Weight</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">187.5 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">lb</span></div>
+      </div>
+      <div style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 8px 10px; min-height: 60px;">
+        <div style="font-size: 9px; font-weight: 700; color: #e088ab; text-transform: uppercase; letter-spacing: 0.06em;">Protein</div>
+        <div style="font-size: 22px; font-weight: 800; margin-top: 4px;">43 <span style="font-size: 9px; color: rgba(255,255,255,0.65);">g</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div style="height: 40px;"></div>
+</body>
+</html>

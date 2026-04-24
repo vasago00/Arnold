@@ -52,7 +52,7 @@ function requireAuth(request, env) {
 // Bearer auth is the actual security boundary — CORS is just for browsers.
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, If-None-Match',
   'Access-Control-Max-Age': '86400',
 };
@@ -109,6 +109,284 @@ async function handleDelete(id, env) {
   return json(200, { ok: true });
 }
 
+// ─── Cronometer relay ───────────────────────────────────────────────────────
+// The client holds the user's Cronometer credentials inside its own encrypted
+// Cloud Sync blob (unlocked with the Cloud Sync passphrase). When it needs
+// intra-day nutrition, it POSTs the decrypted creds to /cronometer/pull over
+// HTTPS. This worker executes the Cronometer login + export flow server-side
+// and returns parsed JSON — cookies and short-lived caches live in KV keyed
+// by sha256(email) so no plaintext emails hit our storage.
+
+const CRONO_SESS_TTL  = 24 * 60 * 60; // 24h cookie cache
+const CRONO_CACHE_TTL = 5 * 60;       // 5 min response cache
+const CRONO_UA        = 'arnold-worker/1.0';
+const CRONO_CT_GWT    = 'text/x-gwt-rpc; charset=UTF-8';
+const CRONO_GWT_BASE  = 'https://cronometer.com/cronometer/';
+const CRONO_EXPORT_MAP = {
+  daily_summary: 'dailySummary',
+  servings:      'servings',
+  exercises:     'exercises',
+  biometrics:    'biometrics',
+  notes:         'notes',
+};
+
+// Default GWT hashes — discovered dynamically on fresh login; these are
+// just the last-known-good fallback for when discovery fails.
+const CRONO_GWT_PERM_DEFAULT   = 'CBC38FBB0A1527BD5E68722DD9DABD27';
+const CRONO_GWT_HEADER_DEFAULT = '76FC4464E20E53D16663AC9A96A486B3';
+
+const GWT_AUTHENTICATE =
+  '7|0|5|https://cronometer.com/cronometer/|{gwt_header}|com.cronometer.shared.rpc.CronometerService|authenticate|java.lang.Integer/3438268394|1|2|3|4|1|5|5|-300|';
+const GWT_AUTH_TOKEN =
+  '7|0|8|https://cronometer.com/cronometer/|{gwt_header}|com.cronometer.shared.rpc.CronometerService|generateAuthorizationToken|java.lang.String/2004016611|I|com.cronometer.shared.user.AuthScope/2065601159|{nonce}|1|2|3|4|4|5|6|6|7|8|{user_id}|3600|7|2|';
+
+async function sha256Hex(s) {
+  const buf = new TextEncoder().encode(s);
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Per-request cookie jar — Workers have no persistent globals.
+class CookieJar {
+  constructor(init = {}) { this.map = new Map(Object.entries(init || {})); }
+  setFrom(response) {
+    const raw = typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : [];
+    for (const line of raw) {
+      const [kv] = line.split(';');
+      const eq = kv.indexOf('=');
+      if (eq < 0) continue;
+      const k = kv.slice(0, eq).trim();
+      const v = kv.slice(eq + 1).trim();
+      if (k) this.map.set(k, v);
+    }
+  }
+  header() { return [...this.map.entries()].map(([k, v]) => `${k}=${v}`).join('; '); }
+  toObject() { return Object.fromEntries(this.map); }
+}
+
+async function cronoFetch(url, jar, opts = {}) {
+  const headers = { 'user-agent': CRONO_UA, ...(opts.headers || {}) };
+  const cookie = jar.header();
+  if (cookie) headers.cookie = cookie;
+  const res = await fetch(url, { ...opts, headers, redirect: 'manual' });
+  jar.setFrom(res);
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get('location');
+    if (loc) return cronoFetch(new URL(loc, url).toString(), jar, { ...opts, method: 'GET', body: undefined });
+  }
+  return res;
+}
+
+async function discoverGwtHashes(jar) {
+  let perm = CRONO_GWT_PERM_DEFAULT;
+  let hdr  = CRONO_GWT_HEADER_DEFAULT;
+  try {
+    const r1 = await cronoFetch('https://cronometer.com/cronometer/cronometer.nocache.js', jar);
+    const t1 = await r1.text();
+    const m1 = t1.match(/='([A-F0-9]{32})'/);
+    if (m1) perm = m1[1];
+    const r2 = await cronoFetch(`https://cronometer.com/cronometer/${perm}.cache.js`, jar);
+    const t2 = await r2.text();
+    const m2 = t2.match(/'app','([A-F0-9]{32})'/);
+    if (m2) hdr = m2[1];
+  } catch { /* fall back to defaults */ }
+  return { perm, hdr };
+}
+
+async function cronoLogin(jar, user, pass) {
+  const page = await cronoFetch('https://cronometer.com/login/', jar);
+  const body = await page.text();
+  const m = body.match(/name="anticsrf"\s+value="([^"]+)"/);
+  if (!m) throw new Error('anticsrf_missing');
+  const res = await cronoFetch('https://cronometer.com/login', jar, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ anticsrf: m[1], username: user, password: pass }).toString(),
+  });
+  const txt = await res.text();
+  let parsed; try { parsed = JSON.parse(txt); } catch { parsed = { raw: txt }; }
+  if (parsed.error) throw new Error(`login_refused:${parsed.error}`);
+  if (!jar.map.get('sesnonce')) throw new Error('login_no_sesnonce');
+}
+
+async function cronoGwtAuthenticate(jar, perm, hdr) {
+  const body = GWT_AUTHENTICATE.replace('{gwt_header}', hdr);
+  const res = await cronoFetch('https://cronometer.com/cronometer/app', jar, {
+    method: 'POST',
+    headers: {
+      'content-type': CRONO_CT_GWT,
+      'x-gwt-module-base': CRONO_GWT_BASE,
+      'x-gwt-permutation': perm,
+    },
+    body,
+  });
+  const text = await res.text();
+  if (!text.startsWith('//OK')) throw new Error('gwt_auth_failed');
+  const m = text.match(/OK\[(\d+),/);
+  if (!m) throw new Error('gwt_auth_no_userid');
+  return m[1];
+}
+
+async function cronoAuthToken(jar, userId, perm, hdr) {
+  const nonce = jar.map.get('sesnonce') || '';
+  const body = GWT_AUTH_TOKEN
+    .replace('{gwt_header}', hdr)
+    .replace('{nonce}', nonce)
+    .replace('{user_id}', userId);
+  const res = await cronoFetch('https://cronometer.com/cronometer/app', jar, {
+    method: 'POST',
+    headers: {
+      'content-type': CRONO_CT_GWT,
+      'x-gwt-module-base': CRONO_GWT_BASE,
+      'x-gwt-permutation': perm,
+    },
+    body,
+  });
+  const text = await res.text();
+  if (!text.startsWith('//OK')) throw new Error('auth_token_failed');
+  const m = text.match(/"([^"]+)"/);
+  if (!m) throw new Error('auth_token_no_nonce');
+  return m[1];
+}
+
+async function cronoExport(jar, token, type, start, end) {
+  const generate = CRONO_EXPORT_MAP[type] || type;
+  const u = new URL('https://cronometer.com/export');
+  u.searchParams.set('nonce', token);
+  u.searchParams.set('generate', generate);
+  u.searchParams.set('start', start);
+  u.searchParams.set('end', end);
+  const res = await cronoFetch(u.toString(), jar);
+  if (!res.ok) throw new Error(`export_http_${res.status}`);
+  return res.text();
+}
+
+function parseCronoCSV(text) {
+  const lines = text.replace(/\r/g, '').split('\n').filter(Boolean);
+  if (!lines.length) return [];
+  const hdrs = splitCronoCSVLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const vals = splitCronoCSVLine(line);
+    const row = {};
+    hdrs.forEach((h, i) => { row[h] = vals[i] ?? ''; });
+    return row;
+  });
+}
+function splitCronoCSVLine(line) {
+  const out = []; let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"' && inQ) { cur += '"'; i++; continue; }
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === ',' && !inQ) { out.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function aggregateServings(rows) {
+  // Sum numeric nutrients across every row. Blank cells don't count —
+  // Cronometer leaves nutrients blank when its food-DB entry has no value
+  // for that nutrient (blank ≠ 0).
+  const keysToSum = new Set();
+  for (const r of rows) {
+    for (const [k, v] of Object.entries(r)) {
+      if (['Day', 'Time', 'Group', 'Food Name', 'Amount', 'Category'].includes(k)) continue;
+      if (v !== '' && !Number.isNaN(parseFloat(v))) keysToSum.add(k);
+    }
+  }
+  const totals = {};
+  for (const k of keysToSum) {
+    let sum = 0;
+    for (const r of rows) {
+      const v = r[k];
+      if (v === '' || v == null) continue;
+      const n = parseFloat(v);
+      if (!Number.isNaN(n)) sum += n;
+    }
+    totals[k] = Math.round(sum * 100) / 100;
+  }
+  return totals;
+}
+
+async function fetchCronometerData(user, pass, date, type, env, { skipCachedSession = false } = {}) {
+  const userHash = await sha256Hex(user.toLowerCase());
+  const sessKey  = `crono_sess:${userHash}`;
+
+  const saved = skipCachedSession ? null : await env.SYNC_KV.get(sessKey, 'json');
+  let jar    = new CookieJar(saved?.cookies);
+  let userId = saved?.userId;
+  let perm   = saved?.perm || CRONO_GWT_PERM_DEFAULT;
+  let hdr    = saved?.hdr  || CRONO_GWT_HEADER_DEFAULT;
+  let token;
+  let usedCachedSession = false;
+
+  try {
+    if (!userId) throw new Error('no_session');
+    token = await cronoAuthToken(jar, userId, perm, hdr);
+    usedCachedSession = true;
+  } catch {
+    jar = new CookieJar();
+    const hashes = await discoverGwtHashes(jar);
+    perm = hashes.perm; hdr = hashes.hdr;
+    await cronoLogin(jar, user, pass); // throws on bad creds
+    userId = await cronoGwtAuthenticate(jar, perm, hdr);
+    await env.SYNC_KV.put(sessKey, JSON.stringify({
+      cookies: jar.toObject(), userId, perm, hdr, savedAt: Date.now(),
+    }), { expirationTtl: CRONO_SESS_TTL });
+    token = await cronoAuthToken(jar, userId, perm, hdr);
+  }
+
+  let csv;
+  try {
+    csv = await cronoExport(jar, token, type, date, date);
+  } catch (e) {
+    if (usedCachedSession) {
+      // Cookies might have rotated on Cronometer's side — burn the cache and retry once.
+      await env.SYNC_KV.delete(sessKey);
+      return fetchCronometerData(user, pass, date, type, env, { skipCachedSession: true });
+    }
+    throw e;
+  }
+
+  const rows = parseCronoCSV(csv);
+  const totals = (type === 'servings' || type === 'daily_summary') ? aggregateServings(rows) : null;
+  return { date, type, rows, totals, rowCount: rows.length, fetchedAt: Date.now() };
+}
+
+async function handleCronometerPull(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return json(400, { error: 'bad_json' }); }
+  const { user, pass, date, type = 'servings' } = body || {};
+  if (!user || !pass)  return json(400, { error: 'missing_credentials' });
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return json(400, { error: 'bad_date' });
+  if (!CRONO_EXPORT_MAP[type]) return json(400, { error: 'bad_type' });
+
+  const userHash = await sha256Hex(user.toLowerCase());
+  const cacheKey = `crono_cache:${userHash}:${date}:${type}`;
+
+  // 5 min response cache — repeat polls are free
+  const cached = await env.SYNC_KV.get(cacheKey, 'json');
+  if (cached) return json(200, { ...cached, cached: true });
+
+  let result;
+  try {
+    result = await fetchCronometerData(user, pass, date, type, env);
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (msg.startsWith('login_refused') || msg === 'login_no_sesnonce' || msg === 'anticsrf_missing') {
+      return json(401, { error: 'cronometer_login_failed', detail: msg });
+    }
+    return json(502, { error: 'cronometer_upstream_failed', detail: msg });
+  }
+
+  await env.SYNC_KV.put(cacheKey, JSON.stringify(result), { expirationTtl: CRONO_CACHE_TTL });
+  return json(200, { ...result, cached: false });
+}
+
 // ── Router ──────────────────────────────────────────────────────────────────
 
 export default {
@@ -129,6 +407,11 @@ export default {
     // Everything else requires auth
     if (!requireAuth(request, env)) {
       return json(401, { error: 'unauthorized' });
+    }
+
+    // Cronometer relay
+    if (pathname === '/cronometer/pull' && request.method === 'POST') {
+      return handleCronometerPull(request, env);
     }
 
     // /s/:id routes

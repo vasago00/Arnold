@@ -77,9 +77,12 @@ export async function parseFITFile(file) {
     if (mps > 0) bestPacePerMi = fmt(1609.344 / mps);
   }
 
-  // Heart rate
-  const avgHR = session.avgHeartRate ? parseInt(session.avgHeartRate) : null;
-  const maxHR = session.maxHeartRate ? parseInt(session.maxHeartRate) : null;
+  // Heart rate — clamp to a physiologically plausible range so bad bytes
+  // from a corrupt or idiosyncratic FIT file don't leak a huge value (e.g. a
+  // session timestamp) into downstream aggregates.
+  const hrOk = n => (Number.isFinite(n) && n >= 30 && n <= 250 ? n : null);
+  const avgHR = session.avgHeartRate ? hrOk(parseInt(session.avgHeartRate)) : null;
+  const maxHR = session.maxHeartRate ? hrOk(parseInt(session.maxHeartRate)) : null;
 
   // Cadence (running cadence is stored as half-steps, multiply by 2)
   const cadenceRaw = session.avgRunningCadence || session.avgCadence;

@@ -177,9 +177,9 @@ function extractGarminFields(fullText, filename) {
     : null;
 
   // ── DATE ─────────────────────────────────────────────────────────────────
-  const date = fullText.includes('TODAY')
-    ? new Date().toISOString().split('T')[0]
-    : new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const localDateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const date = localDateStr;
 
   // ── TYPE ─────────────────────────────────────────────────────────────────
   const textL = fullText.toLowerCase();
@@ -379,7 +379,8 @@ const WEATHER_CODES = {
 };
 
 export async function fetchWeatherForDate(dateStr) {
-  const today = new Date().toISOString().split('T')[0];
+  const _now = new Date();
+  const today = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
   const isPast = dateStr < today;
 
   const baseUrl = isPast

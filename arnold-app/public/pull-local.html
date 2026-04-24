@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Import</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:40px 20px;text-align:center;}
+  h1{color:#00e676;font-size:22px;margin-bottom:10px;}
+  .sub{color:#888;font-size:13px;margin-bottom:20px;}
+  .status{margin:20px auto;padding:16px;border-radius:10px;font-size:14px;max-width:400px;line-height:1.5;}
+  .ok{background:#1b3a1b;color:#00e676;}
+  .err{background:#3a1b1b;color:#f44336;}
+  .info{background:#1a1a2e;color:#90caf9;}
+  a{color:#00e676;font-weight:600;font-size:18px;text-decoration:none;}
+  button{background:#00e676;color:#000;border:none;padding:16px 40px;border-radius:12px;font-size:17px;font-weight:700;cursor:pointer;width:90%;max-width:320px;}
+  button:active{transform:scale(0.96);}
+</style>
+</head>
+<body>
+<h1>Arnold Phone Import</h1>
+<p class="sub">Import data from a backup file</p>
+
+<div id="status"><div class="status info">Checking for sync data...</div></div>
+
+<script>
+(async function(){
+  const status = document.getElementById('status');
+
+  // Try to fetch the embedded backup file from Vite's public folder
+  try {
+    const resp = await fetch('/arnold-sync-data.json');
+    if(!resp.ok) throw new Error('not-found');
+    const data = await resp.json();
+    const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
+    if(!keys.length) throw new Error('No arnold:* keys in file');
+
+    keys.forEach(k => localStorage.setItem(k, data[k]));
+    const totalBytes = keys.reduce((s,k) => s + data[k].length, 0);
+    const sizeStr = totalBytes > 1024 ? (totalBytes/1024).toFixed(1)+' KB' : totalBytes+' bytes';
+
+    status.innerHTML = '<div class="status ok">✅ Imported ' + keys.length + ' keys (' + sizeStr + ')<br><br><a href="/">Open Arnold →</a></div>';
+    return;
+  } catch(e) {
+    // No sync file yet — show instructions
+    status.innerHTML = '<div class="status info">No sync file found yet.<br><br>' +
+      'On your <strong>PC</strong>, go to:<br>' +
+      '<code style="color:#00e676">localhost:5174/recover.html</code><br>' +
+      'Click "Download Backup", then rename the file to:<br>' +
+      '<code style="color:#00e676">arnold-sync-data.json</code><br>' +
+      'and place it in:<br>' +
+      '<code style="color:#00e676;font-size:11px">arnold-app/public/</code><br><br>' +
+      'Then refresh this page on your phone.</div>';
+  }
+})();
+</script>
+</body>
+</html>

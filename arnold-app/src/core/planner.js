@@ -5,15 +5,18 @@
 import { storage } from "./storage.js";
 import { weekStart } from "./derive/volume.js";
 
+const localDate = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 // ─── ISO week key ────────────────────────────────────────────────────────────
 export function weekKey(date = new Date()) {
-  return weekStart(date).toISOString().slice(0, 10);
+  return localDate(weekStart(date));
 }
 
 export function nextWeekKey(date = new Date()) {
   const ws = weekStart(date);
   ws.setDate(ws.getDate() + 7);
-  return ws.toISOString().slice(0, 10);
+  return localDate(ws);
 }
 
 // ─── Day record ──────────────────────────────────────────────────────────────
@@ -132,22 +135,28 @@ export function checkTodayCompletion(dateStr, planned) {
   const todayWkts = workouts.filter(w => w.date === dateStr);
   const todayLogs = dailyLogs.filter(l => l.date === dateStr);
 
-  const todayHasLog = todayLogs.some(l => l.fitData || l.workout || l.distanceMi || l.duration);
+  // Flatten each day-log's FIT activities (new `fitActivities` array, or legacy single `fitData`)
+  const logFits = l => (Array.isArray(l.fitActivities) && l.fitActivities.length
+    ? l.fitActivities
+    : (l.fitData ? [l.fitData] : []));
+  const todayHasLog = todayLogs.some(l => logFits(l).length > 0 || l.workout || l.distanceMi || l.duration);
   const hasAny = todayActs.length > 0 || todayWkts.length > 0 || todayHasLog;
 
   const isRest = planned.type === 'rest';
   if (isRest) return { completed: !hasAny, hasAny };
   if (!hasAny) return { completed: false, hasAny: false };
 
-  const logType = l => (l.fitData?.activityType || l.workout || l.type || '');
   const pt = planned.type || '';
+  const logHasType = (l, re) => logFits(l).some(fd => re.test(fd?.activityType || fd?.type || ''))
+    || re.test(l.workout || '')
+    || re.test(l.type || '');
 
   const hasRun = todayActs.some(a => /run/i.test(a.activityType || ''))
     || todayWkts.some(w => /run/i.test(w.type || ''))
-    || todayLogs.some(l => /run/i.test(logType(l)));
+    || todayLogs.some(l => logHasType(l, /run/i));
   const hasStrength = todayActs.some(a => /strength|weight/i.test(a.activityType || ''))
     || todayWkts.some(w => /strength/i.test(w.type || ''))
-    || todayLogs.some(l => /strength/i.test(logType(l)));
+    || todayLogs.some(l => logHasType(l, /strength|weight/i));
 
   if (/run|tempo|interval|long/.test(pt) && hasRun) return { completed: true, hasAny };
   if (/strength/.test(pt) && hasStrength) return { completed: true, hasAny };

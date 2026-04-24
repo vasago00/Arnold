@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Arnold — Start Screen v2 Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0b0c12; color: #fff;
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    max-width: 420px; margin: 0 auto;
+    padding: 0 10px 90px;
+  }
+  :root {
+    --blue: #6babdf; --cyan: #6fd4e4; --pink: #e088ab; --amber: #e0b45e;
+    --green: #6bcf9a; --red: #df7b7b; --purple: #ab9ed4; --orange: #e09b5e;
+    --t1: #ffffff; --t2: rgba(255,255,255,0.88); --t3: rgba(255,255,255,0.65);
+    --t4: rgba(255,255,255,0.45); --card: rgba(255,255,255,0.04);
+    --border: rgba(255,255,255,0.08);
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 10px 12px; margin-bottom: 6px;
+    position: relative; overflow: hidden;
+  }
+  .accent { position: absolute; top: 0; left: 12px; right: 12px; height: 2px; border-radius: 0 0 2px 2px; opacity: 0.7; }
+  .section-hdr {
+    font-size: 10px; font-weight: 700; color: var(--t3);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin: 6px 0 5px; display: flex; align-items: center; gap: 6px;
+  }
+  .section-hdr .line { flex: 1; height: 1px; background: var(--border); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+
+  /* Category label */
+  .cat-label {
+    font-size: 8px; font-weight: 700; color: var(--t3); text-transform: uppercase;
+    letter-spacing: 0.12em; padding: 3px 0 2px; display: flex; align-items: center; gap: 5px;
+  }
+  .cat-label .dot { width: 5px; height: 5px; border-radius: 50%; }
+
+  /* Header */
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding: 10px 0 8px; }
+  .header .logo { display: flex; align-items: center; gap: 5px; }
+  .header .logo-icon {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: linear-gradient(135deg, rgba(107,171,223,0.2), rgba(111,212,228,0.12));
+    border: 1px solid rgba(107,171,223,0.15);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: var(--blue); font-weight: 800;
+  }
+  .header .brand { font-size: 9px; font-weight: 700; color: var(--t3); letter-spacing: 0.14em; }
+  .header .greeting { font-size: 15px; font-weight: 600; color: var(--t1); margin-top: 3px; }
+  .header .date { font-size: 9px; color: var(--t3); }
+
+  /* Hero */
+  .hero { border-radius: 16px; padding: 12px 14px 10px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)); }
+  .hero .top { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .hero .ring { width: 58px; height: 58px; position: relative; flex-shrink: 0; }
+  .hero .ring-score { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800; }
+  .hero .status { font-size: 14px; font-weight: 700; }
+  .hero .pills { display: flex; gap: 3px; margin-top: 5px; flex-wrap: wrap; }
+  .hero .pill { font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 6px; display: inline-flex; align-items: center; gap: 3px; }
+  .hero .pill.ok { background: rgba(107,207,154,0.1); color: var(--green); }
+  .hero .pill.warn { background: rgba(223,123,123,0.12); color: var(--red); }
+  .hero .pill.neutral { background: rgba(255,255,255,0.05); color: var(--t3); }
+  .hero .race-badge {
+    flex-shrink: 0; text-align: center; padding: 5px 10px; border-radius: 10px;
+    background: rgba(224,155,94,0.08); border: 1px solid rgba(224,155,94,0.12);
+  }
+  .hero .race-days { font-size: 16px; font-weight: 800; color: var(--orange); line-height: 1; }
+  .hero .race-name { font-size: 8px; color: var(--t3); margin-top: 2px; }
+  .hero .stat-row { display: flex; border-top: 1px solid var(--border); padding-top: 8px; }
+  .hero .stat { flex: 1; text-align: center; }
+  .hero .stat:not(:first-child) { border-left: 1px solid var(--border); }
+  .hero .stat-label { font-size: 9px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
+  .hero .stat-val { font-size: 16px; font-weight: 700; line-height: 1; }
+  .hero .stat-unit { font-size: 9px; color: var(--t3); }
+
+  /* Sleep Insight */
+  .sleep { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 12px; }
+  .sleep .icon-wrap {
+    width: 30px; height: 30px; border-radius: 8px; background: rgba(111,212,228,0.1);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px;
+  }
+  .sleep .headline { font-size: 12px; font-weight: 600; color: var(--t1); }
+  .sleep .detail { font-size: 10px; color: var(--t3); margin-top: 1px; }
+
+  /* Metric Tile with mini gauge */
+  .metric-tile { border-radius: 14px; padding: 8px 10px 8px; min-height: 80px; }
+  .metric-tile .label { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
+  .metric-tile .tile-body { display: flex; align-items: center; gap: 4px; }
+  .metric-tile .today-col { flex: 1; }
+  .metric-tile .today-val { font-size: 26px; font-weight: 800; line-height: 1; }
+  .metric-tile .today-unit { font-size: 9px; color: var(--t3); }
+  .metric-tile .today-trend { font-size: 8px; margin-top: 3px; font-weight: 600; }
+  /* Mini gauge column */
+  .metric-tile .gauge-col { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; }
+  .metric-tile .gauge-wrap { position: relative; width: 44px; height: 26px; overflow: hidden; }
+  .metric-tile .gauge-label { font-size: 7px; color: var(--t4); font-weight: 600; margin-top: 1px; letter-spacing: 0.04em; }
+  .metric-tile .gauge-val { font-size: 10px; font-weight: 700; line-height: 1; margin-top: -1px; }
+
+  /* This Week */
+  .week-card .headline { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
+  .week-card .headline span { font-weight: 400; color: var(--t3); font-size: 11px; }
+  .week-card .cols { display: flex; margin-bottom: 8px; }
+  .week-card .col { flex: 1; }
+  .week-card .col-label { font-size: 9px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
+  .week-card .col-val { font-size: 18px; font-weight: 700; line-height: 1.1; }
+  .progress-bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.06); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; opacity: 0.8; }
+  .progress-label { font-size: 9px; color: var(--t3); margin-top: 3px; }
+
+  /* Annual Timeline */
+  .timeline .year-label { font-size: 9px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; }
+  .timeline .months { display: flex; justify-content: space-between; margin-bottom: 2px; padding: 0 1px; }
+  .timeline .months span { font-size: 8px; color: var(--t3); }
+  .timeline .months span.current { color: var(--t1); font-weight: 700; }
+  .timeline .bar-container { position: relative; height: 20px; margin-bottom: 10px; }
+  .timeline .bar-track { position: absolute; top: 8px; left: 0; right: 0; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.06); }
+  .timeline .bar-fill { position: absolute; top: 8px; left: 0; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--blue), var(--cyan)); opacity: 0.8; }
+  .timeline .today-marker { position: absolute; top: 4px; width: 2px; height: 12px; border-radius: 1px; background: var(--t1); }
+  .timeline .race-marker {
+    position: absolute; top: -1px; width: 12px; height: 12px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center; font-size: 6px;
+  }
+  .timeline .race-marker.future { background: rgba(224,155,94,0.18); border: 1.5px solid var(--orange); }
+  .timeline .race-marker.past { background: rgba(107,207,154,0.18); border: 1.5px solid var(--green); }
+  .timeline .race-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .timeline .race-tag { font-size: 8px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+  .timeline .race-tag.future { background: rgba(224,155,94,0.08); color: var(--orange); }
+  .timeline .race-tag.past { background: rgba(107,207,154,0.08); color: var(--green); }
+  .timeline .goals { display: flex; gap: 10px; }
+  .timeline .goal { flex: 1; }
+  .timeline .goal-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
+  .timeline .goal-label { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+  .timeline .goal-val { font-size: 10px; font-weight: 700; color: var(--t2); }
+  .timeline .goal-val span { font-size: 8px; color: var(--t3); }
+
+  /* Today's Plan */
+  .plan .plan-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .plan .plan-date { font-size: 9px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.08em; }
+  .plan .plan-count { font-size: 9px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: rgba(171,158,212,0.1); color: var(--purple); text-transform: uppercase; letter-spacing: 0.04em; }
+  .plan .plan-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 10px; margin-bottom: 8px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  }
+  .plan .plan-icon {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px;
+  }
+  .plan .plan-icon.strength { background: rgba(171,158,212,0.12); }
+  .plan .plan-icon.run { background: rgba(107,171,223,0.12); }
+  .plan .plan-title { font-size: 13px; font-weight: 700; }
+  .plan .plan-detail { font-size: 10px; color: var(--t3); margin-top: 1px; }
+  .plan .plan-time { font-size: 10px; color: var(--t3); font-weight: 600; }
+
+  /* Summary cards (Core / Labs) */
+  .summary-card .sum-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .summary-card .sum-label { font-size: 9px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.1em; display: flex; align-items: center; gap: 5px; }
+  .summary-card .sum-arrow { font-size: 10px; color: var(--t3); }
+  .summary-card .sum-grid { display: grid; gap: 4px; }
+  .summary-card .sum-item { text-align: center; }
+  .summary-card .sum-item-label { font-size: 8px; font-weight: 600; text-transform: uppercase; margin-bottom: 2px; }
+  .summary-card .sum-item-val { font-size: 16px; font-weight: 700; line-height: 1; }
+  .summary-card .sum-item-unit { font-size: 8px; color: var(--t3); margin-top: 1px; }
+
+  /* Bottom Nav */
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+    background: linear-gradient(180deg, rgba(16,17,26,0.92), rgba(10,11,16,0.98));
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex; justify-content: space-around; align-items: stretch;
+    padding: 0 2px; height: 68px; max-width: 420px; margin: 0 auto;
+  }
+  .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 8px 0 6px; min-width: 50px; flex: 1; position: relative; }
+  .nav-item .nav-icon { font-size: 18px; opacity: 0.35; }
+  .nav-item .nav-label { font-size: 9px; font-weight: 600; color: var(--t4); letter-spacing: 0.04em; }
+  .nav-item.active .nav-icon { opacity: 1; }
+  .nav-item.active .nav-label { color: var(--blue); }
+  .nav-item.active::before {
+    content: ''; position: absolute; top: 0; width: 20px; height: 2px;
+    border-radius: 0 0 2px 2px; background: var(--blue);
+  }
+</style>
+</head>
+<body>
+
+<!-- ─── HEADER ─── -->
+<div class="header">
+  <div>
+    <div class="logo">
+      <div class="logo-icon">A</div>
+      <span class="brand">ARNOLD</span>
+    </div>
+    <div class="greeting">Good evening, Emil</div>
+  </div>
+  <div style="text-align:right">
+    <div class="date">Mon, Apr 13</div>
+  </div>
+</div>
+
+<!-- ─── HERO RING ─── -->
+<div class="card hero" style="margin-bottom:6px">
+  <div style="position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(224,180,94,0.35),transparent)"></div>
+  <div class="top">
+    <div class="ring">
+      <svg width="58" height="58" style="transform:rotate(-90deg)">
+        <circle cx="29" cy="29" r="24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="4"/>
+        <circle cx="29" cy="29" r="24" fill="none" stroke="var(--amber)" stroke-width="4"
+          stroke-dasharray="150.8" stroke-dashoffset="37.7" stroke-linecap="round"/>
+      </svg>
+      <div class="ring-score">75</div>
+    </div>
+    <div style="flex:1">
+      <div class="status" style="color:var(--amber)">Needs Work</div>
+      <div class="pills">
+        <span class="pill warn">✗ Volume</span>
+        <span class="pill ok">✓ Pace</span>
+        <span class="pill neutral">— Sleep</span>
+        <span class="pill warn">✗ Protein</span>
+      </div>
+    </div>
+    <div class="race-badge">
+      <div class="race-days">82d</div>
+      <div class="race-name">Peachtree 10K</div>
+    </div>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><div class="stat-label">Miles/wk</div><div class="stat-val">1.7 <span class="stat-unit">mi</span></div></div>
+    <div class="stat"><div class="stat-label">Sleep</div><div class="stat-val">83 <span class="stat-unit">/100</span></div></div>
+    <div class="stat"><div class="stat-label">Protein</div><div class="stat-val">43 <span class="stat-unit">g</span></div></div>
+    <div class="stat"><div class="stat-label">Weight</div><div class="stat-val">187.5 <span class="stat-unit">lb</span></div></div>
+  </div>
+</div>
+
+<!-- ─── SLEEP INSIGHT ─── -->
+<div class="card sleep" style="margin-bottom:6px">
+  <div class="icon-wrap">🌙</div>
+  <div>
+    <div class="headline">Solid sleep — ready for strength</div>
+    <div class="detail">83/100 recovery</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  METRIC TILES — Mini arc gauge for 30d avg on right side             -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<!-- ─── RUN ─── -->
+<div class="cat-label"><div class="dot" style="background:var(--blue)"></div> Run</div>
+<div class="grid-2">
+
+  <!-- Miles tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--blue)"></div>
+    <div class="label" style="color:var(--blue)">Weekly Miles</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">1.7</span> <span class="today-unit">mi</span></div>
+        <div class="today-trend" style="color:var(--red)">▼ 0.4 vs last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <!-- Track arc (180° semi-circle) -->
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- Fill arc (~10% of goal = small fill) -->
+            <path d="M 4 24 A 18 18 0 0 1 8 12" fill="none" stroke="var(--blue)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--blue)">2.1</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pace tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--cyan)"></div>
+    <div class="label" style="color:var(--cyan)">Avg Pace</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">10:08</span> <span class="today-unit">/mi</span></div>
+        <div class="today-trend" style="color:var(--t3)">→ same as last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- ~60% fill for pace trending toward goal -->
+            <path d="M 4 24 A 18 18 0 0 1 28 7" fill="none" stroke="var(--cyan)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--cyan)">10:15</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── STRENGTH ─── -->
+<div class="cat-label"><div class="dot" style="background:var(--purple)"></div> Strength</div>
+<div class="grid-2">
+
+  <!-- Sessions tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--purple)"></div>
+    <div class="label" style="color:var(--purple)">Sessions</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">2</span> <span class="today-unit">/wk</span></div>
+        <div class="today-trend" style="color:var(--green)">▲ on target</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <path d="M 4 24 A 18 18 0 0 1 22 6" fill="none" stroke="var(--purple)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--purple)">1.8</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pull-ups tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--pink)"></div>
+    <div class="label" style="color:var(--pink)">Pull-ups</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">8</span> <span class="today-unit">reps</span></div>
+        <div class="today-trend" style="color:var(--green)">▲ 1 vs last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- 60% toward goal of 10 -->
+            <path d="M 4 24 A 18 18 0 0 1 28 7" fill="none" stroke="var(--pink)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--pink)">6</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── RECOVERY ─── -->
+<div class="cat-label"><div class="dot" style="background:var(--green)"></div> Recovery</div>
+<div class="grid-2">
+
+  <!-- Sleep Score tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--cyan)"></div>
+    <div class="label" style="color:var(--cyan)">Sleep Score</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">83</span> <span class="today-unit">pts</span></div>
+        <div class="today-trend" style="color:var(--green)">▲ 2 vs last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- 79/100 = ~79% -->
+            <path d="M 4 24 A 18 18 0 0 1 36 12" fill="none" stroke="var(--cyan)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--cyan)">79</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HRV tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--green)"></div>
+    <div class="label" style="color:var(--green)">HRV</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">42</span> <span class="today-unit">ms</span></div>
+        <div class="today-trend" style="color:var(--green)">▲ 4 vs last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- 38/70 target = ~54% -->
+            <path d="M 4 24 A 18 18 0 0 1 22 6" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--green)">38</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── BODY ─── -->
+<div class="cat-label"><div class="dot" style="background:var(--amber)"></div> Body</div>
+<div class="grid-2">
+
+  <!-- Weight tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--amber)"></div>
+    <div class="label" style="color:var(--amber)">Weight</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">187.5</span> <span class="today-unit">lb</span></div>
+        <div class="today-trend" style="color:var(--green)">▼ 0.6 vs last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- Weight trending down toward 175 target -->
+            <path d="M 4 24 A 18 18 0 0 1 32 8" fill="none" stroke="var(--amber)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--amber)">189.3</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Protein tile -->
+  <div class="card metric-tile">
+    <div class="accent" style="background:var(--pink)"></div>
+    <div class="label" style="color:var(--pink)">Protein</div>
+    <div class="tile-body">
+      <div class="today-col">
+        <div><span class="today-val">43</span> <span class="today-unit">g</span></div>
+        <div class="today-trend" style="color:var(--red)">▼ 5 vs last wk</div>
+      </div>
+      <div class="gauge-col">
+        <div class="gauge-wrap">
+          <svg width="44" height="26" viewBox="0 0 44 26">
+            <path d="M 4 24 A 18 18 0 0 1 40 24" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3" stroke-linecap="round"/>
+            <!-- 52/150 target = ~35% -->
+            <path d="M 4 24 A 18 18 0 0 1 12 9" fill="none" stroke="var(--pink)" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+          </svg>
+        </div>
+        <div class="gauge-val" style="color:var(--pink)">52</div>
+        <div class="gauge-label">30d avg</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── THIS WEEK ─── -->
+<div class="section-hdr">This Week <div class="line"></div></div>
+<div class="card week-card">
+  <div style="position:absolute;top:0;left:14px;right:14px;height:1px;background:linear-gradient(90deg,transparent,rgba(107,171,223,0.18),transparent)"></div>
+  <div class="headline">Light week <span>— 6 runs, 1.7 mi</span></div>
+  <div class="cols">
+    <div class="col"><div class="col-label">Miles</div><div class="col-val">1.7</div></div>
+    <div class="col"><div class="col-label">Sessions</div><div class="col-val">6</div></div>
+    <div class="col"><div class="col-label">Time</div><div class="col-val">0h 17m</div></div>
+  </div>
+  <div class="progress-bar"><div class="progress-fill" style="width:8.5%;background:var(--blue)"></div></div>
+  <div class="progress-label">1.7 / 20 mi</div>
+</div>
+
+<!-- ─── ANNUAL TIMELINE ─── -->
+<div class="section-hdr">Annual Goals <div class="line"></div></div>
+<div class="card timeline">
+  <div style="position:absolute;top:0;left:14px;right:14px;height:1px;background:linear-gradient(90deg,transparent,rgba(224,155,94,0.18),transparent)"></div>
+  <div class="year-label">2026 Timeline</div>
+  <div class="months">
+    <span>J</span><span>F</span><span>M</span><span class="current">A</span><span>M</span><span>J</span><span>J</span><span>A</span><span>S</span><span>O</span><span>N</span><span>D</span>
+  </div>
+  <div class="bar-container">
+    <div class="bar-track"></div>
+    <div class="bar-fill" style="width:28%"></div>
+    <div class="today-marker" style="left:28%;transform:translateX(-1px)"></div>
+    <div class="race-marker past" style="left:17%;transform:translateX(-6px)">✓</div>
+    <div class="race-marker future" style="left:51%;transform:translateX(-6px)">⚑</div>
+    <div class="race-marker future" style="left:77%;transform:translateX(-6px)">⚑</div>
+  </div>
+  <div class="race-labels">
+    <span class="race-tag past">Publix 5K · Mar 15 · 3.1mi</span>
+    <span class="race-tag future">Peachtree 10K · Jul 4 · 6.2mi</span>
+    <span class="race-tag future">ATL Half · Oct 25 · 13.1mi</span>
+  </div>
+  <div class="goals">
+    <div class="goal">
+      <div class="goal-header">
+        <span class="goal-label" style="color:var(--blue)">Run Miles</span>
+        <span class="goal-val">28 <span>/ 800</span></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:3.5%;background:var(--blue)"></div></div>
+    </div>
+    <div class="goal">
+      <div class="goal-header">
+        <span class="goal-label" style="color:var(--purple)">Workouts</span>
+        <span class="goal-val">6 <span>/ 200</span></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:3%;background:var(--purple)"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── TODAY'S PLAN ─── -->
+<div class="section-hdr">Today's Plan <div class="line"></div></div>
+<div class="card plan">
+  <div style="position:absolute;top:0;left:14px;right:14px;height:1px;background:linear-gradient(90deg,transparent,rgba(171,158,212,0.18),transparent)"></div>
+  <div class="plan-header">
+    <span class="plan-date">Monday, Apr 13</span>
+    <span class="plan-count">2 Planned</span>
+  </div>
+  <div class="plan-item">
+    <div class="plan-icon strength">🏋️</div>
+    <div style="flex:1"><div class="plan-title">Strength · Upper Body</div><div class="plan-detail">Chest, shoulders, triceps · 45 min</div></div>
+    <div class="plan-time">AM</div>
+  </div>
+  <div class="plan-item">
+    <div class="plan-icon run">🏃</div>
+    <div style="flex:1"><div class="plan-title">Easy Run</div><div class="plan-detail">Recovery · 3 mi @ 10:30 pace</div></div>
+    <div class="plan-time">PM</div>
+  </div>
+</div>
+
+<!-- ─── CORE (Body · Recovery · Vitals) ─── -->
+<div class="section-hdr">Core <div class="line"></div></div>
+<div class="card summary-card">
+  <div style="position:absolute;top:0;left:14px;right:14px;height:1px;background:linear-gradient(90deg,transparent,rgba(107,207,154,0.15),transparent)"></div>
+  <div class="sum-header">
+    <div class="sum-label"><span style="color:var(--green)">♥</span> Body · Recovery · Vitals</div>
+    <span class="sum-arrow">→</span>
+  </div>
+  <div class="sum-grid" style="grid-template-columns:1fr 1fr 1fr; row-gap: 10px">
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--amber)">Weight</div><div class="sum-item-val">187.5</div><div class="sum-item-unit">lb</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--red)">Body Fat</div><div class="sum-item-val">—</div><div class="sum-item-unit">%</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--orange)">RMR</div><div class="sum-item-val">1,820</div><div class="sum-item-unit">kcal</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--green)">HRV</div><div class="sum-item-val">42</div><div class="sum-item-unit">ms</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--purple)">RHR</div><div class="sum-item-val">48</div><div class="sum-item-unit">bpm</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--cyan)">VO2max</div><div class="sum-item-val">38</div><div class="sum-item-unit">mL/kg</div></div>
+  </div>
+</div>
+
+<!-- ─── LABS ─── -->
+<div class="section-hdr">Labs <div class="line"></div></div>
+<div class="card summary-card">
+  <div style="position:absolute;top:0;left:14px;right:14px;height:1px;background:linear-gradient(90deg,transparent,rgba(171,158,212,0.15),transparent)"></div>
+  <div class="sum-header">
+    <div class="sum-label"><span style="color:var(--purple)">⚗</span> Labs · Jan 2026</div>
+    <span class="sum-arrow">→</span>
+  </div>
+  <div class="sum-grid" style="grid-template-columns:1fr 1fr 1fr; row-gap: 8px">
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--blue)">Testo</div><div class="sum-item-val">612</div><div class="sum-item-unit">ng/dL</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--amber)">Vit D</div><div class="sum-item-val">48</div><div class="sum-item-unit">ng/mL</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--red)">hsCRP</div><div class="sum-item-val">0.8</div><div class="sum-item-unit">mg/L</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--green)">Ferritin</div><div class="sum-item-val">95</div><div class="sum-item-unit">ng/mL</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--pink)">A1c</div><div class="sum-item-val">5.2</div><div class="sum-item-unit">%</div></div>
+    <div class="sum-item"><div class="sum-item-label" style="color:var(--purple)">TSH</div><div class="sum-item-val">1.8</div><div class="sum-item-unit">mU/L</div></div>
+  </div>
+</div>
+
+<div style="height:20px"></div>
+
+<!-- ─── BOTTOM NAV ─── -->
+<div class="bottom-nav">
+  <div class="nav-item active"><div class="nav-icon">⊙</div><div class="nav-label" style="color:var(--blue)">Start</div></div>
+  <div class="nav-item"><div class="nav-icon">💡</div><div class="nav-label">EdgeIQ</div></div>
+  <div class="nav-item"><div class="nav-icon">⚡</div><div class="nav-label">Play</div></div>
+  <div class="nav-item"><div class="nav-icon">🍴</div><div class="nav-label">Fuel</div></div>
+  <div class="nav-item"><div class="nav-icon">♥</div><div class="nav-label">Core</div></div>
+  <div class="nav-item"><div class="nav-icon">⚗</div><div class="nav-label">Labs</div></div>
+  <div class="nav-item"><div class="nav-icon">⋮</div><div class="nav-label">More</div></div>
+</div>
+
+</body>
+</html>

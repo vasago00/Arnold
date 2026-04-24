@@ -347,8 +347,8 @@ export function getAdherence(nDays = 7) {
   for (let i = 0; i < nDays; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
-    const iso = d.toISOString().slice(0, 10);
-    const dayLog = log[iso] || {};
+    const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const dayLog = log[ds] || {};
     total += stack.length;
     taken += Object.keys(dayLog).length;
   }

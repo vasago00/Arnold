@@ -17,6 +17,7 @@ const GROUP_COLOR = {
 export function GoalsHub({ showToast }) {
   const [draft, setDraft] = useState(() => getGoals());
   const [saved, setSaved] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const groups = goalsByGroup();
   const history = storage.get('goalsHistory') || [];
 
@@ -36,7 +37,7 @@ export function GoalsHub({ showToast }) {
   };
 
   const panel = {
-    background: 'var(--bg-surface)',
+    background: 'var(--bg-elevated)',
     border: '0.5px solid var(--border-default)',
     borderRadius: 'var(--radius-md)',
     padding: '10px 14px',
@@ -69,10 +70,17 @@ export function GoalsHub({ showToast }) {
   };
 
   return (
-    <div>
-      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>◉ Goals Hub</div>
-      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8 }}>Single source of truth for every target.</div>
+    <div style={{ background: 'var(--bg-surface)', border: '0.5px solid var(--border-default)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      {/* Collapsible header */}
+      <div onClick={() => setExpanded(e => !e)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', cursor: 'pointer' }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', letterSpacing: '0.03em' }}>◉ Goals Hub</div>
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>Single source of truth for every target.</div>
+        </div>
+        <span style={{ color: 'var(--text-muted)', fontSize: 12, transition: 'transform 0.2s ease', transform: expanded ? 'rotate(0deg)' : 'rotate(180deg)' }}>▼</span>
+      </div>
 
+      {expanded && <div style={{ padding: '0 14px 14px' }}>
       <div className="arnold-goals-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, alignItems:'start' }}>
       {(() => {
         const order = ['Run','Strength','Recovery','Body','Nutrition'];
@@ -224,7 +232,7 @@ export function GoalsHub({ showToast }) {
       <button style={saveBtn} onClick={handleSave}>{saved ? '✓ Saved' : 'Save Goals'}</button>
 
       {history.length > 0 && (
-        <div style={{ ...panel, marginTop: 14, borderLeft: '3px solid var(--text-muted)' }}>
+        <div style={{ ...panel, marginTop: 10, borderLeft: '3px solid var(--text-muted)' }}>
           <div style={header}>Recent changes</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {history.slice(0, 8).map((h, i) => (
@@ -237,6 +245,7 @@ export function GoalsHub({ showToast }) {
           </div>
         </div>
       )}
+      </div>}
     </div>
   );
 }

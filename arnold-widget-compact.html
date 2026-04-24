@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold — Compact Widget Concepts</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #e8e8ec;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+    padding: 40px 20px;
+  }
+  .page-wrap { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+  .mockup-label h1 { font-size: 22px; font-weight: 700; color: #1a1a1e; text-align: center; }
+  .mockup-label p { font-size: 13px; color: #6b7280; margin-top: 4px; text-align: center; }
+  .phones { display: flex; gap: 36px; flex-wrap: wrap; justify-content: center; }
+  .phone-col { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .version-label { font-size: 14px; font-weight: 600; color: #374151; }
+  .version-sub { font-size: 11px; color: #9ca3af; margin-top: 1px; text-align: center; max-width: 280px; }
+
+  /* ── Phone ── */
+  .phone {
+    width: 390px; height: 844px;
+    background: linear-gradient(165deg, #f0f2f5 0%, #e4e6eb 50%, #dde0e6 100%);
+    border-radius: 48px; border: 8px solid #1a1a1e;
+    position: relative; overflow: hidden;
+    box-shadow: 0 0 0 2px #2a2a2e, 0 30px 80px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.15);
+  }
+  .notch { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); width: 126px; height: 36px; background: #1a1a1e; border-radius: 20px; z-index: 10; }
+  .status-bar { position: absolute; top: 14px; left: 32px; right: 32px; display: flex; justify-content: space-between; align-items: center; z-index: 5; font-size: 14px; font-weight: 600; color: #1a1a1e; }
+  .status-bar .time { font-size: 15px; font-weight: 700; }
+  .status-icons { display: flex; gap: 5px; align-items: center; }
+  .status-icons svg { width: 16px; height: 16px; }
+  .home-screen { position: absolute; top: 58px; left: 0; right: 0; bottom: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .greeting { text-align: center; padding: 8px 0 2px; }
+  .greeting .day { font-size: 13px; color: #6b7280; font-weight: 500; }
+  .greeting .date { font-size: 28px; font-weight: 700; color: #1a1a1e; letter-spacing: -0.02em; }
+
+  /* ── App grid ── */
+  .app-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 8px 12px; }
+  .app-icon-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .app-icon { width: 58px; height: 58px; border-radius: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .app-label { font-size: 10px; color: #4b5563; font-weight: 500; text-align: center; }
+  .dock {
+    position: absolute; bottom: 20px; left: 16px; right: 16px;
+    background: rgba(255,255,255,0.65); backdrop-filter: blur(20px);
+    border-radius: 28px; padding: 10px 14px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+  .dock .app-icon { width: 50px; height: 50px; margin: 0 auto; }
+  .home-indicator { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 134px; height: 5px; background: #1a1a1e; border-radius: 3px; opacity: 0.25; }
+
+  /* ═══ WIDGET SHARED ═══ */
+  .widget-glass {
+    background: rgba(255,255,255,0.82);
+    backdrop-filter: blur(30px) saturate(1.4);
+    -webkit-backdrop-filter: blur(30px) saturate(1.4);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 6px 20px rgba(0,0,0,0.08), inset 0 0.5px 0 rgba(255,255,255,0.8);
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+  .widget-glass:hover { transform: scale(1.01); }
+  .widget-glass:active { transform: scale(0.985); }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+  <div class="mockup-label">
+    <h1>Arnold — Compact Widget Concepts</h1>
+    <p>Three space-efficient alternatives · all tap to open Arnold</p>
+  </div>
+
+  <div class="phones">
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- CONCEPT 1: SLIM CARD                                    -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="phone-col">
+      <div style="text-align:center">
+        <div class="version-label">Slim Card</div>
+        <div class="version-sub">Banner-height strip · logo + 10 dots + overall score</div>
+      </div>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="status-bar">
+          <span class="time">9:41</span>
+          <div class="status-icons">
+            <svg viewBox="0 0 18 12" fill="#1a1a1e"><rect x="0" y="0" width="3" height="12" rx="0.8" opacity="0.3"/><rect x="5" y="3" width="3" height="9" rx="0.8" opacity="0.5"/><rect x="10" y="1" width="3" height="11" rx="0.8" opacity="0.8"/><rect x="15" y="0" width="3" height="12" rx="0.8"/></svg>
+            <svg viewBox="0 0 16 12" fill="#1a1a1e"><path d="M0 8.5A4 4 0 0 1 8 2a4 4 0 0 1 8 6.5" stroke="#1a1a1e" stroke-width="1.5" fill="none"/><circle cx="8" cy="9" r="2" fill="#1a1a1e"/></svg>
+            <svg viewBox="0 0 27 13" fill="#1a1a1e"><rect x="0" y="1" width="23" height="11" rx="2.5" stroke="#1a1a1e" stroke-width="1" fill="none"/><rect x="24" y="4" width="2.5" height="5" rx="1" fill="#1a1a1e" opacity="0.35"/><rect x="1.5" y="2.5" width="18" height="8" rx="1.5" fill="#1a1a1e"/></svg>
+          </div>
+        </div>
+        <div class="home-screen">
+          <div class="greeting"><div class="day">Wednesday</div><div class="date">April 16</div></div>
+
+          <!-- ── SLIM WIDGET ── -->
+          <div class="widget-glass" id="slimWidget" style="
+            border-radius: 18px;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+          ">
+            <!-- Logo -->
+            <div style="width:32px;height:32px;background:linear-gradient(135deg,#1a1a1e,#333);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:#fff;flex-shrink:0;">A</div>
+            <!-- 10 dots -->
+            <div id="slimDots" style="display:flex;gap:6px;flex:1;justify-content:center;align-items:center;"></div>
+            <!-- Overall score -->
+            <div id="slimScore" style="font-size:20px;font-weight:700;letter-spacing:-0.03em;flex-shrink:0;"></div>
+          </div>
+
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#5AC8FA,#007AFF)"></div><span class="app-label">Weather</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#FF6B6B,#EE5A24)"></div><span class="app-label">Music</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#A78BFA,#7C3AED)"></div><span class="app-label">Photos</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#34D399,#059669)"></div><span class="app-label">Maps</span></div>
+          </div>
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)"></div><span class="app-label">Notes</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#60a5fa,#3b82f6)"></div><span class="app-label">Files</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#f87171,#ef4444)"></div><span class="app-label">Calendar</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#818cf8,#6366f1)"></div><span class="app-label">Settings</span></div>
+          </div>
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#f472b6,#ec4899)"></div><span class="app-label">Health</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#a3e635,#84cc16)"></div><span class="app-label">Fitness</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#94a3b8,#64748b)"></div><span class="app-label">Clock</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#fb923c,#ea580c)"></div><span class="app-label">Podcasts</span></div>
+          </div>
+        </div>
+        <div class="dock">
+          <div class="app-icon" style="background:linear-gradient(135deg,#4ade80,#22c55e)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#38bdf8,#0284c7)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#fb923c,#ea580c)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)"></div>
+        </div>
+        <div class="home-indicator"></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- CONCEPT 2: RING WIDGET (2×2 size)                       -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="phone-col">
+      <div style="text-align:center">
+        <div class="version-label">Ring Widget</div>
+        <div class="version-sub">2×2 app-icon footprint · overall arc + 10 system dots around it</div>
+      </div>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="status-bar">
+          <span class="time">9:41</span>
+          <div class="status-icons">
+            <svg viewBox="0 0 18 12" fill="#1a1a1e"><rect x="0" y="0" width="3" height="12" rx="0.8" opacity="0.3"/><rect x="5" y="3" width="3" height="9" rx="0.8" opacity="0.5"/><rect x="10" y="1" width="3" height="11" rx="0.8" opacity="0.8"/><rect x="15" y="0" width="3" height="12" rx="0.8"/></svg>
+            <svg viewBox="0 0 16 12" fill="#1a1a1e"><path d="M0 8.5A4 4 0 0 1 8 2a4 4 0 0 1 8 6.5" stroke="#1a1a1e" stroke-width="1.5" fill="none"/><circle cx="8" cy="9" r="2" fill="#1a1a1e"/></svg>
+            <svg viewBox="0 0 27 13" fill="#1a1a1e"><rect x="0" y="1" width="23" height="11" rx="2.5" stroke="#1a1a1e" stroke-width="1" fill="none"/><rect x="24" y="4" width="2.5" height="5" rx="1" fill="#1a1a1e" opacity="0.35"/><rect x="1.5" y="2.5" width="18" height="8" rx="1.5" fill="#1a1a1e"/></svg>
+          </div>
+        </div>
+        <div class="home-screen">
+          <div class="greeting"><div class="day">Wednesday</div><div class="date">April 16</div></div>
+
+          <!-- Row with ring widget + 2 app icons -->
+          <div style="display:flex;gap:16px;padding:0 12px;align-items:start;">
+            <!-- RING WIDGET -->
+            <div class="widget-glass" style="border-radius:22px;width:140px;height:140px;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;">
+              <canvas id="ringCanvas" width="280" height="280" style="width:130px;height:130px;"></canvas>
+              <div style="position:absolute;display:flex;flex-direction:column;align-items:center;">
+                <div id="ringScore" style="font-size:28px;font-weight:800;letter-spacing:-0.04em;line-height:1;"></div>
+                <div style="font-size:8px;font-weight:600;color:#9ca3af;letter-spacing:0.06em;text-transform:uppercase;margin-top:2px;">Overall</div>
+              </div>
+            </div>
+            <!-- 2 app icons beside it -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;padding-top:4px;">
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#5AC8FA,#007AFF)"></div><span class="app-label">Weather</span></div>
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#FF6B6B,#EE5A24)"></div><span class="app-label">Music</span></div>
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#A78BFA,#7C3AED)"></div><span class="app-label">Photos</span></div>
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#34D399,#059669)"></div><span class="app-label">Maps</span></div>
+            </div>
+          </div>
+
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)"></div><span class="app-label">Notes</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#60a5fa,#3b82f6)"></div><span class="app-label">Files</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#f87171,#ef4444)"></div><span class="app-label">Calendar</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#818cf8,#6366f1)"></div><span class="app-label">Settings</span></div>
+          </div>
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#f472b6,#ec4899)"></div><span class="app-label">Health</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#a3e635,#84cc16)"></div><span class="app-label">Fitness</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#94a3b8,#64748b)"></div><span class="app-label">Clock</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#fb923c,#ea580c)"></div><span class="app-label">Podcasts</span></div>
+          </div>
+        </div>
+        <div class="dock">
+          <div class="app-icon" style="background:linear-gradient(135deg,#4ade80,#22c55e)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#38bdf8,#0284c7)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#fb923c,#ea580c)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)"></div>
+        </div>
+        <div class="home-indicator"></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- CONCEPT 3: 2×2 MICRO GRID                               -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="phone-col">
+      <div style="text-align:center">
+        <div class="version-label">2×2 Micro Grid</div>
+        <div class="version-sub">Standard small widget · 10 tiny illuminating squares + score</div>
+      </div>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="status-bar">
+          <span class="time">9:41</span>
+          <div class="status-icons">
+            <svg viewBox="0 0 18 12" fill="#1a1a1e"><rect x="0" y="0" width="3" height="12" rx="0.8" opacity="0.3"/><rect x="5" y="3" width="3" height="9" rx="0.8" opacity="0.5"/><rect x="10" y="1" width="3" height="11" rx="0.8" opacity="0.8"/><rect x="15" y="0" width="3" height="12" rx="0.8"/></svg>
+            <svg viewBox="0 0 16 12" fill="#1a1a1e"><path d="M0 8.5A4 4 0 0 1 8 2a4 4 0 0 1 8 6.5" stroke="#1a1a1e" stroke-width="1.5" fill="none"/><circle cx="8" cy="9" r="2" fill="#1a1a1e"/></svg>
+            <svg viewBox="0 0 27 13" fill="#1a1a1e"><rect x="0" y="1" width="23" height="11" rx="2.5" stroke="#1a1a1e" stroke-width="1" fill="none"/><rect x="24" y="4" width="2.5" height="5" rx="1" fill="#1a1a1e" opacity="0.35"/><rect x="1.5" y="2.5" width="18" height="8" rx="1.5" fill="#1a1a1e"/></svg>
+          </div>
+        </div>
+        <div class="home-screen">
+          <div class="greeting"><div class="day">Wednesday</div><div class="date">April 16</div></div>
+
+          <!-- Row: 2×2 widget + 2 app columns -->
+          <div style="display:flex;gap:16px;padding:0 12px;align-items:start;">
+            <!-- 2×2 WIDGET -->
+            <div class="widget-glass" style="border-radius:22px;width:140px;padding:10px;flex-shrink:0;">
+              <!-- Header -->
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                <div style="width:18px;height:18px;background:linear-gradient(135deg,#1a1a1e,#333);border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;">A</div>
+                <span style="font-size:10px;font-weight:600;color:#1a1a1e;">Arnold</span>
+              </div>
+              <!-- 5×2 micro tiles -->
+              <div id="microGrid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;"></div>
+              <!-- Overall -->
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;padding-top:6px;border-top:1px solid rgba(0,0,0,0.05);">
+                <span style="font-size:8px;color:#9ca3af;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Overall</span>
+                <span id="microScore" style="font-size:16px;font-weight:700;letter-spacing:-0.03em;"></span>
+              </div>
+            </div>
+            <!-- 2 app columns -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;padding-top:4px;">
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#5AC8FA,#007AFF)"></div><span class="app-label">Weather</span></div>
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#FF6B6B,#EE5A24)"></div><span class="app-label">Music</span></div>
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#A78BFA,#7C3AED)"></div><span class="app-label">Photos</span></div>
+              <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#34D399,#059669)"></div><span class="app-label">Maps</span></div>
+            </div>
+          </div>
+
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)"></div><span class="app-label">Notes</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#60a5fa,#3b82f6)"></div><span class="app-label">Files</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#f87171,#ef4444)"></div><span class="app-label">Calendar</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#818cf8,#6366f1)"></div><span class="app-label">Settings</span></div>
+          </div>
+          <div class="app-row">
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#f472b6,#ec4899)"></div><span class="app-label">Health</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#a3e635,#84cc16)"></div><span class="app-label">Fitness</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#94a3b8,#64748b)"></div><span class="app-label">Clock</span></div>
+            <div class="app-icon-wrap"><div class="app-icon" style="background:linear-gradient(135deg,#fb923c,#ea580c)"></div><span class="app-label">Podcasts</span></div>
+          </div>
+        </div>
+        <div class="dock">
+          <div class="app-icon" style="background:linear-gradient(135deg,#4ade80,#22c55e)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#38bdf8,#0284c7)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#fb923c,#ea580c)"></div>
+          <div class="app-icon" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)"></div>
+        </div>
+        <div class="home-indicator"></div>
+      </div>
+    </div>
+
+  </div><!-- /phones -->
+</div>
+
+<script>
+// ── Data ──
+const SYSTEMS = [
+  { id:'brain',      pct:82 }, { id:'heart',     pct:74 },
+  { id:'bones',      pct:88 }, { id:'gut',       pct:61 },
+  { id:'immune',     pct:91 }, { id:'energy',    pct:67 },
+  { id:'longevity',  pct:45 }, { id:'sleep',     pct:78 },
+  { id:'metabolism', pct:84 }, { id:'endurance', pct:72 },
+];
+const overall = Math.round(SYSTEMS.reduce((s,x)=>s+x.pct,0)/SYSTEMS.length);
+
+// ── Red → Amber → Green ramp ──
+function pctColor(pct) {
+  const p = Math.max(0, Math.min(100, pct));
+  let r,g,b;
+  if (p <= 50) {
+    const t = p/50;
+    r = Math.round(239+(251-239)*t); g = Math.round(68+(191-68)*t); b = Math.round(68+(36-68)*t);
+  } else {
+    const t = (p-50)/50;
+    r = Math.round(251+(34-251)*t); g = Math.round(191+(197-191)*t); b = Math.round(36+(94-36)*t);
+  }
+  return {r,g,b,css:`rgb(${r},${g},${b})`};
+}
+
+// ═══════════════════════════════════════════
+// CONCEPT 1: SLIM CARD — 10 colored dots
+// ═══════════════════════════════════════════
+const slimDots = document.getElementById('slimDots');
+SYSTEMS.forEach(sys => {
+  const c = pctColor(sys.pct);
+  const dot = document.createElement('div');
+  const size = 18;
+  const intensity = sys.pct / 100;
+  dot.style.cssText = `
+    width:${size}px; height:${size}px; border-radius:5px; flex-shrink:0;
+    background: rgba(${c.r},${c.g},${c.b},${0.2+intensity*0.6});
+    box-shadow: 0 0 ${Math.round(3+intensity*6)}px rgba(${c.r},${c.g},${c.b},${intensity*0.4}),
+                inset 0 0 ${Math.round(2+intensity*4)}px rgba(${c.r},${c.g},${c.b},${intensity*0.25});
+    border: 1px solid rgba(${c.r},${c.g},${c.b},${0.15+intensity*0.3});
+  `;
+  slimDots.appendChild(dot);
+});
+const oc = pctColor(overall);
+document.getElementById('slimScore').style.color = oc.css;
+document.getElementById('slimScore').textContent = overall + '%';
+
+// ═══════════════════════════════════════════
+// CONCEPT 2: RING — canvas arc + dot orbit
+// ═══════════════════════════════════════════
+const canvas = document.getElementById('ringCanvas');
+const ctx = canvas.getContext('2d');
+const W = 280, cx = W/2, cy = W/2;
+
+// Background track
+ctx.beginPath();
+ctx.arc(cx, cy, 105, 0, Math.PI*2);
+ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+ctx.lineWidth = 18;
+ctx.stroke();
+
+// Score arc with gradient
+const startAngle = -Math.PI/2;
+const endAngle = startAngle + (overall/100) * Math.PI * 2;
+const grad = ctx.createConicGradient(startAngle, cx, cy);
+// Map the red→green ramp across the arc
+for (let i = 0; i <= 20; i++) {
+  const t = i / 20;
+  const fakePct = t * overall;
+  const c = pctColor(fakePct);
+  grad.addColorStop(t * (overall/100), c.css);
+}
+grad.addColorStop(1, 'rgba(0,0,0,0.04)');
+ctx.beginPath();
+ctx.arc(cx, cy, 105, startAngle, endAngle);
+ctx.strokeStyle = grad;
+ctx.lineWidth = 18;
+ctx.lineCap = 'round';
+ctx.stroke();
+
+// 10 system dots around the ring
+SYSTEMS.forEach((sys, i) => {
+  const angle = startAngle + (i / 10) * Math.PI * 2 + Math.PI/10; // offset so they're evenly spaced
+  const dotR = 76; // inner orbit
+  const dx = cx + dotR * Math.cos(angle);
+  const dy = cy + dotR * Math.sin(angle);
+  const c = pctColor(sys.pct);
+  const intensity = sys.pct / 100;
+  const dotSize = 7 + intensity * 3;
+
+  // Glow
+  ctx.beginPath();
+  ctx.arc(dx, dy, dotSize + 3, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(${c.r},${c.g},${c.b},${intensity*0.2})`;
+  ctx.fill();
+
+  // Dot
+  ctx.beginPath();
+  ctx.arc(dx, dy, dotSize, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(${c.r},${c.g},${c.b},${0.4+intensity*0.6})`;
+  ctx.fill();
+});
+
+const rc = pctColor(overall);
+document.getElementById('ringScore').style.color = rc.css;
+document.getElementById('ringScore').textContent = overall + '%';
+
+// ═══════════════════════════════════════════
+// CONCEPT 3: 2×2 MICRO GRID — tiny tiles
+// ═══════════════════════════════════════════
+const microGrid = document.getElementById('microGrid');
+SYSTEMS.forEach(sys => {
+  const c = pctColor(sys.pct);
+  const intensity = sys.pct / 100;
+  const tile = document.createElement('div');
+  tile.style.cssText = `
+    aspect-ratio: 1;
+    border-radius: 5px;
+    background: rgba(${c.r},${c.g},${c.b},${0.18+intensity*0.55});
+    box-shadow: 0 0 ${Math.round(2+intensity*5)}px rgba(${c.r},${c.g},${c.b},${intensity*0.35}),
+                inset 0 0 ${Math.round(2+intensity*4)}px rgba(${c.r},${c.g},${c.b},${intensity*0.2});
+    border: 1px solid rgba(${c.r},${c.g},${c.b},${0.12+intensity*0.25});
+    transition: all 0.4s ease;
+  `;
+  microGrid.appendChild(tile);
+});
+const mc = pctColor(overall);
+document.getElementById('microScore').style.color = mc.css;
+document.getElementById('microScore').textContent = overall + '%';
+</script>
+</body>
+</html>

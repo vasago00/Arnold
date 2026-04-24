@@ -103,14 +103,21 @@ export function parseActivitiesCSV(text) {
   return results;
 }
 
+// Key an activity for dedup/merge. Includes start time so two same-titled
+// Garmin activities on the same day (e.g. two "Running" sessions) both survive.
+// Falls back gracefully when time/title aren't present.
+function activityKey(a) {
+  return `${a.date}|${a.title || a.activityType || ''}|${a.time || ''}`;
+}
+
 export function mergeActivities(existing, incoming) {
   const byKey = new Map();
-  for (const e of existing) byKey.set(`${e.date}|${e.title}`, e);
+  for (const e of existing) byKey.set(activityKey(e), e);
   let added = 0, updated = 0;
   for (const e of incoming) {
-    const key = `${e.date}|${e.title}`;
+    const key = activityKey(e);
     if (byKey.has(key)) { byKey.set(key, { ...byKey.get(key), ...e }); updated++; }
     else { byKey.set(key, e); added++; }
   }
-  return { merged: [...byKey.values()].sort((a, b) => b.date.localeCompare(a.date)), added, updated };
+  return { merged: [...byKey.values()].sort((a, b) => (b.date || '').localeCompare(a.date || '')), added, updated };
 }

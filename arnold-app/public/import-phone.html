@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Phone Import</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:30px 16px;text-align:center;}
+  h1{color:#00e676;font-size:20px;margin-bottom:8px;}
+  .sub{color:#888;font-size:13px;margin-bottom:16px;}
+  textarea{width:100%;height:120px;background:#111;color:#eee;border:1px solid #333;border-radius:10px;padding:12px;font-family:monospace;font-size:11px;margin-bottom:12px;}
+  button{background:#00e676;color:#000;border:none;padding:16px 40px;border-radius:12px;font-size:17px;font-weight:700;cursor:pointer;width:100%;}
+  button:active{transform:scale(0.96);}
+  .status{margin:16px auto;padding:14px;border-radius:10px;font-size:14px;line-height:1.5;}
+  .ok{background:#1b3a1b;color:#00e676;}
+  .err{background:#3a1b1b;color:#f44336;}
+  a{color:#00e676;font-weight:600;font-size:18px;text-decoration:none;}
+</style>
+</head>
+<body>
+<h1>Arnold Phone Import</h1>
+<p class="sub">Paste your data below and tap Import</p>
+<textarea id="input" placeholder="Tap here and paste (long press → Paste)"></textarea>
+<button onclick="doImport()">Import Data</button>
+<div id="status"></div>
+
+<script>
+function doImport(){
+  const status = document.getElementById('status');
+  const text = document.getElementById('input').value.trim();
+  if(!text){
+    status.innerHTML = '<div class="status err">Paste your data first!</div>';
+    return;
+  }
+  try {
+    const data = JSON.parse(text);
+    const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
+    if(!keys.length) throw new Error('No arnold:* keys found');
+    keys.forEach(k => localStorage.setItem(k, data[k]));
+    const totalBytes = keys.reduce((s,k) => s + data[k].length, 0);
+    const sizeStr = totalBytes > 1024 ? (totalBytes/1024).toFixed(1)+' KB' : totalBytes+' bytes';
+    status.innerHTML = '<div class="status ok">✅ Imported ' + keys.length + ' keys (' + sizeStr + ')<br><br><a href="/">Open Arnold →</a></div>';
+  } catch(e) {
+    status.innerHTML = '<div class="status err">Error: ' + e.message + '</div>';
+  }
+}
+</script>
+</body>
+</html>

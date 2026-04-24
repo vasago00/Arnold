@@ -157,23 +157,37 @@ export function clearPairingConfig() {
 
 // ── Passphrase / key derivation ─────────────────────────────────────────────
 
+// In-memory fallback for environments where sessionStorage doesn't persist
+// across WebView reloads (Capacitor on Android can be flaky).
+let _passInMem = null;
+
 export async function setPassphrase(passphrase, { remember = true } = {}) {
   if (!passphrase || passphrase.length < 8) throw new Error('passphrase too short (8+ chars)');
+  _passInMem = passphrase;
   if (remember) {
     try { sessionStorage.setItem(SESSION_PASS, passphrase); } catch {}
   }
-  _derivedKey = null; // force re-derive with new pass
-  return getDerivedKey();
+  // Derive immediately so the key is cached even if sessionStorage gets evicted.
+  _derivedKey = null;
+  const cfg = getPairingConfig();
+  if (!cfg.salt) throw new Error('not paired');
+  _derivedKey = await deriveKey(passphrase, hexToBytes(cfg.salt));
+  return _derivedKey;
+}
+
+function _readPass() {
+  if (_passInMem) return _passInMem;
+  try { return sessionStorage.getItem(SESSION_PASS); } catch { return null; }
 }
 
 export function hasPassphrase() {
   if (_derivedKey) return true;
-  try { return !!sessionStorage.getItem(SESSION_PASS); } catch { return false; }
+  return !!_readPass();
 }
 
 async function getDerivedKey() {
   if (_derivedKey) return _derivedKey;
-  const pass = (() => { try { return sessionStorage.getItem(SESSION_PASS); } catch { return null; } })();
+  const pass = _readPass();
   if (!pass) throw new Error('passphrase not set');
   const cfg = getPairingConfig();
   if (!cfg.salt) throw new Error('not paired');
@@ -251,7 +265,9 @@ function buildSnapshot() {
   for (const [name, fullKey] of Object.entries(KEYS)) {
     const val = storage.get(name);
     if (val === null || val === undefined) continue;
-    keys[fullKey] = { v: val, t: versions[fullKey] || 0 };
+    // Use current time for keys that pre-date Cloud Sync pairing, so the
+    // receiving device sees them as newer than its default (0) and applies them.
+    keys[fullKey] = { v: val, t: versions[fullKey] || now() };
   }
   return {
     schema: SNAPSHOT_SCHEMA,
@@ -264,21 +280,61 @@ function buildSnapshot() {
 // Map a fullKey back to the collection name in KEYS.
 const REVERSE_KEYS = Object.fromEntries(Object.entries(KEYS).map(([k, v]) => [v, k]));
 
-// Merge an array-of-records by date or id, last-write-wins per element.
-function mergeArrays(local, remote) {
-  if (!Array.isArray(local)) return remote;
+// ── Array merge: Last-Write-Wins (LWW) ────────────────────────────────────
+//
+// DATA FLOW PROTOCOL:
+//   1. Each device is a standalone solution with its own complete data copy.
+//   2. On every local write, the key's version timestamp is bumped and a push
+//      is debounced (5 s).
+//   3. On pull, for each key: if remote.t > local.t the remote value wins.
+//   4. For arrays this means FULL REPLACEMENT — the remote array overwrites
+//      the local array entirely.  No element-level merge, no union, no ghosts.
+//   5. The only exception: local entries with a `createdAt` timestamp AFTER
+//      the remote snapshot was written are preserved (they're genuinely new
+//      local data the remote hasn't seen yet).  This prevents data loss when
+//      both devices edit between sync cycles.
+//
+// Why full replacement?  Element-level merge (union by id/date) can never
+// propagate deletions — if device A deletes an entry, device B's copy still
+// has it and the union merge resurrects it.  LWW is simple and predictable:
+// "last save wins" across the board.
+//
+function mergeArrays(local, remote, remoteWrittenAt = 0) {
+  if (!Array.isArray(local))  return remote;
   if (!Array.isArray(remote)) return local;
-  // Pick a dedupe field based on the first element
-  const sample = remote[0] || local[0] || {};
-  const field = ('id' in sample) ? 'id' : ('date' in sample) ? 'date' : null;
-  if (!field) return remote; // can't merge — take remote wholesale
-  const map = new Map(local.map(r => [r[field], r]));
+
+  // Start from the remote array (authoritative).
+  // Preserve local-only records created AFTER the remote snapshot was built,
+  // so we don't discard genuinely new local data that hasn't pushed yet.
+  const remoteIds = new Set();
+  const remoteDates = new Set();
   for (const r of remote) {
-    const k = r?.[field];
-    if (k == null) continue;
-    map.set(k, { ...(map.get(k) || {}), ...r });
+    if (r.id)   remoteIds.add(r.id);
+    if (r.date) remoteDates.add(r.date);
   }
-  return [...map.values()].sort((a, b) => String(b[field] || '').localeCompare(String(a[field] || '')));
+
+  const extras = [];
+  for (const r of local) {
+    // Already in remote — skip (remote version wins)
+    if (r.id && remoteIds.has(r.id))     continue;
+    if (!r.id && r.date && remoteDates.has(r.date)) continue;
+
+    // Local-only: keep only if created after the remote snapshot
+    const ct = r.createdAt ? new Date(r.createdAt).getTime() : 0;
+    if (ct > remoteWrittenAt) {
+      extras.push(r);
+    }
+    // Otherwise it was deleted / replaced on the remote — drop it.
+  }
+
+  const merged = [...remote, ...extras];
+  // Sort newest-first by whatever key makes sense
+  const sample = merged[0] || {};
+  const sortKey = ('id' in sample) ? 'id' : ('date' in sample) ? 'date' : null;
+  if (sortKey) {
+    merged.sort((a, b) => String(b[sortKey] || '').localeCompare(String(a[sortKey] || '')));
+  }
+  return merged;
 }
 
 function applySnapshot(remote) {
@@ -297,7 +353,9 @@ function applySnapshot(remote) {
       const name = REVERSE_KEYS[fullKey];
       if (!name) continue; // unknown key — ignore
       const localVal = storage.get(name);
-      const merged = Array.isArray(remoteVal) ? mergeArrays(localVal, remoteVal) : remoteVal;
+      // LWW: remote wins.  Pass remoteT so mergeArrays can preserve genuinely
+      // new local entries (createdAt > remoteT) while discarding stale ones.
+      const merged = Array.isArray(remoteVal) ? mergeArrays(localVal, remoteVal, remoteT) : remoteVal;
       storage.set(name, merged, { skipValidation: true });
       newVersions[fullKey] = remoteT;
       applied++;
@@ -340,8 +398,10 @@ async function pushNow() {
     emit('push:ok', { bytes: blob.byteLength, updatedAt: payload.updatedAt });
     return { ok: true, bytes: blob.byteLength, updatedAt: payload.updatedAt };
   } catch (err) {
-    emit('push:error', { error: err.message });
-    return { error: err.message };
+    const msg = (err && (err.message || err.name || String(err))) || 'unknown';
+    console.error('[cloud-sync] push failed:', err);
+    emit('push:error', { error: msg });
+    return { error: msg };
   }
 }
 
@@ -373,7 +433,8 @@ async function pullNow() {
     }
     const updatedAt = res.headers.get('X-Updated-At') || '';
     const buf = await res.arrayBuffer();
-    const passphrase = sessionStorage.getItem(SESSION_PASS);
+    const passphrase = _readPass();
+    if (!passphrase) throw new Error('passphrase not set');
     const { json } = await decryptBlob(buf, passphrase);
     const snapshot = JSON.parse(json);
     const applied = applySnapshot(snapshot);
@@ -382,8 +443,10 @@ async function pullNow() {
     emit('pull:ok', { applied, bytes: buf.byteLength, updatedAt });
     return { ok: true, applied, bytes: buf.byteLength };
   } catch (err) {
-    emit('pull:error', { error: err.message });
-    return { error: err.message };
+    const msg = (err && (err.message || err.name || String(err))) || 'unknown';
+    console.error('[cloud-sync] pull failed:', err);
+    emit('pull:error', { error: msg });
+    return { error: msg };
   }
 }
 

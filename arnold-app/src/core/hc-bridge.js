@@ -10,6 +10,8 @@
 //     const sessions = await hcBridge.readExerciseSessions(start, end);
 //   }
 
+import { storage } from './storage.js';
+
 // ── Platform detection ──────────────────────────────────────────────────────
 
 let _isNative = null;
@@ -167,6 +169,54 @@ const nativeBridge = {
     return result?.records || [];
   },
 
+  // ── Phase 4a: daily-wellness aggregate readers ────────────────────────────
+  // These three back TDEE Tier 1 — one row per calendar day, already
+  // bucketed by the HC server (aggregateGroupByPeriod under the hood).
+  // Empty days are dropped by the Kotlin side, so callers don't need to
+  // filter zeros.
+
+  /**
+   * Read daily step counts.
+   * @param {string} startDate YYYY-MM-DD
+   * @param {string} endDate   YYYY-MM-DD (inclusive)
+   * @returns {Promise<Array<{date: string, steps: number}>>}
+   */
+  async readSteps(startDate, endDate) {
+    const plugin = getNativePlugin();
+    if (!plugin) return [];
+    const result = await plugin.readSteps({ startDate, endDate });
+    return result?.records || [];
+  },
+
+  /**
+   * Read daily active-calories-burned totals (kcal above BMR).
+   * @param {string} startDate
+   * @param {string} endDate
+   * @returns {Promise<Array<{date: string, kcal: number}>>}
+   */
+  async readActiveCaloriesBurned(startDate, endDate) {
+    const plugin = getNativePlugin();
+    if (!plugin) return [];
+    const result = await plugin.readActiveCaloriesBurned({ startDate, endDate });
+    return result?.records || [];
+  },
+
+  /**
+   * Read daily total-calories-burned totals (BMR + activity, as reported
+   * by the source device — does NOT include TEF, which is food-derived).
+   * This is the headline value for tdee() Tier 1: add TEF and you have
+   * the day's true energy expenditure.
+   * @param {string} startDate
+   * @param {string} endDate
+   * @returns {Promise<Array<{date: string, kcal: number}>>}
+   */
+  async readTotalCaloriesBurned(startDate, endDate) {
+    const plugin = getNativePlugin();
+    if (!plugin) return [];
+    const result = await plugin.readTotalCaloriesBurned({ startDate, endDate });
+    return result?.records || [];
+  },
+
   /**
    * Write a nutrition record to Health Connect (Arnold → HC write-back).
    * @param {Object} record - NutritionRecord to write
@@ -191,29 +241,69 @@ const nativeBridge = {
 
   /**
    * Get the last successful sync timestamp for a data type.
-   * Stored locally in localStorage.
-   * @param {string} dataType - 'exercise'|'sleep'|'weight'|'heartRate'|'nutrition'|'hydration'
+   * Delegates to the shared cross-platform implementation so timestamps
+   * travel via Cloud Sync to every paired device.
+   * @param {string} dataType - 'exercise'|'sleep'|'weight'|'heartRate'|'nutrition'|'hydration'|'dailyEnergy'
    * @returns {string|null} ISO timestamp
    */
-  getLastSyncTime(dataType) {
-    try {
-      return localStorage.getItem(`arnold:hc-sync:${dataType}`) || null;
-    } catch {
-      return null;
-    }
-  },
+  getLastSyncTime(dataType) { return getHcLastSync(dataType); },
 
   /**
-   * Set the last successful sync timestamp.
+   * Set the last successful sync timestamp. Writes to synced storage so
+   * the paired web/desktop device sees the freshness too.
    * @param {string} dataType
    * @param {string} isoTime
    */
-  setLastSyncTime(dataType, isoTime) {
-    try {
-      localStorage.setItem(`arnold:hc-sync:${dataType}`, isoTime);
-    } catch { /* ignore */ }
-  },
+  setLastSyncTime(dataType, isoTime) { setHcLastSync(dataType, isoTime); },
 };
+
+// ── Shared last-sync store (cloud-synced) ───────────────────────────────────
+// Before Phase 4a these lived in localStorage (device-local). They now sit
+// inside the encrypted Cloud Sync blob under `arnold:hc-sync-meta`, so a
+// successful sync on the Android phone immediately shows up on the paired
+// web build. One-time migration drains any stale localStorage keys on first
+// read so existing users don't see a "—" regression.
+
+const OLD_LS_PREFIX = 'arnold:hc-sync:';
+const HC_STREAMS    = ['exercise','sleep','weight','heartRate','nutrition','hydration','dailyEnergy'];
+let _hcMetaMigrated = false;
+
+function migrateHcMetaOnce() {
+  if (_hcMetaMigrated) return;
+  _hcMetaMigrated = true;
+  try {
+    const current = storage.get('hcSyncMeta') || {};
+    let touched = false;
+    for (const stream of HC_STREAMS) {
+      if (current[stream]) continue; // already migrated
+      const legacy = (typeof localStorage !== 'undefined')
+        ? localStorage.getItem(OLD_LS_PREFIX + stream)
+        : null;
+      if (legacy) {
+        current[stream] = legacy;
+        touched = true;
+        try { localStorage.removeItem(OLD_LS_PREFIX + stream); } catch {}
+      }
+    }
+    if (touched) storage.set('hcSyncMeta', current, { skipValidation: true });
+  } catch { /* best-effort — migration must never throw */ }
+}
+
+function getHcLastSync(dataType) {
+  migrateHcMetaOnce();
+  try {
+    const meta = storage.get('hcSyncMeta') || {};
+    return meta[dataType] || null;
+  } catch { return null; }
+}
+
+function setHcLastSync(dataType, isoTime) {
+  try {
+    const meta = storage.get('hcSyncMeta') || {};
+    meta[dataType] = isoTime;
+    storage.set('hcSyncMeta', meta, { skipValidation: true });
+  } catch { /* ignore */ }
+}
 
 // ── Web fallback (no-op) ────────────────────────────────────────────────────
 // Returns empty results so callers don't need platform checks everywhere.
@@ -227,10 +317,15 @@ const webFallback = {
   async readHeartRate() { return []; },
   async readNutrition() { return []; },
   async readHydration() { return []; },
+  async readSteps() { return []; },
+  async readActiveCaloriesBurned() { return []; },
+  async readTotalCaloriesBurned() { return []; },
   async writeNutrition() { return { success: false }; },
   async writeHydration() { return { success: false }; },
-  getLastSyncTime() { return null; },
-  setLastSyncTime() {},
+  // Timestamps now live in cloud-synced storage, so the web fallback can
+  // surface the freshness of the phone's last HC sync without changes.
+  getLastSyncTime(dataType) { return getHcLastSync(dataType); },
+  setLastSyncTime() {}, // web never writes — the Android phone is the source
 };
 
 // ── Export the appropriate bridge ───────────────────────────────────────────

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Export for Phone</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:40px 20px;text-align:center;}
+  h1{color:#00e676;font-size:22px;margin-bottom:20px;}
+  .status{margin:20px auto;padding:16px;border-radius:10px;font-size:14px;max-width:500px;line-height:1.6;}
+  .ok{background:#1b3a1b;color:#00e676;}
+  .info{background:#1a1a2e;color:#90caf9;}
+  textarea{width:90%;max-width:500px;height:60px;background:#111;color:#00e676;border:1px solid #333;border-radius:8px;padding:10px;font-family:monospace;font-size:10px;margin-top:12px;}
+  button{background:#00e676;color:#000;border:none;padding:14px 40px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:16px;}
+</style>
+</head>
+<body>
+<h1>Export Data for Phone</h1>
+
+<div id="status"></div>
+<textarea id="output" readonly></textarea>
+<br>
+<button onclick="copyData()">Copy All Data</button>
+
+<div class="status info" style="margin-top:24px;">
+  After copying, go to your phone Chrome via scrcpy:<br>
+  Open <code style="color:#00e676">localhost:5174/import-phone.html</code><br>
+  Tap the text area and paste (Ctrl+V in scrcpy)
+</div>
+
+<script>
+  const backup = {};
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(key && key.startsWith('arnold:')) backup[key] = localStorage.getItem(key);
+  }
+  const json = JSON.stringify(backup);
+  const keys = Object.keys(backup).length;
+  const size = (json.length/1024).toFixed(1);
+  document.getElementById('status').innerHTML =
+    '<div class="status ok">Found ' + keys + ' keys (' + size + ' KB)</div>';
+  document.getElementById('output').value = json;
+
+  function copyData(){
+    navigator.clipboard.writeText(json).then(() => {
+      document.getElementById('status').innerHTML =
+        '<div class="status ok">✅ Copied ' + keys + ' keys to clipboard!<br>Now paste on phone via scrcpy.</div>';
+    }).catch(e => {
+      document.getElementById('output').select();
+      document.execCommand('copy');
+      document.getElementById('status').innerHTML =
+        '<div class="status ok">✅ Copied! Now paste on phone via scrcpy.</div>';
+    });
+  }
+</script>
+</body>
+</html>

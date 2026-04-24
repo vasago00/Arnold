@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Arnold — Nutrition Redesign Mockup</title>
+<style>
+  :root {
+    --bg-base: #0a0b0f;
+    --bg-surface: rgba(20, 22, 30, 0.65);
+    --bg-elevated: rgba(28, 30, 40, 0.75);
+    --bg-deeper: rgba(12, 14, 20, 0.9);
+    --border-default: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.14);
+    --text-primary: #e8eaed;
+    --text-secondary: #c0c4cc;
+    --text-muted: #7c818e;
+    --text-dim: #545966;
+    --accent-blue: #60a5fa;
+    --accent-green: #4ade80;
+    --accent-amber: #fbbf24;
+    --accent-red: #f87171;
+    --accent-purple: #a78bfa;
+    --accent-pink: #f472b6;
+    --accent-cyan: #22d3ee;
+    --accent-orange: #fb923c;
+    --accent-teal: #2dd4bf;
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    font-family: var(--font-ui);
+    background: radial-gradient(ellipse at top, #12141c 0%, #06070a 60%);
+    color: var(--text-primary);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
+  }
+  .page-wrap {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+  .page-header {
+    text-align: center;
+    margin-bottom: 32px;
+    padding: 24px;
+  }
+  .page-header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .page-header .sub {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+  .layout-grid {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 32px;
+    align-items: start;
+  }
+  @media (max-width: 1200px) {
+    .layout-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Desktop column ── */
+  .desktop-col h2.section-label,
+  .mobile-col h2.section-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    padding-left: 4px;
+  }
+
+  /* ── Panel (glassmorphism card) ── */
+  .panel {
+    background: var(--bg-surface);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid var(--border-default);
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+  }
+  .panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+  }
+
+  /* ── Macro Dials (5 dials, Activity-style) ── */
+  .macro-dials {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+  }
+  .dial-card {
+    background: var(--bg-deeper);
+    border: 1px solid var(--border-default);
+    border-radius: 14px;
+    padding: 14px 10px 12px;
+    text-align: center;
+    position: relative;
+    transition: transform 0.2s ease;
+  }
+  .dial-card:hover { transform: translateY(-2px); }
+  .dial-svg {
+    width: 90px;
+    height: 90px;
+    margin: 0 auto 6px;
+    display: block;
+  }
+  .dial-value {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1;
+  }
+  .dial-unit {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: 2px;
+  }
+  .dial-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    margin-top: 6px;
+  }
+  .dial-target {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-top: 2px;
+    font-family: var(--font-mono);
+  }
+
+  /* ── Supplements Foldable ── */
+  .supplement-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    padding: 4px 2px;
+  }
+  .supplement-header h3 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+  }
+  .stack-summary {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .stack-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.25);
+    color: var(--accent-green);
+  }
+  .stack-pill.partial {
+    background: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.25);
+    color: var(--accent-amber);
+  }
+  .stack-pill.pending {
+    background: rgba(124, 129, 142, 0.08);
+    border-color: rgba(124, 129, 142, 0.2);
+    color: var(--text-muted);
+  }
+  .stack-pill .check {
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .chevron {
+    color: var(--text-muted);
+    font-size: 12px;
+    transition: transform 0.3s ease;
+  }
+  .supplement-expanded {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-default);
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  .stack-group h4 {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .stack-group h4 .time {
+    font-size: 9px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .supp-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .supp-item:hover { background: rgba(255,255,255,0.04); border-color: var(--border-strong); }
+  .supp-item.checked {
+    background: rgba(74, 222, 128, 0.06);
+    border-color: rgba(74, 222, 128, 0.25);
+  }
+  .tick-box {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border-strong);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-deeper);
+  }
+  .supp-item.checked .tick-box {
+    background: var(--accent-green);
+    border-color: var(--accent-green);
+  }
+  .supp-item.checked .tick-box::after {
+    content: '✓';
+    font-size: 11px;
+    color: #0a0b0f;
+    font-weight: 700;
+  }
+  .supp-name { color: var(--text-primary); flex: 1; }
+  .supp-dose { color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; }
+
+  /* ── Micronutrients ── */
+  .micro-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+  }
+  .micro-item {
+    padding: 10px 12px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+  }
+  .micro-item .name {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .micro-item .pct {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  .micro-bar {
+    height: 4px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+  .micro-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+  }
+  .micro-fill.low { background: linear-gradient(90deg, var(--accent-red), var(--accent-orange)); }
+  .micro-fill.mid { background: linear-gradient(90deg, var(--accent-amber), var(--accent-orange)); }
+  .micro-fill.good { background: linear-gradient(90deg, var(--accent-green), var(--accent-teal)); }
+  .micro-source {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-top: 4px;
+    font-style: italic;
+  }
+
+  /* ── Health Systems 5x2 Grid ── */
+  .systems-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+  .system-tile {
+    background: var(--bg-deeper);
+    border: 1px solid var(--border-default);
+    border-radius: 14px;
+    padding: 14px 12px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.2s ease;
+    cursor: pointer;
+  }
+  .system-tile:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+  }
+  .system-tile::after {
+    content: '';
+    position: absolute;
+    left: 0; bottom: 0;
+    width: 100%;
+    height: var(--fill, 50%);
+    background: var(--fill-color, linear-gradient(180deg, transparent, rgba(96, 165, 250, 0.08)));
+    z-index: 0;
+    transition: height 0.4s ease;
+    border-radius: 0 0 14px 14px;
+  }
+  .system-tile > * { position: relative; z-index: 1; }
+  .system-icon {
+    width: 38px;
+    height: 38px;
+    margin: 0 auto 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-default);
+  }
+  .system-name {
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+    color: var(--text-primary);
+    line-height: 1.2;
+    margin-bottom: 4px;
+  }
+  .system-pct {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .system-comment {
+    font-size: 9.5px;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.3;
+    min-height: 26px;
+  }
+  .status-good { color: var(--accent-green); }
+  .status-focus { color: var(--accent-amber); }
+  .status-def { color: var(--accent-red); }
+
+  /* ── Macros vs Goal ── */
+  .macro-goals {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .macro-row {
+    display: grid;
+    grid-template-columns: 70px 1fr 90px;
+    gap: 12px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .macro-row .lbl { color: var(--text-secondary); font-weight: 500; }
+  .macro-row .vals {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+  }
+  .macro-bar {
+    height: 6px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+  .macro-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+  .bar-cal { background: linear-gradient(90deg, #60a5fa, #22d3ee); }
+  .bar-pro { background: linear-gradient(90deg, #4ade80, #2dd4bf); }
+  .bar-carbs { background: linear-gradient(90deg, #fbbf24, #fb923c); }
+  .bar-fat { background: linear-gradient(90deg, #f472b6, #a78bfa); }
+  .bar-fiber { background: linear-gradient(90deg, #a78bfa, #60a5fa); }
+
+  /* ── Water ── */
+  .water-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .water-visual {
+    width: 50px;
+    height: 60px;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .water-info { flex: 1; }
+  .water-amount {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    line-height: 1;
+  }
+  .water-amount .unit { font-size: 12px; color: var(--text-muted); margin-left: 2px; }
+  .water-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 3px;
+  }
+  .water-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .water-btn {
+    flex: 1;
+    padding: 6px 10px;
+    background: rgba(34, 211, 238, 0.08);
+    border: 1px solid rgba(34, 211, 238, 0.25);
+    border-radius: 8px;
+    color: var(--accent-cyan);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* ── Log Food Button ── */
+  .log-food-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, rgba(96, 165, 250, 0.15), rgba(167, 139, 250, 0.15));
+    border: 1px solid rgba(96, 165, 250, 0.3);
+    border-radius: 14px;
+    color: var(--accent-blue);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .log-food-btn:hover {
+    background: linear-gradient(135deg, rgba(96, 165, 250, 0.25), rgba(167, 139, 250, 0.25));
+    transform: translateY(-1px);
+  }
+
+  /* ── Mobile frame ── */
+  .mobile-frame {
+    width: 390px;
+    margin: 0 auto;
+    background: #06070a;
+    border: 10px solid #1a1c24;
+    border-radius: 44px;
+    padding: 32px 12px 24px;
+    position: sticky;
+    top: 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .mobile-frame::before {
+    content: '';
+    display: block;
+    width: 110px;
+    height: 24px;
+    background: #1a1c24;
+    border-radius: 0 0 16px 16px;
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .mobile-frame .panel { padding: 14px; margin-bottom: 12px; border-radius: 16px; }
+  .mobile-frame .macro-dials {
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+  }
+  .mobile-frame .dial-card { padding: 10px 4px 8px; }
+  .mobile-frame .dial-svg { width: 58px; height: 58px; }
+  .mobile-frame .dial-value { font-size: 13px; }
+  .mobile-frame .dial-label { font-size: 8.5px; }
+  .mobile-frame .dial-target { font-size: 8px; }
+  .mobile-frame .systems-grid {
+    grid-template-columns: repeat(5, 1fr);
+    gap: 5px;
+  }
+  .mobile-frame .system-tile { padding: 8px 4px; border-radius: 10px; }
+  .mobile-frame .system-icon { width: 26px; height: 26px; margin-bottom: 4px; }
+  .mobile-frame .system-icon svg { width: 16px; height: 16px; }
+  .mobile-frame .system-name { font-size: 8px; line-height: 1.1; margin-bottom: 2px; }
+  .mobile-frame .system-pct { font-size: 11px; margin-bottom: 2px; }
+  .mobile-frame .system-comment { font-size: 7.5px; min-height: 20px; line-height: 1.2; }
+  .mobile-frame .supplement-expanded { grid-template-columns: 1fr; gap: 10px; }
+  .mobile-frame .micro-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .mobile-frame .micro-item { padding: 8px; }
+  .mobile-frame .micro-item .name { font-size: 10px; }
+  .mobile-frame .macro-row { grid-template-columns: 50px 1fr 70px; font-size: 11px; }
+  .mobile-frame .stack-summary { gap: 4px; flex-wrap: wrap; }
+  .mobile-frame .stack-pill { padding: 3px 7px; font-size: 9px; }
+  .mobile-frame .mobile-status-bar {
+    position: absolute;
+    top: 8px; left: 24px; right: 24px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-family: var(--font-mono);
+    z-index: 10;
+  }
+  .mobile-scroll {
+    max-height: 820px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+  }
+  .mobile-scroll::-webkit-scrollbar { width: 4px; }
+  .mobile-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+  /* ── View toggles ── */
+  .view-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    background: rgba(96, 165, 250, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    border-radius: 100px;
+    color: var(--accent-blue);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 16px;
+  }
+
+  /* ── Legend ── */
+  .fill-legend {
+    display: flex;
+    gap: 16px;
+    padding: 10px 14px;
+    background: var(--bg-deeper);
+    border-radius: 10px;
+    margin-bottom: 14px;
+    font-size: 10px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .legend-dot.good { background: var(--accent-green); }
+  .legend-dot.focus { background: var(--accent-amber); }
+  .legend-dot.def { background: var(--accent-red); }
+</style>
+</head>
+<body>
+
+<div class="page-wrap">
+  <div class="page-header">
+    <h1>Arnold Nutrition — Redesign Mockup</h1>
+    <div class="sub">Five dials · Foldable supplement stack · Micronutrients · 10 Health Systems · Macros vs Goal · Water · Log Food</div>
+  </div>
+
+  <div class="layout-grid">
+
+    <!-- ═══════════════════ DESKTOP VIEW ═══════════════════ -->
+    <div class="desktop-col">
+      <span class="view-tag">Desktop View</span>
+
+      <!-- 1. Macro Dials (5 across, Activity-style) -->
+      <div class="panel">
+        <div class="panel-title"><span class="dot" style="background:var(--accent-green);"></span>Macros Today</div>
+        <div class="macro-dials">
+          <!-- CALORIES -->
+          <div class="dial-card">
+            <svg class="dial-svg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="gCal" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#22d3ee"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="7"/>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gCal)" stroke-width="7"
+                      stroke-dasharray="251.3" stroke-dashoffset="82.9" stroke-linecap="round"
+                      transform="rotate(-90 50 50)"/>
+            </svg>
+            <div><span class="dial-value">1,687</span></div>
+            <div class="dial-label">Calories</div>
+            <div class="dial-target">of 2,500 kcal</div>
+          </div>
+          <!-- PROTEIN -->
+          <div class="dial-card">
+            <svg class="dial-svg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="gPro" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#4ade80"/><stop offset="100%" stop-color="#2dd4bf"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="7"/>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gPro)" stroke-width="7"
+                      stroke-dasharray="251.3" stroke-dashoffset="55.3" stroke-linecap="round"
+                      transform="rotate(-90 50 50)"/>
+            </svg>
+            <div><span class="dial-value">142</span><span class="dial-unit">g</span></div>
+            <div class="dial-label">Protein</div>
+            <div class="dial-target">of 180g</div>
+          </div>
+          <!-- CARBS -->
+          <div class="dial-card">
+            <svg class="dial-svg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="gCarb" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#fb923c"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="7"/>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gCarb)" stroke-width="7"
+                      stroke-dasharray="251.3" stroke-dashoffset="110.6" stroke-linecap="round"
+                      transform="rotate(-90 50 50)"/>
+            </svg>
+            <div><span class="dial-value">188</span><span class="dial-unit">g</span></div>
+            <div class="dial-label">Carbs</div>
+            <div class="dial-target">of 320g</div>
+          </div>
+          <!-- FAT -->
+          <div class="dial-card">
+            <svg class="dial-svg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="gFat" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#f472b6"/><stop offset="100%" stop-color="#a78bfa"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="7"/>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gFat)" stroke-width="7"
+                      stroke-dasharray="251.3" stroke-dashoffset="130.7" stroke-linecap="round"
+                      transform="rotate(-90 50 50)"/>
+            </svg>
+            <div><span class="dial-value">52</span><span class="dial-unit">g</span></div>
+            <div class="dial-label">Fat</div>
+            <div class="dial-target">of 80g</div>
+          </div>
+          <!-- FIBER (NEW) -->
+          <div class="dial-card" style="box-shadow: 0 0 20px rgba(167, 139, 250, 0.1);">
+            <svg class="dial-svg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="gFib" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#60a5fa"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="7"/>
+              <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gFib)" stroke-width="7"
+                      stroke-dasharray="251.3" stroke-dashoffset="100.5" stroke-linecap="round"
+                      transform="rotate(-90 50 50)"/>
+            </svg>
+            <div><span class="dial-value">22</span><span class="dial-unit">g</span></div>
+            <div class="dial-label">Fiber</div>
+            <div class="dial-target">of 38g · new</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Supplements (foldable - collapsed by default) -->
+      <div class="panel">
+        <div class="supplement-header" onclick="this.parentElement.classList.toggle('expanded')">
+          <h3>💊 Supplement Stack</h3>
+          <div class="stack-summary">
+            <span class="stack-pill"><span class="check">✓</span>Morning</span>
+            <span class="stack-pill"><span class="check">✓</span>Lunch</span>
+            <span class="stack-pill partial"><span class="check">◐</span>Evening (2/4)</span>
+            <span class="chevron">▸</span>
+          </div>
+        </div>
+        <div class="supplement-expanded" style="display:none;">
+          <div class="stack-group">
+            <h4>☀️ Morning <span class="time">7:00 AM</span></h4>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Vitamin D3</div><div class="supp-dose">5000 IU</div></div>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Omega-3</div><div class="supp-dose">2g</div></div>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Magnesium</div><div class="supp-dose">400mg</div></div>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">B-Complex</div><div class="supp-dose">1 tab</div></div>
+          </div>
+          <div class="stack-group">
+            <h4>🥗 Lunch <span class="time">1:00 PM</span></h4>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Creatine</div><div class="supp-dose">5g</div></div>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Vitamin C</div><div class="supp-dose">1000mg</div></div>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Probiotic</div><div class="supp-dose">50B CFU</div></div>
+          </div>
+          <div class="stack-group">
+            <h4>🌙 Evening <span class="time">9:00 PM</span></h4>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Zinc</div><div class="supp-dose">25mg</div></div>
+            <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Ashwagandha</div><div class="supp-dose">600mg</div></div>
+            <div class="supp-item"><div class="tick-box"></div><div class="supp-name">L-Theanine</div><div class="supp-dose">200mg</div></div>
+            <div class="supp-item"><div class="tick-box"></div><div class="supp-name">Glycine</div><div class="supp-dose">3g</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 10 Health Systems (5x2 grid) -->
+      <div class="panel">
+        <div class="panel-title"><span class="dot" style="background:var(--accent-purple);"></span>Health Systems — fueled by today's food + supplements</div>
+        <div class="fill-legend">
+          <span class="legend-item"><span class="legend-dot good"></span>On track (≥80%)</span>
+          <span class="legend-item"><span class="legend-dot focus"></span>Focus area (50–79%)</span>
+          <span class="legend-item"><span class="legend-dot def"></span>Deficient (&lt;50%)</span>
+        </div>
+        <div class="systems-grid">
+          <!-- Row 1 -->
+          <div class="system-tile" style="--fill: 82%; --fill-color: linear-gradient(180deg, transparent, rgba(96,165,250,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a4 4 0 0 0-4 4c0 1.5.8 2.7 2 3.4V11a5 5 0 0 0-5 5c0 2.3 1.5 4.2 3.5 4.8A4 4 0 0 0 12 22a4 4 0 0 0 3.5-1.2c2-.6 3.5-2.5 3.5-4.8a5 5 0 0 0-5-5V9.4c1.2-.7 2-1.9 2-3.4a4 4 0 0 0-4-4Z"/>
+              </svg>
+            </div>
+            <div class="system-name">Brain &<br>Cognition</div>
+            <div class="system-pct status-good">82%</div>
+            <div class="system-comment">Great — omega-3 & B-complex on point</div>
+          </div>
+          <div class="system-tile" style="--fill: 88%; --fill-color: linear-gradient(180deg, transparent, rgba(248,113,113,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"/>
+              </svg>
+            </div>
+            <div class="system-name">Heart &<br>Blood</div>
+            <div class="system-pct status-good">88%</div>
+            <div class="system-comment">Omega-3 + leafy greens — solid</div>
+          </div>
+          <div class="system-tile" style="--fill: 74%; --fill-color: linear-gradient(180deg, transparent, rgba(251,191,36,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6.5 6.5h11v11h-11z"/><path d="M6.5 12h11M12 6.5v11"/>
+              </svg>
+            </div>
+            <div class="system-name">Bones &<br>Muscles</div>
+            <div class="system-pct status-focus">74%</div>
+            <div class="system-comment">Need more Ca — add dairy or greens</div>
+          </div>
+          <div class="system-tile" style="--fill: 65%; --fill-color: linear-gradient(180deg, transparent, rgba(251,191,36,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fb923c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
+              </svg>
+            </div>
+            <div class="system-name">Gut &<br>Digestion</div>
+            <div class="system-pct status-focus">65%</div>
+            <div class="system-comment">Fiber low — add beans or oats</div>
+          </div>
+          <div class="system-tile" style="--fill: 91%; --fill-color: linear-gradient(180deg, transparent, rgba(74,222,128,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2 L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/>
+              </svg>
+            </div>
+            <div class="system-name">Immune<br>System</div>
+            <div class="system-pct status-good">91%</div>
+            <div class="system-comment">Vit C, D, Zn all covered — excellent</div>
+          </div>
+          <!-- Row 2 -->
+          <div class="system-tile" style="--fill: 78%; --fill-color: linear-gradient(180deg, transparent, rgba(251,146,60,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fb923c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/>
+              </svg>
+            </div>
+            <div class="system-name">Energy &<br>Strength</div>
+            <div class="system-pct status-good">78%</div>
+            <div class="system-comment">Creatine + carbs — keep it up</div>
+          </div>
+          <div class="system-tile" style="--fill: 71%; --fill-color: linear-gradient(180deg, transparent, rgba(167,139,250,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>
+              </svg>
+            </div>
+            <div class="system-name">Longevity</div>
+            <div class="system-pct status-focus">71%</div>
+            <div class="system-comment">Polyphenols low — try berries/tea</div>
+          </div>
+          <div class="system-tile" style="--fill: 42%; --fill-color: linear-gradient(180deg, transparent, rgba(248,113,113,0.22));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3a7 7 0 0 0-7 7c0 4 3 7 7 7s7-3 7-7a7 7 0 0 0-7-7ZM12 17v4"/>
+              </svg>
+            </div>
+            <div class="system-name">Sleep &<br>Rest</div>
+            <div class="system-pct status-def">42%</div>
+            <div class="system-comment">Take evening Mg, Gly, L-theanine</div>
+          </div>
+          <div class="system-tile" style="--fill: 79%; --fill-color: linear-gradient(180deg, transparent, rgba(34,211,238,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 12h4l2-8 4 16 2-8h4"/>
+              </svg>
+            </div>
+            <div class="system-name">Metabolism</div>
+            <div class="system-pct status-good">79%</div>
+            <div class="system-comment">Macros balanced — good output</div>
+          </div>
+          <div class="system-tile" style="--fill: 68%; --fill-color: linear-gradient(180deg, transparent, rgba(45,212,191,0.18));">
+            <div class="system-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12c4-6 8-6 12 0s8 6 12 0"/>
+              </svg>
+            </div>
+            <div class="system-name">Endurance</div>
+            <div class="system-pct status-focus">68%</div>
+            <div class="system-comment">Iron & B12 on target · need carbs</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Micronutrients -->
+      <div class="panel">
+        <div class="panel-title"><span class="dot" style="background:var(--accent-cyan);"></span>Micronutrients — food + supplements combined</div>
+        <div class="micro-grid">
+          <div class="micro-item">
+            <div class="name"><span>Vitamin D</span><span class="pct">125%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+            <div class="micro-source">food + D3 5000 IU</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Vitamin C</span><span class="pct">180%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+            <div class="micro-source">food + 1000mg supp</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Vitamin B12</span><span class="pct">92%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:92%;"></div></div>
+            <div class="micro-source">meat + B-complex</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Iron</span><span class="pct">78%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:78%;"></div></div>
+            <div class="micro-source">food only</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Calcium</span><span class="pct">54%</span></div>
+            <div class="micro-bar"><div class="micro-fill mid" style="width:54%;"></div></div>
+            <div class="micro-source">food only</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Magnesium</span><span class="pct">130%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+            <div class="micro-source">food + 400mg supp</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Zinc</span><span class="pct">115%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+            <div class="micro-source">food + 25mg supp</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Omega-3</span><span class="pct">140%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+            <div class="micro-source">fish + 2g supp</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Potassium</span><span class="pct">62%</span></div>
+            <div class="micro-bar"><div class="micro-fill mid" style="width:62%;"></div></div>
+            <div class="micro-source">food only</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Folate</span><span class="pct">71%</span></div>
+            <div class="micro-bar"><div class="micro-fill mid" style="width:71%;"></div></div>
+            <div class="micro-source">greens + B-complex</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Selenium</span><span class="pct">88%</span></div>
+            <div class="micro-bar"><div class="micro-fill good" style="width:88%;"></div></div>
+            <div class="micro-source">food only</div>
+          </div>
+          <div class="micro-item">
+            <div class="name"><span>Vitamin K</span><span class="pct">45%</span></div>
+            <div class="micro-bar"><div class="micro-fill low" style="width:45%;"></div></div>
+            <div class="micro-source">food only</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Macros vs Goal -->
+      <div class="panel">
+        <div class="panel-title"><span class="dot" style="background:var(--accent-amber);"></span>Macros vs Goal</div>
+        <div class="macro-goals">
+          <div class="macro-row">
+            <span class="lbl">Calories</span>
+            <div class="macro-bar"><div class="macro-bar-fill bar-cal" style="width:67%;"></div></div>
+            <span class="vals">1,687 / 2,500</span>
+          </div>
+          <div class="macro-row">
+            <span class="lbl">Protein</span>
+            <div class="macro-bar"><div class="macro-bar-fill bar-pro" style="width:79%;"></div></div>
+            <span class="vals">142 / 180g</span>
+          </div>
+          <div class="macro-row">
+            <span class="lbl">Carbs</span>
+            <div class="macro-bar"><div class="macro-bar-fill bar-carbs" style="width:59%;"></div></div>
+            <span class="vals">188 / 320g</span>
+          </div>
+          <div class="macro-row">
+            <span class="lbl">Fat</span>
+            <div class="macro-bar"><div class="macro-bar-fill bar-fat" style="width:65%;"></div></div>
+            <span class="vals">52 / 80g</span>
+          </div>
+          <div class="macro-row">
+            <span class="lbl">Fiber</span>
+            <div class="macro-bar"><div class="macro-bar-fill bar-fiber" style="width:58%;"></div></div>
+            <span class="vals">22 / 38g</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. Water -->
+      <div class="panel">
+        <div class="panel-title"><span class="dot" style="background:var(--accent-cyan);"></span>Hydration</div>
+        <div class="water-card">
+          <svg class="water-visual" viewBox="0 0 50 60">
+            <defs>
+              <linearGradient id="waterG" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#0891b2"/>
+              </linearGradient>
+              <clipPath id="bottleClip">
+                <path d="M18 8 Q18 4 22 4 L28 4 Q32 4 32 8 L32 14 Q38 18 38 26 L38 54 Q38 58 34 58 L16 58 Q12 58 12 54 L12 26 Q12 18 18 14 Z"/>
+              </clipPath>
+            </defs>
+            <!-- bottle outline -->
+            <path d="M18 8 Q18 4 22 4 L28 4 Q32 4 32 8 L32 14 Q38 18 38 26 L38 54 Q38 58 34 58 L16 58 Q12 58 12 54 L12 26 Q12 18 18 14 Z"
+                  fill="rgba(34, 211, 238, 0.05)" stroke="rgba(34, 211, 238, 0.35)" stroke-width="1.5"/>
+            <!-- water fill (75%) -->
+            <rect x="0" y="19" width="50" height="40" fill="url(#waterG)" clip-path="url(#bottleClip)" opacity="0.85"/>
+            <!-- cap -->
+            <rect x="20" y="2" width="10" height="3" fill="rgba(34,211,238,0.4)" rx="1"/>
+          </svg>
+          <div class="water-info">
+            <div><span class="water-amount">2,250</span><span class="unit">ml</span></div>
+            <div class="water-sub">75% of 3,000 ml goal · replenish after today's run</div>
+            <div class="water-actions">
+              <button class="water-btn">+ Glass (250ml)</button>
+              <button class="water-btn">+ Bottle (1L)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7. Log Food Button -->
+      <button class="log-food-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        Log Food
+      </button>
+    </div>
+
+    <!-- ═══════════════════ MOBILE VIEW ═══════════════════ -->
+    <div class="mobile-col">
+      <span class="view-tag" style="background:rgba(167,139,250,0.1);border-color:rgba(167,139,250,0.25);color:var(--accent-purple);">Mobile View</span>
+
+      <div class="mobile-frame">
+        <div class="mobile-status-bar">
+          <span>9:41</span>
+          <span>▌▌▌ 100%</span>
+        </div>
+
+        <div class="mobile-scroll">
+          <!-- Mobile macros -->
+          <div class="panel">
+            <div class="panel-title"><span class="dot" style="background:var(--accent-green);"></span>Macros</div>
+            <div class="macro-dials">
+              <div class="dial-card">
+                <svg class="dial-svg" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gCal)" stroke-width="8"
+                          stroke-dasharray="251.3" stroke-dashoffset="82.9" stroke-linecap="round"
+                          transform="rotate(-90 50 50)"/>
+                </svg>
+                <div><span class="dial-value">1,687</span></div>
+                <div class="dial-label">Cal</div>
+                <div class="dial-target">/2500</div>
+              </div>
+              <div class="dial-card">
+                <svg class="dial-svg" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gPro)" stroke-width="8"
+                          stroke-dasharray="251.3" stroke-dashoffset="55.3" stroke-linecap="round"
+                          transform="rotate(-90 50 50)"/>
+                </svg>
+                <div><span class="dial-value">142</span></div>
+                <div class="dial-label">Pro</div>
+                <div class="dial-target">/180g</div>
+              </div>
+              <div class="dial-card">
+                <svg class="dial-svg" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gCarb)" stroke-width="8"
+                          stroke-dasharray="251.3" stroke-dashoffset="110.6" stroke-linecap="round"
+                          transform="rotate(-90 50 50)"/>
+                </svg>
+                <div><span class="dial-value">188</span></div>
+                <div class="dial-label">Carb</div>
+                <div class="dial-target">/320g</div>
+              </div>
+              <div class="dial-card">
+                <svg class="dial-svg" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gFat)" stroke-width="8"
+                          stroke-dasharray="251.3" stroke-dashoffset="130.7" stroke-linecap="round"
+                          transform="rotate(-90 50 50)"/>
+                </svg>
+                <div><span class="dial-value">52</span></div>
+                <div class="dial-label">Fat</div>
+                <div class="dial-target">/80g</div>
+              </div>
+              <div class="dial-card">
+                <svg class="dial-svg" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+                  <circle cx="50" cy="50" r="40" fill="none" stroke="url(#gFib)" stroke-width="8"
+                          stroke-dasharray="251.3" stroke-dashoffset="100.5" stroke-linecap="round"
+                          transform="rotate(-90 50 50)"/>
+                </svg>
+                <div><span class="dial-value">22</span></div>
+                <div class="dial-label">Fib</div>
+                <div class="dial-target">/38g</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile Supplements -->
+          <div class="panel">
+            <div class="supplement-header" onclick="this.parentElement.classList.toggle('expanded')">
+              <h3>💊 Stack</h3>
+              <div class="stack-summary">
+                <span class="stack-pill"><span class="check">✓</span>AM</span>
+                <span class="stack-pill"><span class="check">✓</span>Lunch</span>
+                <span class="stack-pill partial"><span class="check">◐</span>PM 2/4</span>
+                <span class="chevron">▸</span>
+              </div>
+            </div>
+            <div class="supplement-expanded" style="display:none;">
+              <div class="stack-group">
+                <h4>☀️ Morning <span class="time">7AM</span></h4>
+                <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Vit D3</div><div class="supp-dose">5000IU</div></div>
+                <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Omega-3</div><div class="supp-dose">2g</div></div>
+                <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Mg</div><div class="supp-dose">400mg</div></div>
+              </div>
+              <div class="stack-group">
+                <h4>🌙 Evening <span class="time">9PM</span></h4>
+                <div class="supp-item checked"><div class="tick-box"></div><div class="supp-name">Zn</div><div class="supp-dose">25mg</div></div>
+                <div class="supp-item"><div class="tick-box"></div><div class="supp-name">L-Theanine</div><div class="supp-dose">200mg</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile Health Systems -->
+          <div class="panel">
+            <div class="panel-title"><span class="dot" style="background:var(--accent-purple);"></span>Health Systems</div>
+            <div class="systems-grid">
+              <div class="system-tile" style="--fill: 82%; --fill-color: linear-gradient(180deg, transparent, rgba(96,165,250,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2a4 4 0 0 0-4 4c0 1.5.8 2.7 2 3.4V11a5 5 0 0 0-5 5c0 2.3 1.5 4.2 3.5 4.8A4 4 0 0 0 12 22a4 4 0 0 0 3.5-1.2c2-.6 3.5-2.5 3.5-4.8a5 5 0 0 0-5-5V9.4c1.2-.7 2-1.9 2-3.4a4 4 0 0 0-4-4Z"/>
+                  </svg>
+                </div>
+                <div class="system-name">Brain</div>
+                <div class="system-pct status-good">82%</div>
+                <div class="system-comment">Omega-3 ✓</div>
+              </div>
+              <div class="system-tile" style="--fill: 88%; --fill-color: linear-gradient(180deg, transparent, rgba(248,113,113,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"/>
+                  </svg>
+                </div>
+                <div class="system-name">Heart</div>
+                <div class="system-pct status-good">88%</div>
+                <div class="system-comment">Solid</div>
+              </div>
+              <div class="system-tile" style="--fill: 74%; --fill-color: linear-gradient(180deg, transparent, rgba(251,191,36,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6.5 6.5h11v11h-11z"/><path d="M6.5 12h11M12 6.5v11"/>
+                  </svg>
+                </div>
+                <div class="system-name">Bones</div>
+                <div class="system-pct status-focus">74%</div>
+                <div class="system-comment">+ Calcium</div>
+              </div>
+              <div class="system-tile" style="--fill: 65%; --fill-color: linear-gradient(180deg, transparent, rgba(251,146,60,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#fb923c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                  </svg>
+                </div>
+                <div class="system-name">Gut</div>
+                <div class="system-pct status-focus">65%</div>
+                <div class="system-comment">+ Fiber</div>
+              </div>
+              <div class="system-tile" style="--fill: 91%; --fill-color: linear-gradient(180deg, transparent, rgba(74,222,128,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2 L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/>
+                  </svg>
+                </div>
+                <div class="system-name">Immune</div>
+                <div class="system-pct status-good">91%</div>
+                <div class="system-comment">Excellent</div>
+              </div>
+              <div class="system-tile" style="--fill: 78%; --fill-color: linear-gradient(180deg, transparent, rgba(251,146,60,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#fb923c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/>
+                  </svg>
+                </div>
+                <div class="system-name">Energy</div>
+                <div class="system-pct status-good">78%</div>
+                <div class="system-comment">Creatine ✓</div>
+              </div>
+              <div class="system-tile" style="--fill: 71%; --fill-color: linear-gradient(180deg, transparent, rgba(167,139,250,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>
+                  </svg>
+                </div>
+                <div class="system-name">Longev.</div>
+                <div class="system-pct status-focus">71%</div>
+                <div class="system-comment">Add berries</div>
+              </div>
+              <div class="system-tile" style="--fill: 42%; --fill-color: linear-gradient(180deg, transparent, rgba(248,113,113,0.25));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3a7 7 0 0 0-7 7c0 4 3 7 7 7s7-3 7-7a7 7 0 0 0-7-7Z"/>
+                  </svg>
+                </div>
+                <div class="system-name">Sleep</div>
+                <div class="system-pct status-def">42%</div>
+                <div class="system-comment">Take Mg PM</div>
+              </div>
+              <div class="system-tile" style="--fill: 79%; --fill-color: linear-gradient(180deg, transparent, rgba(34,211,238,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 12h4l2-8 4 16 2-8h4"/>
+                  </svg>
+                </div>
+                <div class="system-name">Metab.</div>
+                <div class="system-pct status-good">79%</div>
+                <div class="system-comment">Balanced</div>
+              </div>
+              <div class="system-tile" style="--fill: 68%; --fill-color: linear-gradient(180deg, transparent, rgba(45,212,191,0.22));">
+                <div class="system-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12c4-6 8-6 12 0s8 6 12 0"/>
+                  </svg>
+                </div>
+                <div class="system-name">Endur.</div>
+                <div class="system-pct status-focus">68%</div>
+                <div class="system-comment">+ Carbs</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile Micronutrients -->
+          <div class="panel">
+            <div class="panel-title"><span class="dot" style="background:var(--accent-cyan);"></span>Micronutrients</div>
+            <div class="micro-grid">
+              <div class="micro-item">
+                <div class="name"><span>Vit D</span><span class="pct">125%</span></div>
+                <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+                <div class="micro-source">food + D3</div>
+              </div>
+              <div class="micro-item">
+                <div class="name"><span>Iron</span><span class="pct">78%</span></div>
+                <div class="micro-bar"><div class="micro-fill good" style="width:78%;"></div></div>
+                <div class="micro-source">food only</div>
+              </div>
+              <div class="micro-item">
+                <div class="name"><span>Ca</span><span class="pct">54%</span></div>
+                <div class="micro-bar"><div class="micro-fill mid" style="width:54%;"></div></div>
+                <div class="micro-source">food only</div>
+              </div>
+              <div class="micro-item">
+                <div class="name"><span>Mg</span><span class="pct">130%</span></div>
+                <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+                <div class="micro-source">food + supp</div>
+              </div>
+              <div class="micro-item">
+                <div class="name"><span>Zn</span><span class="pct">115%</span></div>
+                <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+                <div class="micro-source">food + supp</div>
+              </div>
+              <div class="micro-item">
+                <div class="name"><span>Ω-3</span><span class="pct">140%</span></div>
+                <div class="micro-bar"><div class="micro-fill good" style="width:100%;"></div></div>
+                <div class="micro-source">fish + supp</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile Macros vs Goal -->
+          <div class="panel">
+            <div class="panel-title"><span class="dot" style="background:var(--accent-amber);"></span>Macros vs Goal</div>
+            <div class="macro-goals">
+              <div class="macro-row">
+                <span class="lbl">Cal</span>
+                <div class="macro-bar"><div class="macro-bar-fill bar-cal" style="width:67%;"></div></div>
+                <span class="vals">1687/2500</span>
+              </div>
+              <div class="macro-row">
+                <span class="lbl">Pro</span>
+                <div class="macro-bar"><div class="macro-bar-fill bar-pro" style="width:79%;"></div></div>
+                <span class="vals">142/180g</span>
+              </div>
+              <div class="macro-row">
+                <span class="lbl">Carbs</span>
+                <div class="macro-bar"><div class="macro-bar-fill bar-carbs" style="width:59%;"></div></div>
+                <span class="vals">188/320g</span>
+              </div>
+              <div class="macro-row">
+                <span class="lbl">Fat</span>
+                <div class="macro-bar"><div class="macro-bar-fill bar-fat" style="width:65%;"></div></div>
+                <span class="vals">52/80g</span>
+              </div>
+              <div class="macro-row">
+                <span class="lbl">Fiber</span>
+                <div class="macro-bar"><div class="macro-bar-fill bar-fiber" style="width:58%;"></div></div>
+                <span class="vals">22/38g</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile Water -->
+          <div class="panel">
+            <div class="panel-title"><span class="dot" style="background:var(--accent-cyan);"></span>Hydration</div>
+            <div class="water-card">
+              <svg class="water-visual" viewBox="0 0 50 60">
+                <path d="M18 8 Q18 4 22 4 L28 4 Q32 4 32 8 L32 14 Q38 18 38 26 L38 54 Q38 58 34 58 L16 58 Q12 58 12 54 L12 26 Q12 18 18 14 Z"
+                      fill="rgba(34, 211, 238, 0.05)" stroke="rgba(34, 211, 238, 0.35)" stroke-width="1.5"/>
+                <rect x="0" y="19" width="50" height="40" fill="url(#waterG)" clip-path="url(#bottleClip)" opacity="0.85"/>
+                <rect x="20" y="2" width="10" height="3" fill="rgba(34,211,238,0.4)" rx="1"/>
+              </svg>
+              <div class="water-info">
+                <div><span class="water-amount">2,250</span><span class="unit">ml</span></div>
+                <div class="water-sub">75% of 3L</div>
+                <div class="water-actions">
+                  <button class="water-btn">+250ml</button>
+                  <button class="water-btn">+1L</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mobile Log Food -->
+          <button class="log-food-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Log Food
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // Fill the tiles with animated heights on load
+  document.querySelectorAll('.system-tile').forEach((el, i) => {
+    const fill = el.style.getPropertyValue('--fill');
+    el.style.setProperty('--fill', '0%');
+    setTimeout(() => el.style.setProperty('--fill', fill), 200 + i * 80);
+  });
+</script>
+
+</body>
+</html>

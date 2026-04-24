@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Data Recovery</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0a; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 40px; }
+  h1 { color: #00e676; margin-bottom: 8px; }
+  .sub { color: #888; margin-bottom: 30px; }
+  .port-info { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  .port-info strong { color: #00e676; font-size: 18px; }
+  .key-list { margin-top: 15px; }
+  .key-item { background: #111; border: 1px solid #222; border-radius: 4px; padding: 10px 14px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .key-name { color: #90caf9; font-family: monospace; }
+  .key-size { color: #666; font-size: 13px; }
+  .empty { color: #f44336; font-style: italic; padding: 15px 0; }
+  .found { color: #00e676; font-weight: bold; font-size: 16px; margin-top: 10px; }
+  button { background: #00e676; color: #000; border: none; padding: 12px 28px; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 15px; margin-right: 10px; }
+  button:hover { background: #00c853; }
+  button.restore { background: #2196f3; color: #fff; }
+  button.restore:hover { background: #1976d2; }
+  .instructions { background: #1a1a0a; border: 1px solid #444400; border-radius: 8px; padding: 20px; margin-top: 25px; }
+  .instructions h3 { color: #ffeb3b; margin-bottom: 10px; }
+  .instructions p { line-height: 1.7; color: #ccc; }
+  .instructions code { background: #222; padding: 2px 6px; border-radius: 3px; color: #00e676; }
+  #restoreSection { margin-top: 20px; display: none; }
+  #restoreSection.show { display: block; }
+  input[type="file"] { margin-top: 10px; }
+  .status { margin-top: 10px; padding: 10px; border-radius: 4px; }
+  .status.ok { background: #1b3a1b; color: #00e676; }
+  .status.err { background: #3a1b1b; color: #f44336; }
+</style>
+</head>
+<body>
+
+<h1>Arnold Data Recovery</h1>
+<p class="sub">Scanning localStorage on this origin: <strong id="origin"></strong></p>
+
+<div class="port-info">
+  <div>Current port: <strong id="port"></strong></div>
+  <div id="summary" style="margin-top:10px;"></div>
+  <div class="key-list" id="keyList"></div>
+  <div id="actions"></div>
+</div>
+
+<div class="instructions">
+  <h3>How to recover your data</h3>
+  <p>
+    Your Arnold data is stored in the browser's localStorage, which is tied to the exact port number.
+    If Arnold was running on port 5173 and then switched to 5174, the data stays on 5173.<br><br>
+    <strong>Step 1:</strong> Open this page on each port to find your data:<br>
+    &nbsp;&nbsp;• <a href="http://localhost:5173/recover.html" style="color:#90caf9">localhost:5173/recover.html</a><br>
+    &nbsp;&nbsp;• <a href="http://localhost:5174/recover.html" style="color:#90caf9">localhost:5174/recover.html</a><br>
+    &nbsp;&nbsp;• <a href="http://localhost:5175/recover.html" style="color:#90caf9">localhost:5175/recover.html</a><br><br>
+    <strong>Step 2:</strong> When you find the port with data, click <strong>"Download Backup"</strong>.<br><br>
+    <strong>Step 3:</strong> Go to the port where Arnold is running, open this recovery page there, and click <strong>"Restore from Backup"</strong>.
+  </p>
+</div>
+
+<div id="restoreSection">
+  <h3 style="color:#2196f3; margin-bottom:10px;">Restore from Backup</h3>
+  <p style="color:#999; margin-bottom:10px;">Select the arnold-backup JSON file you downloaded from another port:</p>
+  <input type="file" id="fileInput" accept=".json" />
+  <div id="restoreStatus"></div>
+</div>
+
+<script>
+(function() {
+  const origin = window.location.origin;
+  const port = window.location.port || '80';
+  document.getElementById('origin').textContent = origin;
+  document.getElementById('port').textContent = port;
+
+  // Scan for arnold:* keys
+  const arnoldKeys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('arnold:')) {
+      const val = localStorage.getItem(key);
+      arnoldKeys.push({ key, size: val ? val.length : 0, value: val });
+    }
+  }
+
+  const summary = document.getElementById('summary');
+  const keyList = document.getElementById('keyList');
+  const actions = document.getElementById('actions');
+
+  if (arnoldKeys.length === 0) {
+    summary.innerHTML = '<div class="empty">No arnold:* data found on this port.</div>';
+    document.getElementById('restoreSection').classList.add('show');
+  } else {
+    const totalSize = arnoldKeys.reduce((s, k) => s + k.size, 0);
+    const sizeStr = totalSize > 1024*1024
+      ? (totalSize / (1024*1024)).toFixed(1) + ' MB'
+      : totalSize > 1024
+        ? (totalSize / 1024).toFixed(1) + ' KB'
+        : totalSize + ' bytes';
+
+    summary.innerHTML = `<div class="found">Found ${arnoldKeys.length} arnold keys (${sizeStr} total)</div>`;
+
+    // Sort by size descending
+    arnoldKeys.sort((a, b) => b.size - a.size);
+
+    arnoldKeys.forEach(k => {
+      const sizeLabel = k.size > 1024 ? (k.size/1024).toFixed(1) + ' KB' : k.size + ' bytes';
+      const div = document.createElement('div');
+      div.className = 'key-item';
+      div.innerHTML = `<span class="key-name">${k.key}</span><span class="key-size">${sizeLabel}</span>`;
+      keyList.appendChild(div);
+    });
+
+    // Download button
+    const dlBtn = document.createElement('button');
+    dlBtn.textContent = 'Download Backup';
+    dlBtn.onclick = function() {
+      const backup = {};
+      arnoldKeys.forEach(k => { backup[k.key] = k.value; });
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `arnold-backup-port${port}-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+    actions.appendChild(dlBtn);
+
+    // Also show restore option
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = 'Restore from Backup';
+    restoreBtn.className = 'restore';
+    restoreBtn.onclick = function() {
+      document.getElementById('restoreSection').classList.add('show');
+    };
+    actions.appendChild(restoreBtn);
+  }
+
+  // File restore handler
+  document.getElementById('fileInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        const data = JSON.parse(ev.target.result);
+        const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
+        if (keys.length === 0) {
+          document.getElementById('restoreStatus').innerHTML =
+            '<div class="status err">No arnold:* keys found in this file.</div>';
+          return;
+        }
+        keys.forEach(k => localStorage.setItem(k, data[k]));
+        document.getElementById('restoreStatus').innerHTML =
+          `<div class="status ok">Restored ${keys.length} keys to localStorage on port ${port}. Reload Arnold to see your data!</div>`;
+      } catch(err) {
+        document.getElementById('restoreStatus').innerHTML =
+          `<div class="status err">Error parsing file: ${err.message}</div>`;
+      }
+    };
+    reader.readAsText(file);
+  });
+})();
+</script>
+
+</body>
+</html>

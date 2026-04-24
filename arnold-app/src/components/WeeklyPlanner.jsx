@@ -1,6 +1,5 @@
 // ─── Weekly Planner ──────────────────────────────────────────────────────────
-// Mon-Sun grid for the upcoming week. Click a day to edit, apply a template,
-// or build it manually. Saves to arnold:planner keyed by week start.
+// Compact single-row week strip with foldable editor + templates.
 
 import { useState } from "react";
 import {
@@ -16,6 +15,7 @@ export function WeeklyPlanner({ showToast }) {
   const [activeWeek, setActiveWeek] = useState(thisWeek);
   const [week, setWeek] = useState(() => getPlannerWeek(thisWeek));
   const [editingDay, setEditingDay] = useState(null);
+  const [expanded, setExpanded] = useState(false);
 
   const reload = (key) => {
     setActiveWeek(key);
@@ -41,121 +41,136 @@ export function WeeklyPlanner({ showToast }) {
   const wsDate = new Date(activeWeek + 'T12:00:00');
   const wsLabel = wsDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const weDate = new Date(wsDate); weDate.setDate(wsDate.getDate() + 6);
-  const weLabel = weDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
-  // ── styles ──
-  const panel = {
-    background: 'var(--bg-surface)',
-    border: '0.5px solid var(--border-default)',
-    borderLeft: '3px solid #a78bfa',
-    borderRadius: 'var(--radius-md)',
-    padding: '14px 16px',
-    marginBottom: 12,
-  };
-  const headerRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 };
-  const weekToggle = (active) => ({
-    fontSize: 11, padding: '5px 12px', borderRadius: 6,
-    border: '0.5px solid ' + (active ? 'var(--accent-border)' : 'var(--border-default)'),
-    background: active ? 'var(--accent-dim)' : 'var(--bg-elevated)',
-    color: active ? 'var(--text-accent)' : 'var(--text-muted)',
-    cursor: 'pointer', marginRight: 6,
-  });
-  const grid = {
-    display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gap: 6, marginBottom: 12,
-  };
-  const dayCard = (entry) => {
-    const t = dayTypeMap[entry?.type] || dayTypeMap.rest;
-    return {
-      background: 'var(--bg-elevated)',
-      borderRadius: 6,
-      borderTop: `2px solid ${t.color}`,
-      padding: '8px 6px', textAlign: 'center', cursor: 'pointer',
-      minHeight: 88, display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-    };
-  };
-  const tplBtn = {
-    fontSize: 10, padding: '4px 10px', borderRadius: 12,
-    background: 'rgba(167,139,250,0.12)', color: '#a78bfa',
-    border: '0.5px solid rgba(167,139,250,0.30)', cursor: 'pointer',
-  };
+  const weLabel = weDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
   return (
-    <div style={panel}>
-      <div style={headerRow}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>◈ Weekly Planner</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{wsLabel} – {weLabel}</div>
+    <div style={{
+      background: 'var(--bg-surface)',
+      border: '0.5px solid var(--border-default)',
+      borderLeft: '2px solid #a78bfa',
+      borderRadius: 'var(--radius-md)',
+      overflow: 'hidden',
+      marginBottom: 10,
+    }}>
+      {/* ── Header row ── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-primary)', letterSpacing: '0.04em' }}>◈ Weekly Planner</span>
+          <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{wsLabel} – {weLabel}</span>
         </div>
-        <div>
-          <button style={weekToggle(activeWeek === thisWeek)} onClick={() => reload(thisWeek)}>This week</button>
-          <button style={weekToggle(activeWeek === next)} onClick={() => reload(next)}>Next week</button>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {[[thisWeek, 'This wk'], [next, 'Next wk']].map(([k, lbl]) => (
+            <button key={k} onClick={() => reload(k)} style={{
+              fontSize: 9, padding: '2px 8px', borderRadius: 10,
+              border: '0.5px solid ' + (activeWeek === k ? 'var(--accent-border)' : 'var(--border-default)'),
+              background: activeWeek === k ? 'var(--accent-dim)' : 'transparent',
+              color: activeWeek === k ? 'var(--text-accent)' : 'var(--text-muted)',
+              cursor: 'pointer', letterSpacing: '0.03em',
+            }}>{lbl}</button>
+          ))}
         </div>
       </div>
 
-      {/* Mon-Sun grid */}
-      <div style={grid}>
+      {/* ── Single-row week strip ── */}
+      <div style={{ display: 'flex', padding: '6px 4px 8px' }}>
         {DAY_LABELS.map((lbl, idx) => {
           const entry = week.days?.[idx] || { type: 'rest' };
           const t = dayTypeMap[entry.type] || dayTypeMap.rest;
+          const isEditing = editingDay === idx;
+          const detail = entry.distanceMi ? `${entry.distanceMi}mi` : entry.durationMin ? `${entry.durationMin}m` : '';
           return (
-            <div key={lbl} style={dayCard(entry)} onClick={() => setEditingDay(idx)}>
-              <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{lbl}</div>
-              <div style={{ fontSize: 18, color: t.color, margin: '4px 0' }}>{t.icon}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-primary)', fontWeight: 500 }}>{t.label}</div>
-              <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>
-                {entry.distanceMi ? `${entry.distanceMi} mi` : entry.durationMin ? `${entry.durationMin} min` : ''}
-              </div>
+            <div key={lbl}
+              onClick={() => { setEditingDay(isEditing ? null : idx); if (!expanded) setExpanded(true); }}
+              style={{
+                flex: '1 1 0', minWidth: 0,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                padding: '5px 1px', cursor: 'pointer', borderRadius: 6,
+                background: isEditing ? 'rgba(167,139,250,0.08)' : 'transparent',
+                transition: 'background 0.15s',
+              }}>
+              <span style={{ fontSize: 8, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>{lbl}</span>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+              <span style={{ fontSize: 7.5, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', whiteSpace: 'nowrap' }}>{t.label}</span>
+              {detail && <span style={{ fontSize: 7, color: 'var(--text-muted)', lineHeight: 1 }}>{detail}</span>}
             </div>
           );
         })}
       </div>
 
-      {/* Inline editor */}
-      {editingDay != null && (() => {
-        const entry = week.days[editingDay] || {};
-        return (
-          <div style={{ background: 'var(--bg-elevated)', borderRadius: 6, padding: 12, marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-              Editing <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{DAY_LABELS[editingDay]}</span>
-              <span style={{ float: 'right', cursor: 'pointer', color: 'var(--text-muted)' }} onClick={() => setEditingDay(null)}>✕</span>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
-              {DAY_TYPES.map(t => (
-                <button key={t.id}
-                  onClick={() => updateDay(editingDay, { type: t.id })}
-                  style={{
-                    fontSize: 10, padding: '4px 9px', borderRadius: 12,
-                    background: entry.type === t.id ? `${t.color}22` : 'var(--bg-input)',
-                    color: entry.type === t.id ? t.color : 'var(--text-muted)',
-                    border: `0.5px solid ${entry.type === t.id ? t.color : 'var(--border-default)'}`,
-                    cursor: 'pointer',
-                  }}>
-                  {t.icon} {t.label}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input type="number" placeholder="distance (mi)" value={entry.distanceMi ?? ''}
-                onChange={e => updateDay(editingDay, { distanceMi: e.target.value ? parseFloat(e.target.value) : null })}
-                style={{ flex: 1, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
-              <input type="number" placeholder="duration (min)" value={entry.durationMin ?? ''}
-                onChange={e => updateDay(editingDay, { durationMin: e.target.value ? parseInt(e.target.value) : null })}
-                style={{ flex: 1, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
-              <input type="text" placeholder="notes" value={entry.notes ?? ''}
-                onChange={e => updateDay(editingDay, { notes: e.target.value })}
-                style={{ flex: 2, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Templates */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)', marginRight: 4 }}>Quick template:</span>
-        {Object.entries(TEMPLATES).map(([id, tpl]) => (
-          <button key={id} style={tplBtn} onClick={() => applyTpl(id)}>{tpl.label}</button>
-        ))}
+      {/* ── Fold toggle ── */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 4,
+          padding: '3px 0', cursor: 'pointer', borderTop: '0.5px solid var(--border-subtle)',
+          background: 'rgba(255,255,255,0.015)',
+        }}>
+        <span style={{ fontSize: 8, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>{expanded ? 'COLLAPSE' : 'EDIT'}</span>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
       </div>
+
+      {/* ── Foldable: editor + templates ── */}
+      {expanded && (
+        <div style={{ padding: '8px 12px 10px', borderTop: '0.5px solid var(--border-subtle)' }}>
+          {/* Inline editor */}
+          {editingDay != null && (() => {
+            const entry = week.days[editingDay] || {};
+            return (
+              <div style={{ background: 'var(--bg-elevated)', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6 }}>
+                  Editing <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{DAY_LABELS[editingDay]}</span>
+                  <span style={{ float: 'right', cursor: 'pointer', color: 'var(--text-muted)' }} onClick={() => setEditingDay(null)}>✕</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+                  {DAY_TYPES.map(t => (
+                    <button key={t.id}
+                      onClick={() => updateDay(editingDay, { type: t.id })}
+                      style={{
+                        fontSize: 10, padding: '4px 9px', borderRadius: 12,
+                        background: entry.type === t.id ? `${t.color}22` : 'var(--bg-input)',
+                        color: entry.type === t.id ? t.color : 'var(--text-muted)',
+                        border: `0.5px solid ${entry.type === t.id ? t.color : 'var(--border-default)'}`,
+                        cursor: 'pointer',
+                      }}>
+                      {t.icon} {t.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input type="number" placeholder="dist (mi)" value={entry.distanceMi ?? ''}
+                    onChange={e => updateDay(editingDay, { distanceMi: e.target.value ? parseFloat(e.target.value) : null })}
+                    style={{ flex: 1, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
+                  <input type="number" placeholder="mins" value={entry.durationMin ?? ''}
+                    onChange={e => updateDay(editingDay, { durationMin: e.target.value ? parseInt(e.target.value) : null })}
+                    style={{ flex: 1, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
+                  <input type="text" placeholder="notes" value={entry.notes ?? ''}
+                    onChange={e => updateDay(editingDay, { notes: e.target.value })}
+                    style={{ flex: 2, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
+                </div>
+              </div>
+            );
+          })()}
+
+          {editingDay == null && (
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0 8px', fontStyle: 'italic' }}>
+              Tap a day above to edit
+            </div>
+          )}
+
+          {/* Templates */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', marginRight: 2 }}>Template:</span>
+            {Object.entries(TEMPLATES).map(([id, tpl]) => (
+              <button key={id} onClick={() => applyTpl(id)} style={{
+                fontSize: 9, padding: '3px 8px', borderRadius: 10,
+                background: 'rgba(167,139,250,0.10)', color: '#a78bfa',
+                border: '0.5px solid rgba(167,139,250,0.25)', cursor: 'pointer',
+                letterSpacing: '0.03em',
+              }}>{tpl.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

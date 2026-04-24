@@ -7,6 +7,7 @@
 // Uses built-in CompressionStream (no deps) with base64 encoding.
 
 import { useState, useEffect } from "react";
+import { Capacitor } from '@capacitor/core';
 
 // ── Compression helpers ─────────────────────────────────────────────────────
 async function compress(str) {
@@ -108,24 +109,51 @@ export function SyncPanel({ showToast }) {
       const base = window.location.origin + '/';
 
       if (compressed.length < 4000) {
+        // Small dataset: the full compressed payload fits in a URL, so we
+        // generate a scannable QR code.
         setSyncUrl(`${base}?sync=${compressed}`);
-      } else {
-        // For large datasets, create a downloadable sync file
-        // and also a chunked URL approach
-        const blob = new Blob([compressed], { type: 'text/plain' });
-        const file = new File([blob], 'arnold-sync.txt', { type: 'text/plain' });
-
-        // Store in sessionStorage for local transfer
-        sessionStorage.setItem('arnold:sync-payload', compressed);
-        setSyncUrl(`${base}?sync=clipboard`);
-
-        // Also offer direct copy
+        showToast?.('✓ Sync URL generated');
+      } else if (Capacitor?.isNativePlatform?.()) {
+        // Large dataset on mobile: write compressed payload to a file in the
+        // cache dir and hand it to the native share sheet. User can email,
+        // upload to Drive, Nearby Share, USB-transfer, etc.
+        const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
+        const { Share } = await import('@capacitor/share');
+        const stamp = new Date().toISOString().slice(0, 10);
+        const filename = `arnold-sync-${stamp}.txt`;
+        const written = await Filesystem.writeFile({
+          path: filename,
+          data: compressed,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+        });
         try {
-          await navigator.clipboard.writeText(compressed);
-          showToast?.('✓ Sync data copied to clipboard (large dataset)');
-        } catch {}
+          await Share.share({
+            title: 'Arnold sync payload',
+            text: `Arnold sync · ${stamp} · paste into web at ?sync=<contents>`,
+            url: written.uri,
+            dialogTitle: 'Send Arnold sync payload',
+          });
+          showToast?.('✓ Sync payload shared');
+        } catch (e) {
+          console.warn('[sync] share dismissed:', e?.message || e);
+          showToast?.('Share dismissed — file saved to app cache');
+        }
+        // Also try clipboard as a belt-and-suspenders fallback; ignore failure.
+        try { await navigator.clipboard.writeText(compressed); } catch {}
+        setSyncUrl(null); // no URL/QR to show for this path
+      } else {
+        // Large dataset on web: offer clipboard copy AND show the full URL
+        // so the user can paste into the phone's browser address bar.
+        const fullUrl = `${base}?sync=${compressed}`;
+        setSyncUrl(fullUrl);
+        try {
+          await navigator.clipboard.writeText(fullUrl);
+          showToast?.('✓ Sync URL copied to clipboard (large dataset)');
+        } catch {
+          showToast?.('✓ Sync URL generated — long, use Copy link');
+        }
       }
-      showToast?.('✓ Sync URL generated');
     } catch (e) {
       console.error('Export failed:', e);
       showToast?.('✗ Export failed');

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Generate Sync File</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:40px 20px;text-align:center;}
+  h1{color:#00e676;font-size:22px;margin-bottom:20px;}
+  .status{margin:20px auto;padding:16px;border-radius:10px;font-size:14px;max-width:500px;line-height:1.6;}
+  .ok{background:#1b3a1b;color:#00e676;}
+  .info{background:#1a1a2e;color:#90caf9;}
+  button{background:#00e676;color:#000;border:none;padding:14px 40px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:12px;}
+  code{color:#00e676;background:#111;padding:2px 6px;border-radius:3px;}
+</style>
+</head>
+<body>
+<h1>Generate Sync File</h1>
+<div id="status"></div>
+<script>
+(function(){
+  const backup = {};
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(key && key.startsWith('arnold:')) backup[key] = localStorage.getItem(key);
+  }
+  const keys = Object.keys(backup).length;
+  const json = JSON.stringify(backup, null, 2);
+  const size = (json.length/1024).toFixed(1);
+
+  if(!keys){
+    document.getElementById('status').innerHTML = '<div class="status" style="background:#3a1b1b;color:#f44336;">No Arnold data found. Open this on your PC where Arnold has data.</div>';
+    return;
+  }
+
+  // Auto-download the file with exact name arnold-sync-data.json
+  const blob = new Blob([json], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'arnold-sync-data.json';
+  a.click();
+
+  document.getElementById('status').innerHTML =
+    '<div class="status ok">✅ Downloaded <code>arnold-sync-data.json</code> (' + keys + ' keys, ' + size + ' KB)</div>' +
+    '<div class="status info" style="margin-top:12px;">' +
+    '<strong>Now move this file:</strong><br><br>' +
+    'Move <code>arnold-sync-data.json</code> from your Downloads folder to:<br><br>' +
+    '<code>C:\\Users\\Superuser\\Arnold\\arnold-app\\public\\</code><br><br>' +
+    'Then on your phone, open:<br>' +
+    '<code>localhost:5174/pull-local.html</code><br><br>' +
+    'It will auto-import everything.</div>';
+})();
+</script>
+</body>
+</html>

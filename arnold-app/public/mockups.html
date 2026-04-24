@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Mobile Mockups</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0a; color: #fff; font-family: 'Inter', -apple-system, system-ui, sans-serif; }
+  .mockup-wrapper { display: flex; gap: 24px; padding: 20px; overflow-x: auto; align-items: flex-start; }
+  .mockup-frame {
+    width: 390px; min-width: 390px;
+    border: 2px solid #333; border-radius: 24px;
+    overflow: hidden; background: #0a0b10;
+    position: relative;
+  }
+  .mockup-label {
+    text-align: center; padding: 12px; font-size: 14px; font-weight: 700;
+    color: #60a5fa; letter-spacing: 0.05em; background: #111;
+  }
+  .phone-content { padding: 0 16px 30px; }
+
+  /* Shared styles */
+  .glass { background: rgba(20,22,30,0.65); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; }
+  .glass-inner { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; }
+  .hdr { padding: 16px 4px 10px; display: flex; align-items: center; gap: 10; }
+  .logo { width: 36px; height: 36px; border-radius: 10px; background: rgba(96,165,250,0.15); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #60a5fa; }
+  .beta { margin-left: auto; padding: 3px 10px; border-radius: 20px; background: rgba(96,165,250,0.15); border: 1px solid rgba(96,165,250,0.25); font-size: 8px; font-weight: 700; color: #60a5fa; letter-spacing: 0.1em; }
+  .greeting { font-size: 12px; color: rgba(255,255,255,0.45); padding: 0 4px 8px; display: flex; justify-content: space-between; }
+  .muted { color: rgba(255,255,255,0.35); }
+  .accent { color: #60a5fa; }
+  .green { color: #4ade80; }
+  .yellow { color: #fbbf24; }
+  .red { color: #f87171; }
+  .purple { color: #a78bfa; }
+  .pink { color: #f472b6; }
+</style>
+</head>
+<body>
+
+<div style="text-align:center;padding:20px 20px 0;">
+  <h1 style="font-size:22px;color:#00e676;">Arnold Mobile — Home Screen Mockups</h1>
+  <p style="color:#888;font-size:13px;margin-top:6px;">Scroll right to see all 3 options. View on PC for side-by-side comparison.</p>
+</div>
+
+<div class="mockup-wrapper">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     OPTION A: "Dashboard Gauges" — Key metrics as arc/ring gauges up top
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="mockup-frame">
+  <div class="mockup-label">OPTION A — Dashboard Gauges</div>
+  <div class="phone-content">
+
+    <!-- Header -->
+    <div class="hdr">
+      <div class="logo">A</div>
+      <div><div style="font-size:14px;font-weight:700;letter-spacing:0.08em;">ARNOLD</div><div style="font-size:8px;color:rgba(255,255,255,0.4);">Health Intelligence</div></div>
+      <div class="beta">BETA</div>
+    </div>
+    <div class="greeting"><span>Good evening, Emil</span><span class="muted">Fri, Apr 11</span></div>
+
+    <!-- 4 gauge rings in a row -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;">
+      <div style="text-align:center;">
+        <svg width="70" height="70" viewBox="0 0 70 70">
+          <circle cx="35" cy="35" r="28" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="5"/>
+          <circle cx="35" cy="35" r="28" fill="none" stroke="#f87171" stroke-width="5" stroke-dasharray="82 176" stroke-dashoffset="-44" stroke-linecap="round"/>
+          <text x="35" y="33" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">11.7</text>
+          <text x="35" y="44" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-size="7">mi/wk</text>
+        </svg>
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);margin-top:2px;">Miles <span class="red">47%</span></div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="70" height="70" viewBox="0 0 70 70">
+          <circle cx="35" cy="35" r="28" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="5"/>
+          <circle cx="35" cy="35" r="28" fill="none" stroke="#4ade80" stroke-width="5" stroke-dasharray="148 176" stroke-dashoffset="-44" stroke-linecap="round"/>
+          <text x="35" y="33" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">71</text>
+          <text x="35" y="44" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-size="7">/100</text>
+        </svg>
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);margin-top:2px;">Sleep <span class="green">84%</span></div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="70" height="70" viewBox="0 0 70 70">
+          <circle cx="35" cy="35" r="28" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="5"/>
+          <circle cx="35" cy="35" r="28" fill="none" stroke="#fbbf24" stroke-width="5" stroke-dasharray="134 176" stroke-dashoffset="-44" stroke-linecap="round"/>
+          <text x="35" y="33" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">130</text>
+          <text x="35" y="44" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-size="7">g/day</text>
+        </svg>
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);margin-top:2px;">Protein <span class="yellow">76%</span></div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="70" height="70" viewBox="0 0 70 70">
+          <circle cx="35" cy="35" r="28" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="5"/>
+          <circle cx="35" cy="35" r="28" fill="none" stroke="#fbbf24" stroke-width="5" stroke-dasharray="120 176" stroke-dashoffset="-44" stroke-linecap="round"/>
+          <text x="35" y="33" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">191</text>
+          <text x="35" y="44" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-size="7">lbs</text>
+        </svg>
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);margin-top:2px;">Weight <span class="yellow">68%</span></div>
+      </div>
+    </div>
+
+    <!-- Compact attention strip -->
+    <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding:2px;">
+      <div class="glass-inner" style="padding:7px 10px;border-left:3px solid #f87171;min-width:140px;flex-shrink:0;">
+        <div style="font-size:8px;font-weight:700;color:#f87171;text-transform:uppercase;">Volume gap</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:2px;">Add 7 easy miles</div>
+      </div>
+      <div class="glass-inner" style="padding:7px 10px;border-left:3px solid #fbbf24;min-width:140px;flex-shrink:0;">
+        <div style="font-size:8px;font-weight:700;color:#fbbf24;text-transform:uppercase;">Pace drift</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:2px;">Add tempo at 8:00</div>
+      </div>
+      <div class="glass-inner" style="padding:7px 10px;border-left:3px solid #fbbf24;min-width:140px;flex-shrink:0;">
+        <div style="font-size:8px;font-weight:700;color:#fbbf24;text-transform:uppercase;">Protein low</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:2px;">Add protein snack</div>
+      </div>
+    </div>
+
+    <!-- Cards with inline summaries -->
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div class="glass" style="padding:14px 16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#3b82f6,#6366f1);display:flex;align-items:center;justify-content:center;font-size:16px;">◇</div>
+            <div>
+              <div style="font-size:13px;font-weight:600;">Training</div>
+              <div style="font-size:10px;color:rgba(255,255,255,0.4);">165 mi YTD · 68 sessions</div>
+            </div>
+          </div>
+          <span style="color:rgba(255,255,255,0.25);font-size:16px;">›</span>
+        </div>
+      </div>
+      <div class="glass" style="padding:14px 16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#8b5cf6,#a78bfa);display:flex;align-items:center;justify-content:center;font-size:16px;">◎</div>
+            <div>
+              <div style="font-size:13px;font-weight:600;">Recovery</div>
+              <div style="font-size:10px;color:rgba(255,255,255,0.4);">HRV 37ms · RHR — bpm</div>
+            </div>
+          </div>
+          <span style="color:rgba(255,255,255,0.25);font-size:16px;">›</span>
+        </div>
+      </div>
+      <div class="glass" style="padding:14px 16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:16px;">△</div>
+            <div>
+              <div style="font-size:13px;font-weight:600;">Body</div>
+              <div style="font-size:10px;color:rgba(255,255,255,0.4);">191.7 lbs · 26.5% BF · BMI 27.4</div>
+            </div>
+          </div>
+          <span style="color:rgba(255,255,255,0.25);font-size:16px;">›</span>
+        </div>
+      </div>
+      <div class="glass" style="padding:14px 16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#f97316,#eab308);display:flex;align-items:center;justify-content:center;font-size:14px;">🏁</div>
+            <div>
+              <div style="font-size:13px;font-weight:600;">Run as One JP Morgan</div>
+              <div style="font-size:10px;color:rgba(255,255,255,0.4);">Apr 11 · 2 days · 4 mi</div>
+            </div>
+          </div>
+          <span style="color:rgba(255,255,255,0.25);font-size:16px;">›</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick access -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;">
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◉</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Labs</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◎</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Goals</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◈</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Stack</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">○</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Profile</div></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     OPTION B: "Metric Tiles" — Big numbers in a grid, dense information
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="mockup-frame">
+  <div class="mockup-label">OPTION B — Metric Tiles Grid</div>
+  <div class="phone-content">
+
+    <!-- Header -->
+    <div class="hdr">
+      <div class="logo">A</div>
+      <div><div style="font-size:14px;font-weight:700;letter-spacing:0.08em;">ARNOLD</div><div style="font-size:8px;color:rgba(255,255,255,0.4);">Health Intelligence</div></div>
+      <div class="beta">BETA</div>
+    </div>
+    <div class="greeting"><span>Good evening, Emil</span><span class="muted">Fri, Apr 11</span></div>
+
+    <!-- Today's plan banner -->
+    <div class="glass" style="padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;border-left:3px solid #60a5fa;">
+      <div style="font-size:9px;font-weight:600;color:#60a5fa;text-transform:uppercase;letter-spacing:0.06em;">Today</div>
+      <div style="font-size:12px;font-weight:600;color:#fff;">HIIT</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.4);">planned from weekly schedule</div>
+    </div>
+
+    <!-- 2x3 metric tile grid -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <!-- Miles -->
+      <div class="glass" style="padding:12px 14px;">
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">Weekly Miles</div>
+        <div style="display:flex;align-items:baseline;gap:4px;margin-top:4px;">
+          <span style="font-size:28px;font-weight:700;">11.7</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);">mi</span>
+          <span style="font-size:10px;font-weight:600;color:#f87171;margin-left:auto;">47%</span>
+        </div>
+        <div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:6px;">
+          <div style="height:100%;width:47%;background:#f87171;border-radius:2px;"></div>
+        </div>
+        <div style="font-size:8px;color:rgba(255,255,255,0.3);margin-top:3px;">goal 25 mi</div>
+      </div>
+      <!-- Sleep -->
+      <div class="glass" style="padding:12px 14px;">
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">Sleep Score</div>
+        <div style="display:flex;align-items:baseline;gap:4px;margin-top:4px;">
+          <span style="font-size:28px;font-weight:700;">71</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);">/100</span>
+          <span style="font-size:10px;font-weight:600;color:#4ade80;margin-left:auto;">84%</span>
+        </div>
+        <div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:6px;">
+          <div style="height:100%;width:84%;background:#4ade80;border-radius:2px;"></div>
+        </div>
+        <div style="font-size:8px;color:rgba(255,255,255,0.3);margin-top:3px;">goal 85</div>
+      </div>
+      <!-- Pace -->
+      <div class="glass" style="padding:12px 14px;">
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">Avg Pace</div>
+        <div style="display:flex;align-items:baseline;gap:4px;margin-top:4px;">
+          <span style="font-size:28px;font-weight:700;">9:48</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);">/mi</span>
+          <span style="font-size:10px;font-weight:600;color:#fbbf24;margin-left:auto;">82%</span>
+        </div>
+        <div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:6px;">
+          <div style="height:100%;width:82%;background:#fbbf24;border-radius:2px;"></div>
+        </div>
+        <div style="font-size:8px;color:rgba(255,255,255,0.3);margin-top:3px;">goal 8:00</div>
+      </div>
+      <!-- Protein -->
+      <div class="glass" style="padding:12px 14px;">
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">Protein</div>
+        <div style="display:flex;align-items:baseline;gap:4px;margin-top:4px;">
+          <span style="font-size:28px;font-weight:700;">130</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);">g/day</span>
+          <span style="font-size:10px;font-weight:600;color:#fbbf24;margin-left:auto;">76%</span>
+        </div>
+        <div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:6px;">
+          <div style="height:100%;width:76%;background:#fbbf24;border-radius:2px;"></div>
+        </div>
+        <div style="font-size:8px;color:rgba(255,255,255,0.3);margin-top:3px;">goal 170g</div>
+      </div>
+      <!-- Weight -->
+      <div class="glass" style="padding:12px 14px;">
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">Weight</div>
+        <div style="display:flex;align-items:baseline;gap:4px;margin-top:4px;">
+          <span style="font-size:28px;font-weight:700;">191.7</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);">lbs</span>
+        </div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-top:4px;">26.5% BF · BMI 27.4</div>
+      </div>
+      <!-- HRV -->
+      <div class="glass" style="padding:12px 14px;">
+        <div style="font-size:8px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">HRV</div>
+        <div style="display:flex;align-items:baseline;gap:4px;margin-top:4px;">
+          <span style="font-size:28px;font-weight:700;">37</span>
+          <span style="font-size:11px;color:rgba(255,255,255,0.4);">ms</span>
+          <span style="font-size:10px;font-weight:600;color:#fbbf24;margin-left:auto;">53%</span>
+        </div>
+        <div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:6px;">
+          <div style="height:100%;width:53%;background:#fbbf24;border-radius:2px;"></div>
+        </div>
+        <div style="font-size:8px;color:rgba(255,255,255,0.3);margin-top:3px;">goal 70ms</div>
+      </div>
+    </div>
+
+    <!-- Race countdown -->
+    <div class="glass" style="padding:12px 14px;margin-bottom:10px;border-left:3px solid #f97316;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:12px;font-weight:600;">🏁 Run as One JP Morgan</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:2px;">4 mi · Central Park, NYC · Light rain 61°</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:22px;font-weight:700;color:#f97316;">2d</div>
+          <div style="font-size:8px;color:rgba(255,255,255,0.4);">to race</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick nav -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◉</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Labs</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◎</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Goals</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◈</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Stack</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">○</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Profile</div></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     OPTION C: "Status Card" — Single hero card with all key stats + cards below
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="mockup-frame">
+  <div class="mockup-label">OPTION C — Hero Status Card</div>
+  <div class="phone-content">
+
+    <!-- Header -->
+    <div class="hdr">
+      <div class="logo">A</div>
+      <div><div style="font-size:14px;font-weight:700;letter-spacing:0.08em;">ARNOLD</div><div style="font-size:8px;color:rgba(255,255,255,0.4);">Health Intelligence</div></div>
+      <div class="beta">BETA</div>
+    </div>
+    <div class="greeting"><span>Good evening, Emil</span><span class="muted">Fri, Apr 11</span></div>
+
+    <!-- Hero status card -->
+    <div class="glass" style="padding:16px 18px;margin-bottom:10px;border:1px solid rgba(96,165,250,0.15);">
+      <!-- Readiness score -->
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
+        <svg width="56" height="56" viewBox="0 0 56 56">
+          <circle cx="28" cy="28" r="23" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="4"/>
+          <circle cx="28" cy="28" r="23" fill="none" stroke="url(#grad)" stroke-width="4" stroke-dasharray="100 145" stroke-dashoffset="-36" stroke-linecap="round"/>
+          <defs><linearGradient id="grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#a78bfa"/></linearGradient></defs>
+          <text x="28" y="31" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">62</text>
+        </svg>
+        <div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.06em;">Readiness Score</div>
+          <div style="font-size:14px;font-weight:600;color:#fbbf24;margin-top:2px;">Needs work</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:1px;">Volume + pace below target</div>
+        </div>
+      </div>
+
+      <!-- Key stats row -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:10px 0;border-top:1px solid rgba(255,255,255,0.06);border-bottom:1px solid rgba(255,255,255,0.06);">
+        <div style="text-align:center;">
+          <div style="font-size:16px;font-weight:700;">11.7</div>
+          <div style="font-size:8px;color:rgba(255,255,255,0.35);">mi/wk</div>
+          <div style="font-size:8px;font-weight:600;color:#f87171;">47%</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:16px;font-weight:700;">9:48</div>
+          <div style="font-size:8px;color:rgba(255,255,255,0.35);">/mi pace</div>
+          <div style="font-size:8px;font-weight:600;color:#fbbf24;">82%</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:16px;font-weight:700;">71</div>
+          <div style="font-size:8px;color:rgba(255,255,255,0.35);">sleep</div>
+          <div style="font-size:8px;font-weight:600;color:#4ade80;">84%</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:16px;font-weight:700;">130</div>
+          <div style="font-size:8px;color:rgba(255,255,255,0.35);">protein g</div>
+          <div style="font-size:8px;font-weight:600;color:#fbbf24;">76%</div>
+        </div>
+      </div>
+
+      <!-- Today + Race -->
+      <div style="display:flex;justify-content:space-between;padding-top:10px;">
+        <div>
+          <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;">Today</div>
+          <div style="font-size:12px;font-weight:600;margin-top:2px;">HIIT</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;">Next Race</div>
+          <div style="font-size:12px;font-weight:600;margin-top:2px;">JP Morgan <span style="color:#f97316;">2d</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action items (compact) -->
+    <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;padding:2px;">
+      <div class="glass-inner" style="padding:7px 10px;border-left:3px solid #f87171;min-width:130px;flex-shrink:0;">
+        <div style="font-size:8px;font-weight:700;color:#f87171;">VOLUME GAP</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:2px;">+7 easy miles</div>
+      </div>
+      <div class="glass-inner" style="padding:7px 10px;border-left:3px solid #fbbf24;min-width:130px;flex-shrink:0;">
+        <div style="font-size:8px;font-weight:700;color:#fbbf24;">PACE DRIFT</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:2px;">Tempo at 8:00</div>
+      </div>
+      <div class="glass-inner" style="padding:7px 10px;border-left:3px solid #fbbf24;min-width:130px;flex-shrink:0;">
+        <div style="font-size:8px;font-weight:700;color:#fbbf24;">PROTEIN</div>
+        <div style="font-size:9px;color:rgba(255,255,255,0.5);margin-top:2px;">+40g to target</div>
+      </div>
+    </div>
+
+    <!-- Domain cards -->
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div class="glass" style="padding:12px 14px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#6366f1);display:flex;align-items:center;justify-content:center;font-size:14px;">◇</div>
+          <div style="flex:1;">
+            <div style="font-size:12px;font-weight:600;">Training</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.4);">165 mi · 68 sessions · 3.4 hrs/wk</div>
+          </div>
+          <span style="color:rgba(255,255,255,0.2);">›</span>
+        </div>
+      </div>
+      <div class="glass" style="padding:12px 14px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:14px;">△</div>
+          <div style="flex:1;">
+            <div style="font-size:12px;font-weight:600;">Body</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.4);">191.7 lbs · 26.5% BF · HRV 37ms</div>
+          </div>
+          <span style="color:rgba(255,255,255,0.2);">›</span>
+        </div>
+      </div>
+      <div class="glass" style="padding:12px 14px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#ec4899,#f472b6);display:flex;align-items:center;justify-content:center;font-size:14px;">◈</div>
+          <div style="flex:1;">
+            <div style="font-size:12px;font-weight:600;">Nutrition</div>
+            <div style="font-size:9px;color:rgba(255,255,255,0.4);">2,200 kcal · 130g protein · 220g carbs</div>
+          </div>
+          <span style="color:rgba(255,255,255,0.2);">›</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick nav -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px;">
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◉</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Labs</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◎</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Goals</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">◈</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Stack</div></div>
+      <div class="glass" style="padding:10px;text-align:center;"><div style="font-size:14px;">○</div><div style="font-size:9px;margin-top:3px;color:rgba(255,255,255,0.5);">Profile</div></div>
+    </div>
+
+  </div>
+</div>
+
+</div><!-- end mockup-wrapper -->
+
+</body>
+</html>

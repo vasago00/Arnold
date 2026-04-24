@@ -20,6 +20,7 @@ import { fetchAndParseICS } from "./core/parsers/icsParser.js";
 import { parseFITFile } from "./core/parsers/fitParser.js";
 import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronometerParser.js";
 import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption } from "./core/storage.js";
+import { primeVitalsCache } from "./core/dcy.js";
 import * as dbEngine from "./core/db.js";
 import { fmtHMS, fmtHM, hydrationFor, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
 import { computeActivityNeeds, trackReplenishment, replenishmentSummary } from "./core/activityNeeds.js";
@@ -34,8 +35,9 @@ import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar } from "
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
+import BackupStatusPanel from "./components/BackupStatusPanel.jsx";
 import { startCloudSync } from "./core/cloud-sync.js";
-import { startAutoBackup } from "./core/backup.js";
+import { startAutoBackup, snapshotBeforeOp } from "./core/backup.js";
 import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as getSupAdherence, getDailyNutrientTotals as getSupTotals } from "./core/supplements.js";
 import { AVATAR_LIBRARY } from "./core/avatars.js";
 import { getGoals } from "./core/goals.js";
@@ -66,6 +68,16 @@ import {
 
 // ─── Unified Activities: merge CSV imports + daily FIT uploads ───────────────
 // Single source of truth — used everywhere that needs activity data.
+// A day can have multiple activities (e.g. morning run + evening strength, or two runs).
+// `dailyLogs[day].fitActivities` is the authoritative list; `fitData` is a legacy alias
+// for the latest upload and is used only as a fallback for older rows without the array.
+function getLogFitActivities(log) {
+  if (!log) return [];
+  if (Array.isArray(log.fitActivities) && log.fitActivities.length) return log.fitActivities;
+  if (log.fitData) return [log.fitData];
+  return [];
+}
+
 function getUnifiedActivities() {
   const csvActs = (storage.get('activities') || [])
     .filter(a => a.source !== 'health_connect'); // exclude HC ghost data
@@ -84,35 +96,51 @@ function getUnifiedActivities() {
     return l;
   };
 
-  // Build a set of date|canonType from CSV so FIT dupes are skipped
+  // Track which (date, canonType) pairs CSV already covers so we don't double-count a
+  // FIT upload that also appears in a later Garmin CSV export. This check is per-type
+  // (not per-activity), so two runs on the same day in the CSV both survive below —
+  // they're keyed distinctly in `byKey` by title/start-time.
   const csvByDateType = new Set();
   for (const a of csvActs) {
     csvByDateType.add(`${a.date}|${canon(a.activityType || a.title)}`);
   }
 
-  // Start with all CSV activities keyed by date|title
-  const byKey = new Map(csvActs.map(a => [`${a.date}|${a.title || a.activityType || ''}`, a]));
+  // CSV activities: key by date|title|time so same-day same-title activities coexist
+  const csvKey = a => `${a.date}|${a.title || a.activityType || ''}|${a.time || ''}`;
+  const byKey = new Map(csvActs.map(a => [csvKey(a), a]));
+
+  // Counter suffix keeps multiple FIT activities of the same type on the same day distinct
+  const fitCountByDateType = new Map();
+
   for (const log of dailyLogs) {
-    const fd = log.fitData;
-    if (!fd || !log.date) continue;
-    const type = fd.activityType || fd.type || 'workout';
-    // Skip if CSV already has an activity of the same canonical type on this date
-    if (csvByDateType.has(`${log.date}|${canon(type)}`)) continue;
-    const key = `${log.date}|${type}`;
-    if (byKey.has(key)) continue;
-    byKey.set(key, {
-      date: log.date,
-      activityType: type,
-      distanceMi: fd.distanceMi || null,
-      distanceKm: fd.distanceKm || null,
-      durationSecs: fd.durationMins ? fd.durationMins * 60 : (fd.durationSecs || null),
-      durationFormatted: fd.duration || null,
-      avgPaceRaw: fd.avgPacePerMi || fd.avgPaceRaw || null,
-      avgHR: fd.avgHR || null,
-      maxHR: fd.maxHR || null,
-      calories: fd.calories || null,
-      source: 'fit-daily',
-    });
+    if (!log?.date) continue;
+    const fits = getLogFitActivities(log);
+    for (const fd of fits) {
+      if (!fd) continue;
+      const type = fd.activityType || fd.type || 'workout';
+      // Skip if CSV already covers this canonical type for the day (avoid FIT+CSV dupe).
+      if (csvByDateType.has(`${log.date}|${canon(type)}`)) continue;
+      const dtKey = `${log.date}|${type}`;
+      const n = fitCountByDateType.get(dtKey) || 0;
+      fitCountByDateType.set(dtKey, n + 1);
+      // Disambiguate multiple same-type FIT uploads on the same day with a startTime/index suffix
+      const uniqueKey = `${dtKey}|${fd.startTime || fd.time || n}`;
+      if (byKey.has(uniqueKey)) continue;
+      byKey.set(uniqueKey, {
+        date: log.date,
+        activityType: type,
+        distanceMi: fd.distanceMi || null,
+        distanceKm: fd.distanceKm || null,
+        durationSecs: fd.durationMins ? fd.durationMins * 60 : (fd.durationSecs || null),
+        durationFormatted: fd.duration || null,
+        avgPaceRaw: fd.avgPacePerMi || fd.avgPaceRaw || null,
+        avgHR: fd.avgHR || null,
+        maxHR: fd.maxHR || null,
+        calories: fd.calories || null,
+        startTime: fd.startTime || fd.time || null,
+        source: 'fit-daily',
+      });
+    }
   }
   return [...byKey.values()].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 }
@@ -120,8 +148,8 @@ function getUnifiedActivities() {
 // ─── Storage ──────────────────────────────────────────────────────────────────
 const SK = "vitals-v4";
 const DD = { profile:{name:"",goal:"",age:"",height:""}, logs:[], aiInsights:[], labSnapshots:[], clinicalTests:[] };
-async function loadData(){ try{ const r=await window.storage.get(SK); return r?JSON.parse(r.value):DD; }catch{ return DD; }}
-async function saveData(d){ try{ await window.storage.set(SK,JSON.stringify(d)); }catch{} }
+async function loadData(){ try{ const r=await window.storage.get(SK); const data=r?JSON.parse(r.value):DD; primeVitalsCache(data); return data; }catch{ return DD; }}
+async function saveData(d){ try{ primeVitalsCache(d); await window.storage.set(SK,JSON.stringify(d)); }catch{} }
 
 // ─── AI ───────────────────────────────────────────────────────────────────────
 const AI_KEY=()=>import.meta.env.VITE_ANTHROPIC_API_KEY||"";
@@ -280,7 +308,20 @@ function mapGarmin(rows){
       steps:          r["steps"]||"",
       distance:       r["distance"]||"",
     });
-    if(r["deep sleep"]!==undefined){const h=["deep sleep","light sleep","rem sleep"].reduce((s,k)=>{const v=r[k]||"";const p=v.split(":").map(Number);return s+(p[0]||0)+(p[1]||0)/60;},0);mg(d,{sleep:h>0?h.toFixed(2):""});}
+    if(r["deep sleep"]!==undefined){
+      // Garmin writes each stage as "h:mm". Convert to minutes per stage and
+      // also keep the combined total hours for legacy consumers (DCY §8 P1).
+      const stageMin=(k)=>{const v=r[k]||"";const p=v.split(":").map(Number);return (p[0]||0)*60+(p[1]||0);};
+      const deepMin=stageMin("deep sleep"); const lightMin=stageMin("light sleep"); const remMin=stageMin("rem sleep"); const awakeMin=stageMin("awake");
+      const totalHours=(deepMin+lightMin+remMin)/60;
+      mg(d,{
+        sleep: totalHours>0?totalHours.toFixed(2):"",
+        deepSleepMinutes:  deepMin>0?deepMin:null,
+        lightSleepMinutes: lightMin>0?lightMin:null,
+        remSleepMinutes:   remMin>0?remMin:null,
+        awakeMinutes:      awakeMin>0?awakeMin:null,
+      });
+    }
     if(r["last night"]!==undefined)mg(d,{hrv:r["last night"]||"",hrvStatus:{"balanced":"good","unbalanced":"moderate","poor":"low"}[(r["status"]||"").toLowerCase()]||""});
     if(r["weight"]!==undefined&&!r["activity type"]&&!r["last night"])mg(d,{weight:r["weight (kg)"]||r["weight"]||"",bodyFat:r["body fat %"]||""});
     if(r["avg resting hr"]!==undefined)mg(d,{heartRate:r["avg resting hr"]||""});
@@ -326,7 +367,7 @@ function mergeLogs(ex,inc,strat){
 // ─── Weather: uses fetchWeatherForDate from pdfParser.js ─────────────────────
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-const td=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+const td=(dt=new Date())=>{const d=dt instanceof Date?dt:new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const fmt=(v,u="")=>(v!==""&&v!=null?`${v}${u}`:"—");
 const Q=["—","1","2","3","4","5"];
 const HRV_L={excellent:"Excellent",good:"Good",moderate:"Moderate",low:"Low"};
@@ -384,7 +425,7 @@ export default function App(){
     mq.addEventListener('change',h);
     return()=>mq.removeEventListener('change',h);
   },[]);
-  const mobileHomeActive=isMobileApp&&tab==='training';
+  const mobileHomeActive=isMobileApp&&(tab==='training'||tab==='weekly');
   const [mobileInitView,setMobileInitView]=useState('start');
   const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
 
@@ -489,6 +530,20 @@ export default function App(){
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
       </nav>
       <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{})}} className="arnold-main" {...(isMobileApp&&!mobileHomeActive?mobileSwipe:{})}>
+        {/* ── Mobile compact header for drill-down tabs (matches Start/EdgeIQ) ── */}
+        {isMobileApp&&!mobileHomeActive&&(()=>{
+          const tabLabels={activity:'Play',nutrition_mobile:'Fuel',daily:'Daily Log',labs:'Labs',clinical:'Core',races:'Races',goals:'Goals',supplements:'Stack',settings:'Settings',weekly:'EdgeIQ'};
+          const label=tabLabels[tab]||tab;
+          return(<div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'10px 10px 8px'}}>
+            <div>
+              <div style={{display:'flex',alignItems:'center',gap:5}}>
+                <div style={{width:22,height:22,borderRadius:6,background:'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',border:'1px solid rgba(91,155,213,0.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'#5b9bd5',fontWeight:800}}>A</div>
+                <span style={{fontSize:9,fontWeight:700,color:'rgba(255,255,255,0.35)',letterSpacing:'0.14em'}}>ARNOLD</span>
+              </div>
+              <div style={{fontSize:14,fontWeight:600,color:'rgba(255,255,255,0.6)',marginTop:3}}>{label}</div>
+            </div>
+          </div>);
+        })()}
         {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} mobileInitView={mobileInitView} onAiSum={async()=>{
           if(aiSummLoad)return;
           setAiSummLoad(true);setAiSummStream("");
@@ -1049,7 +1104,7 @@ function HomeCockpit({data,setTab}){
     const days=[];
     for(let i=0;i<30;i++){
       const d=new Date();d.setDate(today.getDate()-i);
-      const ds=d.toISOString().slice(0,10);
+      const ds=td(d);
       const t=nutDailyTotals(ds);
       if(t.calories>0||t.protein>0) days.push({date:ds,...t});
     }
@@ -1528,10 +1583,10 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const yearDist=yearRuns2.reduce((s,a)=>s+(a.distanceMi||0),0);
   const yearWorkouts=yearActs.length;
   const d28=new Date(now);d28.setDate(d28.getDate()-28);
-  const last28=activities.filter(a=>a.date>=d28.toISOString().slice(0,10)).filter(runs);
+  const last28=activities.filter(a=>a.date>=td(d28)).filter(runs);
   const weeklyAvgDist=last28.reduce((s,a)=>s+(a.distanceMi||0),0)/4;
   const d30=new Date(now);d30.setDate(d30.getDate()-30);
-  const last30Crono=nutrition.filter(c=>c.date>=d30.toISOString().slice(0,10)&&c.calories);
+  const last30Crono=nutrition.filter(c=>c.date>=td(d30)&&c.calories);
   const avg30Cal=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.calories)||0),0)/last30Crono.length):null;
   const avg30Pro=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.protein)||0),0)/last30Crono.length):null;
   const today=td();
@@ -1801,7 +1856,17 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
   const activities = useMemo(() => {
     const csvActs = (storage.get('activities') || []).filter(a => a.source !== 'health_connect');
     const dailyLogs = storage.get('dailyLogs') || [];
-    const fitActs = dailyLogs.filter(l => l.fitData).map(l => ({ ...l.fitData, date: l.date, source: 'daily_fit' }));
+    // Iterate every FIT activity on each day (not just the legacy singular `fitData`).
+    const fitActs = [];
+    for (const l of dailyLogs) {
+      if (!l?.date) continue;
+      const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
+        ? l.fitActivities
+        : (l.fitData ? [l.fitData] : []);
+      for (const fd of fits) {
+        if (fd) fitActs.push({ ...fd, date: l.date, source: 'daily_fit' });
+      }
+    }
     return [...csvActs, ...fitActs];
   }, [todayStr]);
   const todayActs = useMemo(() => activities.filter(a => a.date === todayStr), [activities, todayStr]);
@@ -2007,7 +2072,10 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
 function LogDay({data,persist,showToast,mobileView,setTab}){
   const ts=td(),ex=data.logs.find(l=>l.date===ts);
   const[notes,setNotes]=useState(ex?.notes||"");
-  const[todayFIT,setTodayFIT]=useState(null);
+  // todayFITs holds ALL of today's uploaded FIT activities (multiple per day allowed).
+  // Legacy `todayFIT` = latest upload, derived below for any call sites expecting a single activity.
+  const[todayFITs,setTodayFITs]=useState([]);
+  const todayFIT=todayFITs.length?todayFITs[todayFITs.length-1]:null;
   const[todayNutrition,setTodayNutrition]=useState(null);
   const[fitFilename,setFitFilename]=useState(null);
   const[nutFilename,setNutFilename]=useState(null);
@@ -2030,38 +2098,56 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       const logs=storage.get('dailyLogs')||[];
       const todayEntry=logs.find(e=>e.date===today);
       if(todayEntry){
-        const fitIsToday=todayEntry.fitData&&(!todayEntry.fitData.date||todayEntry.fitData.date===today);
+        // Prefer the new `fitActivities` array; fall back to legacy singular `fitData`
+        const rawFits=Array.isArray(todayEntry.fitActivities)&&todayEntry.fitActivities.length
+          ?todayEntry.fitActivities
+          :(todayEntry.fitData?[todayEntry.fitData]:[]);
+        const fitsToday=rawFits.filter(f=>f&&(!f.date||f.date===today));
         const nutIsToday=todayEntry.nutData&&(!todayEntry.nutData.date||todayEntry.nutData.date===today);
-        if(fitIsToday)setTodayFIT(todayEntry.fitData);else setTodayFIT(null);
+        setTodayFITs(fitsToday);
         if(nutIsToday)setTodayNutrition(todayEntry.nutData);else setTodayNutrition(null);
         if(todayEntry.notes)setNotes(todayEntry.notes);
-        setTodayLoaded(!!(fitIsToday||nutIsToday||todayEntry.notes));
+        setTodayLoaded(!!(fitsToday.length||nutIsToday||todayEntry.notes));
       }else{
         // New day with no entry yet — ensure a clean slate
-        setTodayFIT(null);setTodayNutrition(null);
+        setTodayFITs([]);setTodayNutrition(null);
       }
     }catch(e){console.error('Failed to load daily log:',e);}
   },[]);
 
-  // Auto-persist FIT / nutrition data the moment it parses (so unsaved data isn't lost)
+  // Auto-persist FIT / nutrition data the moment it parses (so unsaved data isn't lost).
+  // `fitActivities` is the authoritative array; `fitData` mirrors the latest upload so any
+  // legacy consumer that still reads the singular field keeps working.
   useEffect(()=>{
-    if(!todayFIT&&!todayNutrition)return;
+    if(!todayFITs.length&&!todayNutrition)return;
     const today=td();
     const existing=storage.get('dailyLogs')||[];
     const todayEntry=existing.find(e=>e.date===today)||{date:today,notes:''};
-    const updated={...todayEntry,fitData:todayFIT||todayEntry.fitData,nutData:todayNutrition||todayEntry.nutData,savedAt:new Date().toISOString()};
+    const mergedFits=todayFITs.length
+      ?todayFITs
+      :(Array.isArray(todayEntry.fitActivities)?todayEntry.fitActivities:(todayEntry.fitData?[todayEntry.fitData]:[]));
+    const latestFit=mergedFits.length?mergedFits[mergedFits.length-1]:(todayEntry.fitData||null);
+    const updated={
+      ...todayEntry,
+      fitActivities:mergedFits,
+      fitData:latestFit,
+      nutData:todayNutrition||todayEntry.nutData,
+      savedAt:new Date().toISOString(),
+    };
     const filtered=existing.filter(e=>e.date!==today);
     filtered.unshift(updated);
     storage.set('dailyLogs',filtered.slice(0,90),{skipValidation:true});
-  },[todayFIT,todayNutrition]);
+  },[todayFITs,todayNutrition]);
 
   const handleSave=()=>{
     const today=td();
+    const latestFit=todayFITs.length?todayFITs[todayFITs.length-1]:null;
     const entry={
       date:today,
       savedAt:new Date().toISOString(),
       notes,
-      fitData:todayFIT||null,
+      fitActivities:todayFITs,
+      fitData:latestFit,
       nutData:todayNutrition||null,
     };
     const existing=storage.get('dailyLogs')||[];
@@ -2080,7 +2166,13 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     setFitError(null);
     try{
       const parsed=await parseFITFile(file);
-      setTodayFIT(parsed);
+      // APPEND rather than replace — two FIT uploads on the same day are both kept.
+      // Dedup on a composite key so re-uploading the same file doesn't double-count.
+      const fitKey=f=>`${f.date||''}|${f.activityType||''}|${f.startTime||f.time||''}|${f.durationSecs||f.durationMins||''}`;
+      setTodayFITs(prev=>{
+        const already=prev.some(f=>fitKey(f)===fitKey(parsed));
+        return already?prev:[...prev,parsed];
+      });
       setFitFilename(file.name);
       showToast(`✓ FIT parsed — ${parsed.activityType}`);
     }catch(e){setFitError(`Could not read FIT file: ${e.message}`);}
@@ -2292,24 +2384,158 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
   };
 
   const todayStr=td();
-  const fitData=(todayFIT&&(!todayFIT.date||todayFIT.date===todayStr))?todayFIT:(()=>{
-    const acts=getUnifiedActivities();
-    const row=acts.find(a=>a.date===todayStr);
-    if(!row)return null;
-    const isRun=/running|trail/i.test(row.activityType||'');
-    const isStrength=/strength|weight/i.test(row.activityType||'');
-    const mins=row.durationSecs?Math.round(row.durationSecs/60):null;
-    return{
-      ...row,
-      isRun,isStrength,
-      durationMins:mins,
-      duration:row.durationFormatted||(mins?`${mins} min`:'—'),
-      avgPacePerMi:row.avgPaceRaw,
-      avgPowerW:row.avgPower,
-      maxPowerW:row.maxPower,
-      aerobicTrainingEffect:row.aerobicTE,
-      source:'activities-csv',
+  // Plausibility bounds — any value outside these is treated as invalid and
+  // replaced with null. Protects the UI from garbage that occasionally slips
+  // through the FIT parser (e.g. a 32-bit timestamp leaking into avgHR).
+  const FIT_BOUNDS={avgHR:[30,250],maxHR:[30,250],avgCadence:[20,260],maxCadence:[20,260],
+    avgPowerW:[0,2000],maxPowerW:[0,2000],avgVerticalOscillation:[1,20],
+    durationSecs:[0,86400],movingTimeSecs:[0,86400],distanceMi:[0,200],
+    calories:[0,10000],totalAscentFt:[0,30000],trainingStressScore:[0,1000],
+    aerobicTrainingEffect:[0,5],aerobicTE:[0,5],anaerobicTrainingEffect:[0,5],anaerobicTE:[0,5],
+    setsCount:[0,500],totalReps:[0,5000],bodyBatteryDrain:[0,100]};
+  const sanitizeFit=fd=>{
+    if(!fd||typeof fd!=='object')return fd;
+    const out={...fd};
+    for(const k of Object.keys(FIT_BOUNDS)){
+      const v=out[k];
+      if(v==null)continue;
+      const n=parseFloat(v);
+      const b=FIT_BOUNDS[k];
+      if(!Number.isFinite(n)||n<b[0]||n>b[1])out[k]=null;
+      else out[k]=n;
+    }
+    return out;
+  };
+  // fitDataList: EVERY activity for today. Drives the Workout Log panel(s) below —
+  // one panel renders per activity so metrics can't be hidden by later uploads or CSV rows.
+  const fitDataList=(()=>{
+    const inMemory=(todayFITs||[]).filter(f=>f&&(!f.date||f.date===todayStr));
+    if(inMemory.length)return inMemory.map(sanitizeFit);
+    const acts=getUnifiedActivities().filter(a=>a.date===todayStr);
+    return acts.map(row=>{
+      const isRun=/running|trail/i.test(row.activityType||'');
+      const isStrength=/strength|weight/i.test(row.activityType||'');
+      const mins=row.durationSecs?Math.round(row.durationSecs/60):null;
+      return sanitizeFit({
+        ...row,
+        isRun,isStrength,
+        durationMins:mins,
+        duration:row.durationFormatted||(mins?`${mins} min`:'—'),
+        avgPacePerMi:row.avgPaceRaw,
+        avgPowerW:row.avgPower,
+        maxPowerW:row.maxPower,
+        aerobicTrainingEffect:row.aerobicTE,
+        source:'activities-csv',
+      });
+    });
+  })();
+  // Legacy single-value reference used by save() below and by any older readers.
+  // When the day has multiple activities, this is the latest (or only) one.
+  const fitData=fitDataList.length?fitDataList[fitDataList.length-1]:null;
+  // Aggregate totals across all of today's activities (shown in a summary strip when N>1)
+  const fitTotals=fitDataList.reduce((acc,fd)=>{
+    acc.distanceMi+=(fd?.distanceMi||0);
+    acc.durationSecs+=(fd?.durationSecs||(fd?.durationMins?fd.durationMins*60:0));
+    acc.calories+=(fd?.calories||0);
+    return acc;
+  },{distanceMi:0,durationSecs:0,calories:0});
+  const fmtDurTotal=s=>{const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h>0?`${h}h${String(m).padStart(2,'0')}m`:`${m}m`;};
+
+  // Final display-level guard: any numeric still outside FIT_BOUNDS by the time
+  // it hits a dial is replaced with null/'—'. Belt-and-suspenders on top of
+  // sanitizeFit (storage load) and clean() (aggregation) — catches anything
+  // that slipped through both, including a stale HMR state.
+  const safeN=(v,field)=>{
+    if(v==null)return null;
+    const n=parseFloat(v);
+    if(!Number.isFinite(n))return null;
+    const b=FIT_BOUNDS[field];
+    if(b&&(n<b[0]||n>b[1]))return null;
+    return n;
+  };
+  const safeDisp=(v,field)=>{const n=safeN(v,field);return n==null?'—':n;};
+
+  // ─── Group same-type activities & compute cumulative metrics ────────────────
+  // Two strength sessions on the same day collapse into ONE aggregated card;
+  // a run + strength still render as two separate cards because their metric
+  // schemas diverge. Single-session groups pass through unchanged.
+  const fitGroups=(()=>{
+    if(!fitDataList.length)return[];
+    const groupKey=fd=>fd.isRun?'run':fd.isStrength?'strength':(fd.activityType||'other');
+    const buckets=new Map();
+    fitDataList.forEach((fd,i)=>{
+      const k=groupKey(fd);
+      if(!buckets.has(k))buckets.set(k,[]);
+      buckets.get(k).push({...fd,_origIdx:i});
+    });
+    const parsePaceSecs=p=>{const m=(p||'').match(/^(\d+):(\d+)/);return m?+m[1]*60+ +m[2]:null;};
+    const fmtPaceSecs=s=>{const m=Math.floor(s/60),sec=Math.round(s%60);return `${m}:${String(sec).padStart(2,'0')}`;};
+    const fmtHMS=s=>{if(!s)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.round(s%60);return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
+    // Reuse the same FIT_BOUNDS defined above for the single-item sanitizer so
+    // every plausibility rule lives in one place.
+    const clean=(v,f)=>{
+      const n=parseFloat(v);
+      if(!Number.isFinite(n))return null;
+      const b=FIT_BOUNDS[f];
+      if(b&&(n<b[0]||n>b[1]))return null;
+      return n;
     };
+    const out=[];
+    for(const[key,items]of buckets){
+      if(items.length===1){out.push({...items[0],_groupCount:1,_groupKey:key,_groupItems:items});continue;}
+      const sum=f=>items.reduce((s,it)=>{const n=clean(it[f],f);return s+(n||0);},0);
+      const max=f=>{let m=null;for(const it of items){const n=clean(it[f],f);if(n!=null&&(m==null||n>m))m=n;}return m;};
+      const wAvg=(f,wf)=>{let t=0,w=0;for(const it of items){const v=clean(it[f],f),ww=clean(it[wf],wf);if(v!=null&&ww!=null&&ww>0){t+=v*ww;w+=ww;}}return w?t/w:null;};
+      const durationSecs=sum('durationSecs');
+      const movingTimeSecs=sum('movingTimeSecs')||durationSecs;
+      const distanceMi=sum('distanceMi');
+      const calories=sum('calories');
+      const isRun=items[0].isRun,isStrength=items[0].isStrength;
+      const agg={
+        ...items[items.length-1], // latest as base (preserves activityId/time for key)
+        _groupCount:items.length,
+        _groupKey:key,
+        _groupItems:items,
+        durationSecs,movingTimeSecs,distanceMi,calories,
+        totalAscentFt:sum('totalAscentFt')||null,
+        maxHR:max('maxHR'),
+        maxCadence:max('maxCadence'),
+        maxPowerW:max('maxPowerW'),
+        avgHR:wAvg('avgHR','durationSecs'),
+        aerobicTrainingEffect:sum('aerobicTrainingEffect')||null,
+        aerobicTE:sum('aerobicTE')||null,
+      };
+      // Time range "HH:MM → HH:MM"
+      const times=items.map(it=>it.time).filter(Boolean);
+      agg.time=times.length>1?`${times[0]} → ${times[times.length-1]}`:(times[0]||'');
+      if(isRun){
+        // Pace: distance-weighted average over avgPacePerMi strings
+        let paceSum=0,dSum=0;
+        for(const it of items){const ps=parsePaceSecs(it.avgPacePerMi),d=parseFloat(it.distanceMi)||0;if(ps&&d){paceSum+=ps*d;dSum+=d;}}
+        agg.avgPacePerMi=dSum?fmtPaceSecs(paceSum/dSum):(items[items.length-1].avgPacePerMi||null);
+        // Vertical osc: distance-weighted
+        let vSum=0,vW=0;
+        for(const it of items){const v=parseFloat(it.avgVerticalOscillation),d=parseFloat(it.distanceMi)||0;if(v&&d){vSum+=v*d;vW+=d;}}
+        agg.avgVerticalOscillation=vW?vSum/vW:null;
+        // Cadence / power: duration-weighted
+        agg.avgCadence=wAvg('avgCadence','durationSecs');
+        agg.avgPowerW=wAvg('avgPowerW','durationSecs');
+        // Rebuild duration display from summed seconds
+        agg.duration=fmtHMS(durationSecs);
+        agg.durationMins=durationSecs?Math.round(durationSecs/60):null;
+      }
+      if(isStrength){
+        agg.setsCount=sum('setsCount')||null;
+        agg.totalReps=sum('totalReps')||null;
+        agg.trainingStressScore=sum('trainingStressScore')||null;
+        agg.anaerobicTE=sum('anaerobicTE')||null;
+        agg.bodyBatteryDrain=sum('bodyBatteryDrain')||null;
+      }
+      out.push(agg);
+    }
+    // Stable ordering: runs first, strength next, everything else after
+    const rank=k=>k==='run'?0:k==='strength'?1:2;
+    return out.sort((a,b)=>rank(a._groupKey)-rank(b._groupKey));
   })();
   const nutData=(todayNutrition&&(!todayNutrition.date||todayNutrition.date===todayStr))?todayNutrition:null;
   const calT=parseFloat(profile.dailyCalorieTarget)||2200;
@@ -2337,7 +2563,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     const arr=[];
     for(let i=6;i>=0;i--){
       const d=new Date();d.setDate(d.getDate()-i);d.setHours(0,0,0,0);
-      arr.push(d.toISOString().slice(0,10));
+      arr.push(td(d));
     }
     return arr;
   })();
@@ -2500,6 +2726,23 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     );
   };
 
+  // Today's Movement — ambient NEAT from Health Connect (populated by
+  // syncDailyEnergy). Null when no HC wellness row exists for today yet.
+  // Re-reads when a FIT uploads lands (cheap storage read, low risk).
+  const todayMovement=(()=>{
+    try{
+      const today=td();
+      const logs=storage.get('dailyLogs')||[];
+      const entry=logs.find(e=>e&&e.date===today);
+      if(!entry)return null;
+      const steps=Number(entry.steps)||0;
+      const active=Number(entry.activeCalories)||0;
+      const total=Number(entry.totalCalories)||0;
+      if(steps===0&&total===0)return null;
+      return{steps,active,total,source:entry.wellnessSource||null,updatedAt:entry.wellnessUpdatedAt||null};
+    }catch{return null;}
+  })();
+
   return(
     <div style={S.sec}>
       <div style={S.st}>{mobileView==='activity'?'\u25CB Activity':mobileView==='nutrition'?'\u25C6 Nutrition':'\u2295 Daily Log'} {'\u00b7'} {ts}</div>
@@ -2516,80 +2759,32 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
         {/* ── LEFT: Activity (show in desktop or mobileView=activity) ── */}
         {mobileView!=='nutrition'&&<div>
-          <UploadPill label="Today's activity" sub="Drop .fit or click to browse"
+          <UploadPill label="Today's Training" sub="Drop .fit or click to browse"
             accept=".fit,.FIT" onFile={handleTodayFIT} inputRef={fitRef}
             loaded={!!todayFIT} filename={fitFilename} error={fitError}/>
 
-          <div style={panelStyle}>
-            {!fitData?(
+          {!fitData?(
+            <div style={panelStyle}>
               <div style={{textAlign:'center',padding:'32px 0',color:'var(--text-muted)',fontSize:12}}>
                 Upload today's .fit file to see activity metrics
               </div>
-            ):<>
-              {/* Header */}
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>Activity</span>
-                <span style={{fontSize:10,color:'var(--text-muted)'}}>today</span>
-              </div>
-
-              {/* Type badge */}
-              <div style={{display:'flex',gap:5,marginBottom:12,alignItems:'center'}}>
-                <span style={{fontSize:9,fontWeight:500,padding:'2px 9px',borderRadius:10,background:fitData.isRun?'rgba(96,165,250,0.12)':'rgba(167,139,250,0.12)',color:fitData.isRun?'#60a5fa':'#a78bfa'}}>
-                  {fitData.isRun?'Run':'Strength'} · Garmin FIT
-                </span>
-                <span style={{fontSize:9,color:'var(--text-muted)'}}>{fitData.date} · {fitData.time}</span>
-              </div>
-
-              {/* 5 dials for runs */}
-              {fitData.isRun&&(
-                <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
-                  <SmallDial color="#60a5fa" value={fitData.distanceMi} max={parseFloat(profile?.weeklyRunDistanceTarget)||10} unit="mi" label="Distance" displayValue={fitData.distanceMi?fitData.distanceMi.toFixed(1):'—'}/>
-                  <SmallDial color="#4ade80" value={pacePctFn(fitData.avgPacePerMi,profile?.targetRacePace)} max={1} unit="/mi" label="Pace" displayValue={fitData.avgPacePerMi||'—'}/>
-                  <SmallDial color="#f87171" value={fitData.avgHR} max={185} unit="bpm" label="Avg HR" displayValue={fitData.avgHR||'—'}/>
-                  <SmallDial color="#a78bfa" value={fitData.avgCadence} max={180} unit="spm" label="Cadence" displayValue={fitData.avgCadence||'—'}/>
-                  <SmallDial color="#fbbf24" value={fitData.avgVerticalOscillation||8.6} max={12} unit="mm" label="Vert osc" displayValue={fitData.avgVerticalOscillation?fitData.avgVerticalOscillation.toFixed(1):'8.6'}/>
-                </div>
-              )}
-
-              {/* Strength: 5 dials parallel to runs */}
-              {fitData.isStrength&&(()=>{
-                const movSecs=fitData.movingTimeSecs||fitData.durationSecs;
-                const movMins=movSecs?Math.round(movSecs/60):null;
-                const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
-                return(
-                <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
-                  <SmallDial color="#a78bfa" value={movMins} max={90} unit="min" label="Duration" displayValue={fmtHMS(movSecs)}/>
-                  <SmallDial color="#fbbf24" value={fitData.calories||0} max={600} unit="kcal" label="Calories" displayValue={fitData.calories||'—'}/>
-                  <SmallDial color="#f87171" value={fitData.avgHR} max={185} unit="bpm" label="Avg HR" displayValue={fitData.avgHR||'—'}/>
-                  <SmallDial color="#ef4444" value={fitData.maxHR} max={200} unit="bpm" label="Max HR" displayValue={fitData.maxHR||'—'}/>
-                  <SmallDial color="#4ade80" value={fitData.aerobicTrainingEffect||fitData.aerobicTE} max={5} unit="TE" label="Aero TE" displayValue={(fitData.aerobicTrainingEffect||fitData.aerobicTE)?(fitData.aerobicTrainingEffect||fitData.aerobicTE).toFixed(1):'—'}/>
-                </div>
-                );
-              })()}
-
-              {/* Run metrics — 2 rows of 4 tiles */}
-              {fitData.isRun&&<>
-                <div style={divider}/>
-                <div style={subHdr}>Run metrics</div>
-                <div style={{display:'flex',gap:5,marginBottom:5}}>
-                  {[
-                    {label:'duration',val:fitData.duration||'—'},
-                    {label:'max HR',val:fitData.maxHR||'—'},
-                    {label:'elevation',val:fitData.totalAscentFt?`${fitData.totalAscentFt} ft`:'—'},
-                    {label:'calories',val:fitData.calories||'—'},
-                  ].map(m=>(
-                    <div key={m.label} style={miniTile}>
-                      <div style={miniVal}>{m.val}</div>
-                      <div style={miniLbl}>{m.label}</div>
-                    </div>
-                  ))}
+            </div>
+          ):<>
+            {/* Day summary strip — shown when more than one activity GROUP exists
+                (e.g. a run and a strength). Per-group aggregates are already
+                inside each card, so skip this when there's only one group. */}
+            {fitGroups.length>1&&(
+              <div style={{...panelStyle,marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>Today · {fitDataList.length} {fitDataList.length===1?'activity':'activities'}</span>
+                  <span style={{fontSize:10,color:'var(--text-muted)'}}>cumulative</span>
                 </div>
                 <div style={{display:'flex',gap:5}}>
                   {[
-                    {label:'avg power',val:fitData.avgPowerW?`${fitData.avgPowerW} W`:'—'},
-                    {label:'max power',val:fitData.maxPowerW?`${fitData.maxPowerW} W`:'—'},
-                    {label:'aero TE',val:fitData.aerobicTrainingEffect?fitData.aerobicTrainingEffect.toFixed(1):'—'},
-                    {label:'max cad',val:fitData.maxCadence||'—'},
+                    {label:'total distance',val:fitTotals.distanceMi?`${fitTotals.distanceMi.toFixed(2)} mi`:'—'},
+                    {label:'total time',val:fitTotals.durationSecs?fmtDurTotal(fitTotals.durationSecs):'—'},
+                    {label:'total calories',val:fitTotals.calories?`${Math.round(fitTotals.calories)}`:'—'},
+                    {label:'sessions',val:fitDataList.length},
                   ].map(m=>(
                     <div key={m.label} style={miniTile}>
                       <div style={miniVal}>{m.val}</div>
@@ -2597,92 +2792,205 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
 
-                <HydrationRow fd={fitData}/>
-                <ReplenishTracker fd={fitData} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>
+            {fitGroups.map((fd,idx)=>(
+              <div key={`${fd?._groupKey||idx}`} style={{...panelStyle,marginBottom:fitGroups.length>1&&idx<fitGroups.length-1?8:panelStyle.marginBottom}}>
+                {/* Header */}
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                  <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>{fd.isRun?'Run':fd.isStrength?'Strength':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
+                  <span style={{fontSize:10,color:'var(--text-muted)'}}>today</span>
+                </div>
 
-                {/* Vs goal MiniBars */}
-                <div style={divider}/>
-                <div style={subHdr}>Vs Goal</div>
-                <MiniBar label="Pace vs target"
-                  displayValue={fitData.avgPacePerMi?`${fitData.avgPacePerMi} /mi`:'—'}
-                  goalLabel={`Goal: ${profile?.targetRacePace||'9:30'} /mi`}
-                  pct={pacePctFn(fitData.avgPacePerMi,profile?.targetRacePace)}/>
-                <MiniBar label="Weekly miles"
-                  displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||20} mi`}
-                  goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||20} mi/week`}
-                  pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||20)}/>
-              </>}
+                {/* Type badge */}
+                <div style={{display:'flex',gap:5,marginBottom:12,alignItems:'center'}}>
+                  <span style={{fontSize:9,fontWeight:500,padding:'2px 9px',borderRadius:10,background:fd.isRun?'rgba(96,165,250,0.12)':'rgba(167,139,250,0.12)',color:fd.isRun?'#60a5fa':'#a78bfa'}}>
+                    {fd.isRun?'Run':'Strength'} · Garmin FIT{fd._groupCount>1?` · cumulative`:''}
+                  </span>
+                  <span style={{fontSize:9,color:'var(--text-muted)'}}>{fd.date} · {fd.time}</span>
+                </div>
 
-              {/* Strength metrics — parallel to runs: 2 rows of 4 tiles + Vs Goal */}
-              {fitData.isStrength&&<>
-                <div style={divider}/>
-                <div style={subHdr}>Strength metrics</div>
-                {(()=>{
-                  const movSecs=fitData.movingTimeSecs||fitData.durationSecs;
+                {/* 5 dials for runs */}
+                {fd.isRun&&(
+                  <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
+                    <SmallDial color="#60a5fa" value={fd.distanceMi} max={parseFloat(profile?.weeklyRunDistanceTarget)||10} unit="mi" label="Distance" displayValue={fd.distanceMi?fd.distanceMi.toFixed(1):'—'}/>
+                    <SmallDial color="#4ade80" value={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)} max={1} unit="/mi" label="Pace" displayValue={fd.avgPacePerMi||'—'}/>
+                    <SmallDial color="#f87171" value={safeN(fd.avgHR,'avgHR')} max={185} unit="bpm" label="Avg HR" displayValue={safeDisp(fd.avgHR,'avgHR')}/>
+                    <SmallDial color="#a78bfa" value={safeN(fd.avgCadence,'avgCadence')} max={180} unit="spm" label="Cadence" displayValue={safeDisp(fd.avgCadence,'avgCadence')}/>
+                    <SmallDial color="#fbbf24" value={fd.avgVerticalOscillation||8.6} max={12} unit="mm" label="Vert osc" displayValue={fd.avgVerticalOscillation?fd.avgVerticalOscillation.toFixed(1):'8.6'}/>
+                  </div>
+                )}
+
+                {/* Strength: 5 dials parallel to runs */}
+                {fd.isStrength&&(()=>{
+                  const movSecs=fd.movingTimeSecs||fd.durationSecs;
+                  const movMins=movSecs?Math.round(movSecs/60):null;
                   const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
-                  const totalMin=movSecs?Math.round(movSecs/60):null;
-                  const hrMax=fitData.maxHR||parseFloat(profile?.maxHR)||190;
-                  const pct=fitData.avgHR?fitData.avgHR/hrMax:null;
-                  const zone=pct==null?null:pct>=0.9?'Z5':pct>=0.8?'Z4':pct>=0.7?'Z3':pct>=0.6?'Z2':'Z1';
-                  const zoneLabel=totalMin!=null&&zone?(totalMin>=60?`${Math.floor(totalMin/60)}h${totalMin%60}m · ${zone}`:`${totalMin}m · ${zone}`):'—';
-                  return<>
-                <div style={{display:'flex',gap:5,marginBottom:5}}>
-                  {[
-                    {label:'duration',val:fmtHMS(movSecs)},
-                    {label:'sets',val:fitData.setsCount||'—'},
-                    {label:'reps',val:fitData.totalReps||'—'},
-                    {label:'intensity',val:zoneLabel},
-                  ].map(m=>(
-                    <div key={m.label} style={miniTile}>
-                      <div style={miniVal}>{m.val}</div>
-                      <div style={miniLbl}>{m.label}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{display:'flex',gap:5}}>
-                  {[
-                    {label:'body batt',val:fitData.bodyBatteryDrain?`-${fitData.bodyBatteryDrain}`:'—'},
-                    {label:'TSS',val:fitData.trainingStressScore?fitData.trainingStressScore.toFixed(0):'—'},
-                    {label:'aero TE',val:(fitData.aerobicTrainingEffect||fitData.aerobicTE)?(fitData.aerobicTrainingEffect||fitData.aerobicTE).toFixed(1):'—'},
-                    {label:'anaero TE',val:fitData.anaerobicTE?fitData.anaerobicTE.toFixed(1):'—'},
-                  ].map(m=>(
-                    <div key={m.label} style={miniTile}>
-                      <div style={miniVal}>{m.val}</div>
-                      <div style={miniLbl}>{m.label}</div>
-                    </div>
-                  ))}
-                </div>
-                  </>;
+                  return(
+                  <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
+                    <SmallDial color="#a78bfa" value={movMins} max={90} unit="min" label="Duration" displayValue={fmtHMS(movSecs)}/>
+                    <SmallDial color="#fbbf24" value={fd.calories||0} max={600} unit="kcal" label="Calories" displayValue={fd.calories||'—'}/>
+                    <SmallDial color="#f87171" value={safeN(fd.avgHR,'avgHR')} max={185} unit="bpm" label="Avg HR" displayValue={safeDisp(fd.avgHR,'avgHR')}/>
+                    <SmallDial color="#ef4444" value={safeN(fd.maxHR,'maxHR')} max={200} unit="bpm" label="Max HR" displayValue={safeDisp(fd.maxHR,'maxHR')}/>
+                    <SmallDial color="#4ade80" value={fd.aerobicTrainingEffect||fd.aerobicTE} max={5} unit="TE" label="Aero TE" displayValue={(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'}/>
+                  </div>
+                  );
                 })()}
 
-                <HydrationRow fd={fitData}/>
-                <ReplenishTracker fd={fitData} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>
+                {/* Run metrics — 2 rows of 4 tiles */}
+                {fd.isRun&&<>
+                  <div style={divider}/>
+                  <div style={subHdr}>Run metrics</div>
+                  <div style={{display:'flex',gap:5,marginBottom:5}}>
+                    {[
+                      {label:'duration',val:fd.duration||'—'},
+                      {label:'max HR',val:safeDisp(fd.maxHR,'maxHR')},
+                      {label:'elevation',val:fd.totalAscentFt?`${fd.totalAscentFt} ft`:'—'},
+                      {label:'calories',val:fd.calories||'—'},
+                    ].map(m=>(
+                      <div key={m.label} style={miniTile}>
+                        <div style={miniVal}>{m.val}</div>
+                        <div style={miniLbl}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:'flex',gap:5}}>
+                    {[
+                      {label:'avg power',val:fd.avgPowerW?`${fd.avgPowerW} W`:'—'},
+                      {label:'max power',val:fd.maxPowerW?`${fd.maxPowerW} W`:'—'},
+                      {label:'aero TE',val:fd.aerobicTrainingEffect?fd.aerobicTrainingEffect.toFixed(1):'—'},
+                      {label:'max cad',val:fd.maxCadence||'—'},
+                    ].map(m=>(
+                      <div key={m.label} style={miniTile}>
+                        <div style={miniVal}>{m.val}</div>
+                        <div style={miniLbl}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
 
-                {/* Vs goal MiniBars */}
-                {(()=>{
-                  const acts=getUnifiedActivities();
-                  const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
-                  const wkStrength=acts.filter(a=>/strength|weight/i.test(a.activityType||'')&&a.date&&new Date(a.date+'T12:00:00')>=monday);
-                  const wkCount=wkStrength.length;
-                  const wkMins=wkStrength.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
-                  const target=parseFloat(profile?.weeklyStrengthTarget)||2;
-                  const minTarget=parseFloat(profile?.weeklyStrengthMinutesTarget)||60;
-                  return<>
+                  <HydrationRow fd={fd}/>
+                  {idx===fitGroups.length-1&&<ReplenishTracker fd={fd} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>}
+
+                  {/* Vs goal MiniBars — only on last panel to avoid duplicate weekly stats */}
+                  {idx===fitGroups.length-1&&<>
                     <div style={divider}/>
                     <div style={subHdr}>Vs Goal</div>
-                    <MiniBar label="Sessions this week"
-                      displayValue={`${wkCount} / ${target}`}
-                      goalLabel={`Goal: ${target}/week`}
-                      pct={wkCount/target}/>
-                    <MiniBar label="Strength minutes"
-                      displayValue={`${Math.round(wkMins)} / ${minTarget} min`}
-                      goalLabel={`Goal: ${minTarget} min/week`}
-                      pct={wkMins/minTarget}/>
-                  </>;
-                })()}
-              </>}
-            </>}
+                    <MiniBar label="Pace vs target"
+                      displayValue={fd.avgPacePerMi?`${fd.avgPacePerMi} /mi`:'—'}
+                      goalLabel={`Goal: ${profile?.targetRacePace||'9:30'} /mi`}
+                      pct={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)}/>
+                    <MiniBar label="Weekly miles"
+                      displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||20} mi`}
+                      goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||20} mi/week`}
+                      pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||20)}/>
+                  </>}
+                </>}
+
+                {/* Strength metrics — parallel to runs: 2 rows of 4 tiles + Vs Goal */}
+                {fd.isStrength&&<>
+                  <div style={divider}/>
+                  <div style={subHdr}>Strength metrics</div>
+                  {(()=>{
+                    const movSecs=fd.movingTimeSecs||fd.durationSecs;
+                    const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
+                    const totalMin=movSecs?Math.round(movSecs/60):null;
+                    const hrMax=safeN(fd.maxHR,'maxHR')||parseFloat(profile?.maxHR)||190;
+                    const _avgHR=safeN(fd.avgHR,'avgHR');
+                    const pct=_avgHR?_avgHR/hrMax:null;
+                    const zone=pct==null?null:pct>=0.9?'Z5':pct>=0.8?'Z4':pct>=0.7?'Z3':pct>=0.6?'Z2':'Z1';
+                    const zoneLabel=totalMin!=null&&zone?(totalMin>=60?`${Math.floor(totalMin/60)}h${totalMin%60}m · ${zone}`:`${totalMin}m · ${zone}`):'—';
+                    return<>
+                  <div style={{display:'flex',gap:5,marginBottom:5}}>
+                    {[
+                      {label:'duration',val:fmtHMS(movSecs)},
+                      {label:'sets',val:fd.setsCount||'—'},
+                      {label:'reps',val:fd.totalReps||'—'},
+                      {label:'intensity',val:zoneLabel},
+                    ].map(m=>(
+                      <div key={m.label} style={miniTile}>
+                        <div style={miniVal}>{m.val}</div>
+                        <div style={miniLbl}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:'flex',gap:5}}>
+                    {[
+                      {label:'body batt',val:fd.bodyBatteryDrain?`-${fd.bodyBatteryDrain}`:'—'},
+                      {label:'TSS',val:fd.trainingStressScore?fd.trainingStressScore.toFixed(0):'—'},
+                      {label:'aero TE',val:(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'},
+                      {label:'anaero TE',val:fd.anaerobicTE?fd.anaerobicTE.toFixed(1):'—'},
+                    ].map(m=>(
+                      <div key={m.label} style={miniTile}>
+                        <div style={miniVal}>{m.val}</div>
+                        <div style={miniLbl}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                    </>;
+                  })()}
+
+                  <HydrationRow fd={fd}/>
+                  {idx===fitGroups.length-1&&<ReplenishTracker fd={fd} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>}
+
+                  {/* Vs goal MiniBars — only on last panel to avoid duplicate weekly stats */}
+                  {idx===fitGroups.length-1&&(()=>{
+                    const acts=getUnifiedActivities();
+                    const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
+                    const wkStrength=acts.filter(a=>/strength|weight/i.test(a.activityType||'')&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                    const wkCount=wkStrength.length;
+                    const wkMins=wkStrength.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
+                    const target=parseFloat(profile?.weeklyStrengthTarget)||2;
+                    const minTarget=parseFloat(profile?.weeklyStrengthMinutesTarget)||60;
+                    return<>
+                      <div style={divider}/>
+                      <div style={subHdr}>Vs Goal</div>
+                      <MiniBar label="Sessions this week"
+                        displayValue={`${wkCount} / ${target}`}
+                        goalLabel={`Goal: ${target}/week`}
+                        pct={wkCount/target}/>
+                      <MiniBar label="Strength minutes"
+                        displayValue={`${Math.round(wkMins)} / ${minTarget} min`}
+                        goalLabel={`Goal: ${minTarget} min/week`}
+                        pct={wkMins/minTarget}/>
+                    </>;
+                  })()}
+                </>}
+              </div>
+            ))}
+          </>}
+
+          {/* ── Today's Movement (ambient NEAT from Health Connect) ── */}
+          {/* Shows steps + active kcal + total kcal. Populated by
+              syncDailyEnergy() (#89). Always visible on the Activity column
+              so rest/mobility days don't feel empty. */}
+          <div style={{...panelStyle,marginTop:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>Today's Movement</span>
+              <span style={{fontSize:9,color:'var(--text-muted)'}}>
+                {todayMovement?.source==='health_connect'?'Health Connect':todayMovement?'synced':'no data'}
+              </span>
+            </div>
+            {todayMovement?(
+              <div style={{display:'flex',gap:5}}>
+                <div style={miniTile}>
+                  <div style={{...miniVal,color:'#60a5fa'}}>{todayMovement.steps.toLocaleString()}</div>
+                  <div style={miniLbl}>steps</div>
+                </div>
+                <div style={miniTile}>
+                  <div style={{...miniVal,color:'#fbbf24'}}>{todayMovement.active>0?Math.round(todayMovement.active):'—'}</div>
+                  <div style={miniLbl}>active kcal</div>
+                </div>
+                <div style={miniTile}>
+                  <div style={{...miniVal,color:'#4ade80'}}>{todayMovement.total>0?Math.round(todayMovement.total):'—'}</div>
+                  <div style={miniLbl}>total kcal</div>
+                </div>
+              </div>
+            ):(
+              <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center',padding:'6px 0'}}>
+                Sync your Android phone to populate daily movement.
+              </div>
+            )}
           </div>
         </div>}
 
@@ -3485,7 +3793,7 @@ function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
       const last7Sleep=sleepData.slice(0,7).filter(s=>s.durationMinutes);
       const last7HRV=hrvData.slice(0,7).filter(h=>h.overnightHRV);
       const ctx={
-        date:new Date().toISOString().slice(0,10),
+        date:td(),
         ytd:{runs:ytdRunsLocal.length,miles:Math.round(ytdMi*10)/10,goalMi:profile?.annualRunDistanceTarget||800},
         weekly:{
           avgMi:ytdRunsLocal.length?Math.round((ytdMi/((Date.now()-new Date(new Date().getFullYear(),0,1))/86400000/7))*10)/10:0,
@@ -3551,7 +3859,7 @@ Structure:
   const nextRaceEmpty=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
   if(!activities.length&&!cronometer.length&&!weightData.length){
     if(isMobile){
-      return <MobileHome data={data} onOpenTab={setTab} focusItems={[]} weeklyStats={[]} avgWeeklyMi={0} avgWeeklyHrsTotal={0} avgPaceSecs={null} goalPaceSecs={570} fmtPace={s=>s?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`:'—'} totalMi={0} annualRunTarget={800} totalSessions={0} thisWeek={{mi:0,hrs:0,sessions:0,runs:0}} sortedSleep={[]} hrvData={hrvData} sortedW={[]} currentWeight={null} currentBF={null} latestSleepScore={null} avgHRV30={null} recentNut={[]} avgProtein={null} latestRHR={null} nextRace={null} initialView={mobileInitView} />;
+      return <MobileHome data={data} onOpenTab={setTab} initialView={mobileInitView} />;
     }
     return(
       <div style={S.sec}>
@@ -3648,7 +3956,7 @@ Structure:
     const days=[];
     for(let i=0;i<30;i++){
       const d=new Date();d.setDate(today.getDate()-i);
-      const ds=d.toISOString().slice(0,10);
+      const ds=td(d);
       const t=nutDailyTotals(ds);
       if(t.calories>0||t.protein>0) days.push({date:ds,...t});
     }
@@ -3697,6 +4005,11 @@ Structure:
   const currentBMI=latestW?.bmi;
   const currentLean=latestW?.skeletalMuscleMassLbs;
   const weightDelta=currentWeight&&prevW?.weightLbs?(currentWeight-prevW.weightLbs).toFixed(1):null;
+
+  // Today's protein (single day, not average)
+  const todayProtein=(()=>{const t=nutDailyTotals(td(today));return t.protein||0;})();
+  // This week's strength sessions (actual count)
+  const thisWeekStrSessions=(()=>{try{const d=new Date(today);const dow=d.getDay();const off=dow===0?6:dow-1;const wkStart=new Date(d);wkStart.setDate(d.getDate()-off);wkStart.setHours(0,0,0,0);const wkEnd=new Date(wkStart);wkEnd.setDate(wkStart.getDate()+7);return activities.filter(a=>{if(!a.date)return false;const ad=new Date(a.date+'T12:00:00');return ad>=wkStart&&ad<wkEnd&&!a.activityType?.toLowerCase().includes('run');}).length;}catch{return 0;}})();
 
   // Avg RPE from daily logs
   const rpeEntries=dailyLogs.filter(l=>l.rpe!=null);
@@ -3826,7 +4139,7 @@ Structure:
 
   // On mobile, render MobileHome (Start screen) — TrainingTab runs for tab==='training'
   if(isMobile){
-    return <MobileHome data={data} onOpenTab={setTab} focusItems={focusItems} weeklyStats={weeklyStats} avgWeeklyMi={avgWeeklyMi} avgWeeklyHrsTotal={avgWeeklyHrsTotal} avgPaceSecs={avgPaceSecs} goalPaceSecs={goalPaceSecs} fmtPace={fmtPace} totalMi={totalMi} annualRunTarget={annualRunTarget} totalSessions={totalSessions} thisWeek={thisWeekData} sortedSleep={sortedSleep} hrvData={hrvData} sortedW={sortedW} currentWeight={currentWeight} currentBF={currentBF} latestSleepScore={latestSleepScore} avgHRV30={avgHRV30} recentNut={recentNut} avgProtein={avgProtein} latestRHR={latestRHR} nextRace={nextRaceMobile} initialView={mobileInitView} />;
+    return <MobileHome data={data} onOpenTab={setTab} initialView={mobileInitView} />;
   }
 
   return(
@@ -4121,7 +4434,7 @@ function getMilestones(raceDate){
     {weeks:1, label:"Race week — reduce intensity"},
   ].map(m=>{
     const mDate=new Date(rd);mDate.setDate(mDate.getDate()-m.weeks*7);
-    return{...m,date:mDate.toISOString().split("T")[0],passed:now2>=mDate};
+    return{...m,date:`${mDate.getFullYear()}-${String(mDate.getMonth()+1).padStart(2,'0')}-${String(mDate.getDate()).padStart(2,'0')}`,passed:now2>=mDate};
   });
 }
 function getTrainingProgress(raceDate){
@@ -4153,7 +4466,22 @@ function RacesTab({showToast}){
   const[lastSyncTime,setLastSyncTime]=useState(()=>localStorage.getItem('arnold:calendar-last-sync')||null);
 
   useEffect(()=>{
-    getRaces().then(r=>{setRaces(r);setLoading(false);});
+    getRaces().then(r=>{
+      // Deduplicate by name+date (old sync merges could create copies)
+      const seen=new Map();
+      for(const race of r){
+        const key=`${(race.name||'').trim().toLowerCase()}|${race.date}`;
+        if(!seen.has(key))seen.set(key,race);
+        else{
+          // Keep the richer entry (more fields populated)
+          const prev=seen.get(key);
+          seen.set(key,{...prev,...race});
+        }
+      }
+      const deduped=[...seen.values()];
+      if(deduped.length!==r.length)saveRaces(deduped); // persist cleanup
+      setRaces(deduped);setLoading(false);
+    });
   },[]);
 
   const syncICS=async()=>{
@@ -4173,7 +4501,6 @@ function RacesTab({showToast}){
       }
       const merged=[...byKey.values()].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
       await saveRaces(merged);
-      storage.set('races',merged);
       console.log('[ARNOLD] ICS sync: parsed',events.length,'events, merged total:',merged.length,merged);
       setRaces(merged);
       const ts=new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
@@ -4643,6 +4970,71 @@ function ProfileSettings({data,persist,showToast}){
         <BackupPanel showToast={showToast}/>
 
         <div style={{height:1,background:C.b,margin:"8px 0"}}/>
+        <BackupStatusPanel/>
+
+        {/* ── BULK HISTORICAL IMPORT ───────────────────────────────────
+            Rescued from the `{false && <>` legacy-hidden block so
+            users can actually run it. Loads the 5 CSVs from
+            public/data-imports/ through the same per-format parsers
+            used by the per-file import flow. */}
+        <div style={{height:1,background:C.b,margin:"8px 0"}}/>
+        <div style={S.lg}>
+          <div style={S.gt}>⇪ Bulk Historical Import</div>
+          <div style={{fontSize:11,color:C.m,lineHeight:1.5,marginBottom:8}}>
+            Loads all CSVs from <code style={{color:C.ta}}>public/data-imports/</code>: Activities, Cronometer, HRV, Sleep, Weight. Replaces current data on each key — run once after dropping fresh exports.
+          </div>
+          <button
+            style={{...S.sb,background:C.ad,borderColor:C.ab2,color:C.ta}}
+            onClick={async()=>{
+              // Pre-op snapshot: rollback point in case a parser overwrites
+              // good data with partial or malformed CSV rows.
+              try { snapshotBeforeOp('bulk-import'); } catch(e){ console.warn('pre-op snapshot failed',e); }
+              const strip=t=>t.replace(/^\uFEFF/,'');
+              const load=async(name)=>{
+                const r=await fetch(`/data-imports/${name}`);
+                if(!r.ok)throw new Error(`${name}: HTTP ${r.status}`);
+                return strip(await r.text());
+              };
+              const report=[];
+              try{
+                try{
+                  const parsed=parseActivitiesCSV(await load('Activities.csv'));
+                  storage.set('activities',parsed);
+                  report.push(`✓ Activities: ${parsed.length} rows`);
+                }catch(e){report.push(`✗ Activities: ${e.message}`);}
+                try{
+                  const parsed=parseCronometerCSV(await load('Cronometer-dailysummary.csv'));
+                  storage.set('cronometer',parsed);
+                  report.push(`✓ Cronometer: ${parsed.length} rows`);
+                }catch(e){report.push(`✗ Cronometer: ${e.message}`);}
+                try{
+                  const parsed=parseHRVCSV(await load('HRV Status.csv'));
+                  storage.set('hrv',parsed);
+                  report.push(`✓ HRV: ${parsed.length} rows`);
+                }catch(e){report.push(`✗ HRV: ${e.message}`);}
+                try{
+                  const parsed=parseSleepCSV(await load('Sleep.csv'));
+                  storage.set('sleep',parsed);
+                  report.push(`✓ Sleep: ${parsed.length} rows`);
+                }catch(e){report.push(`✗ Sleep: ${e.message}`);}
+                try{
+                  const parsed=parseWeightCSV(await load('Weight.csv'));
+                  storage.set('weight',parsed);
+                  report.push(`✓ Weight: ${parsed.length} rows`);
+                }catch(e){report.push(`✗ Weight: ${e.message}`);}
+                showToast&&showToast(report.join(" · "));
+                console.log("[Bulk Import]\n"+report.join("\n"));
+                alert("Bulk import complete:\n\n"+report.join("\n")+"\n\nReloading to refresh all tabs…");
+                window.location.reload();
+              }catch(e){
+                showToast&&showToast("Bulk import failed: "+e.message);
+                alert("Bulk import failed: "+e.message);
+              }
+            }}
+          >⇪ Load Historical CSVs</button>
+        </div>
+
+        <div style={{height:1,background:C.b,margin:"8px 0"}}/>
         <SyncPanel showToast={showToast}/>
 
         <div style={{height:1,background:C.b,margin:"8px 0"}}/>
@@ -4650,7 +5042,15 @@ function ProfileSettings({data,persist,showToast}){
 
         <div style={{height:1,background:C.b,margin:"4px 0"}}/>
         <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Reset Arnold</div>
-        <button style={S.db} onClick={()=>{if(window.confirm("This will permanently delete all your data. Are you sure?"))persist(DD).then(()=>showToast("\u2713 Arnold reset"));}}>Reset All Data</button>
+        <button style={S.db} onClick={()=>{
+          // Double gate: (1) typed-word confirmation so it can't be done with a
+          // muscle-memory Enter, (2) pre-op snapshot so even a confirmed reset
+          // is recoverable from the pre-op ring.
+          const typed = window.prompt('This will permanently delete ALL your Arnold data.\n\nType ARNOLD to confirm:');
+          if (typed !== 'ARNOLD') { showToast('\u2717 Reset cancelled'); return; }
+          try { snapshotBeforeOp('reset-all'); } catch(e){ console.warn('pre-op snapshot failed',e); }
+          persist(DD).then(()=>showToast("\u2713 Arnold reset — pre-op snapshot saved if you need to roll back"));
+        }}>Reset All Data</button>
       </div>
 
       {/* legacy block hidden */}

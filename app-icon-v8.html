@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Icon v8</title>
+<style>
+  body { background: #0b0c12; color: #fff; font-family: 'Inter', system-ui, sans-serif; margin: 0; padding: 32px; }
+  .label { font-size: 10px; color: rgba(255,255,255,0.3); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 16px; }
+  .row { display: flex; gap: 36px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 44px; }
+  .preview { text-align: center; }
+  .preview .cap { font-size: 9px; color: rgba(255,255,255,0.3); margin-top: 8px; }
+  .homescreen {
+    margin: 0 auto; max-width: 320px; padding: 28px 20px;
+    background: linear-gradient(160deg, #777, #8a8a8a, #6e6e6e);
+    border-radius: 22px;
+  }
+  .hs-row { display: flex; justify-content: space-around; }
+  .hs-icon { text-align: center; }
+  .hs-icon .hs-label { font-size: 8px; color: rgba(255,255,255,0.85); margin-top: 5px; font-weight: 500; }
+  .hs-placeholder { width: 52px; height: 52px; border-radius: 13px; }
+</style>
+</head>
+<body>
+
+<p class="label">Large preview</p>
+<div class="row">
+
+  <div class="preview">
+    <svg width="220" height="220" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="arcG" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0%" stop-color="#5ec2d4" />
+          <stop offset="50%" stop-color="#6babdf" />
+          <stop offset="100%" stop-color="#7bd0e8" />
+        </linearGradient>
+        <filter id="arcGlow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="b" />
+          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <filter id="bloom" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="5" />
+        </filter>
+        <radialGradient id="amb" cx="50%" cy="50%" r="32%">
+          <stop offset="0%" stop-color="#6babdf" stop-opacity="0.04" />
+          <stop offset="100%" stop-color="#6babdf" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+
+      <!-- Background -->
+      <rect width="128" height="128" rx="28" fill="#0e1019" />
+      <circle cx="64" cy="64" r="44" fill="url(#amb)" />
+
+      <!-- Faint track -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.02)" stroke-width="4" />
+
+      <!-- ═══ ARC: 8pm → bottom → 2pm (lower half, 180°) ═══ -->
+      <!-- 8 o'clock = SVG 150° → (27.63, 85) -->
+      <!-- 2 o'clock = SVG 330° → (100.37, 43) -->
+      <!-- CCW through bottom = sweep-flag 0 -->
+
+      <!-- Soft bloom behind -->
+      <path d="M 27.63 85 A 42 42 0 0 0 100.37 43"
+            fill="none" stroke="#6babdf" stroke-width="8" stroke-linecap="round"
+            opacity="0.12" filter="url(#bloom)" />
+
+      <!-- Main glowing arc -->
+      <path d="M 27.63 85 A 42 42 0 0 0 100.37 43"
+            fill="none" stroke="url(#arcG)" stroke-width="4.2" stroke-linecap="round"
+            filter="url(#arcGlow)" />
+
+      <!-- Endpoint glow dots -->
+      <circle cx="27.63" cy="85" r="2.5" fill="#5ec2d4" opacity="0.2" />
+      <circle cx="100.37" cy="43" r="2.5" fill="#7bd0e8" opacity="0.2" />
+
+      <!-- ═══ A MONOGRAM ═══ -->
+      <text x="64" y="72" text-anchor="middle"
+            fill="rgba(255,255,255,0.95)" font-size="33" font-weight="800"
+            font-family="Inter, system-ui, sans-serif" letter-spacing="-0.5">A</text>
+
+      <!-- ═══ 4 ICONS: 2pm → top → 8pm (upper half, completing the circle) ═══ -->
+      <!-- Evenly at SVG: 294°, 258°, 222°, 186° -->
+
+      <!-- Run (forward arrow) at 294° — near 1 o'clock -->
+      <!-- (81.1, 25.6) -->
+      <g transform="translate(81.1, 25.6) scale(0.8)">
+        <path d="M-3.5 0h7" fill="none" stroke="#6babdf" stroke-width="1.9" stroke-linecap="round" />
+        <path d="M1.8 -2.6l3.2 2.6-3.2 2.6" fill="none" stroke="#6babdf" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </g>
+
+      <!-- Strength (power stack) at 258° — near 11 o'clock -->
+      <!-- (55.3, 22.9) -->
+      <g transform="translate(55.3, 22.9) scale(0.8)">
+        <path d="M-4 2.5l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M-4 -0.2l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
+        <path d="M-4 -2.8l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity="0.25" />
+      </g>
+
+      <!-- Recovery (battery) at 222° — near 9:30 -->
+      <!-- (32.8, 35.9) -->
+      <g transform="translate(32.8, 35.9) scale(0.8)">
+        <rect x="-5.2" y="-3.2" width="9" height="6.4" rx="1.4" fill="none" stroke="#6bcf9a" stroke-width="1.4" />
+        <path d="M3.8 -1.2h1.2a0.7 0.7 0 0 1 0.7 0.7v1a0.7 0.7 0 0 1-0.7 0.7H3.8" fill="none" stroke="#6bcf9a" stroke-width="1.2" />
+        <line x1="-2.2" y1="-1.4" x2="-2.2" y2="1.4" stroke="#6bcf9a" stroke-width="1.6" stroke-linecap="round" />
+        <line x1="0.2" y1="-1.4" x2="0.2" y2="1.4" stroke="#6bcf9a" stroke-width="1.3" stroke-linecap="round" opacity="0.4" />
+      </g>
+
+      <!-- Body (person) at 186° — near 8:30 -->
+      <!-- (22.2, 59.6) -->
+      <g transform="translate(22.2, 59.6) scale(0.8)">
+        <circle cx="0" cy="-3" r="2.3" fill="none" stroke="#e0b45e" stroke-width="1.5" />
+        <path d="M-4.2 4.5v-0.8a4.2 4.2 0 0 1 8.4 0v0.8" fill="none" stroke="#e0b45e" stroke-width="1.5" stroke-linecap="round" />
+      </g>
+
+    </svg>
+    <div class="cap">220px</div>
+  </div>
+
+  <div class="preview">
+    <svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="arcG2" x1="0" y1="1" x2="1" y2="0"><stop offset="0%" stop-color="#5ec2d4" /><stop offset="50%" stop-color="#6babdf" /><stop offset="100%" stop-color="#7bd0e8" /></linearGradient>
+        <filter id="g2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+        <filter id="b2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur in="SourceGraphic" stdDeviation="4" /></filter>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="#0e1019" />
+      <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.02)" stroke-width="4" />
+      <path d="M 27.63 85 A 42 42 0 0 0 100.37 43" fill="none" stroke="#6babdf" stroke-width="7" stroke-linecap="round" opacity="0.1" filter="url(#b2)" />
+      <path d="M 27.63 85 A 42 42 0 0 0 100.37 43" fill="none" stroke="url(#arcG2)" stroke-width="4.2" stroke-linecap="round" filter="url(#g2)" />
+      <text x="64" y="72" text-anchor="middle" fill="rgba(255,255,255,0.95)" font-size="33" font-weight="800" font-family="Inter, system-ui" letter-spacing="-0.5">A</text>
+      <g transform="translate(81.1, 25.6) scale(0.8)"><path d="M-3.5 0h7" fill="none" stroke="#6babdf" stroke-width="1.9" stroke-linecap="round" /><path d="M1.8 -2.6l3.2 2.6-3.2 2.6" fill="none" stroke="#6babdf" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></g>
+      <g transform="translate(55.3, 22.9) scale(0.8)"><path d="M-4 2.5l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /><path d="M-4 -0.2l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" /><path d="M-4 -2.8l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity="0.25" /></g>
+      <g transform="translate(32.8, 35.9) scale(0.8)"><rect x="-5.2" y="-3.2" width="9" height="6.4" rx="1.4" fill="none" stroke="#6bcf9a" stroke-width="1.4" /><line x1="-2.2" y1="-1.4" x2="-2.2" y2="1.4" stroke="#6bcf9a" stroke-width="1.6" stroke-linecap="round" /><line x1="0.2" y1="-1.4" x2="0.2" y2="1.4" stroke="#6bcf9a" stroke-width="1.3" stroke-linecap="round" opacity="0.4" /></g>
+      <g transform="translate(22.2, 59.6) scale(0.8)"><circle cx="0" cy="-3" r="2.3" fill="none" stroke="#e0b45e" stroke-width="1.5" /><path d="M-4.2 4.5v-0.8a4.2 4.2 0 0 1 8.4 0v0.8" fill="none" stroke="#e0b45e" stroke-width="1.5" stroke-linecap="round" /></g>
+    </svg>
+    <div class="cap">128px</div>
+  </div>
+
+</div>
+
+<p class="label">Home screen — 52px</p>
+<div class="homescreen">
+  <div class="hs-row">
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <defs>
+            <linearGradient id="arcG3" x1="0" y1="1" x2="1" y2="0"><stop offset="0%" stop-color="#5ec2d4" /><stop offset="50%" stop-color="#6babdf" /><stop offset="100%" stop-color="#7bd0e8" /></linearGradient>
+            <filter id="g3" x="-15%" y="-15%" width="130%" height="130%"><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+          </defs>
+          <rect width="128" height="128" rx="28" fill="#0e1019" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.025)" stroke-width="5.5" />
+          <path d="M 27.63 85 A 42 42 0 0 0 100.37 43" fill="none" stroke="#6babdf" stroke-width="10" stroke-linecap="round" opacity="0.08" />
+          <path d="M 27.63 85 A 42 42 0 0 0 100.37 43" fill="none" stroke="url(#arcG3)" stroke-width="5.5" stroke-linecap="round" filter="url(#g3)" />
+          <text x="64" y="72" text-anchor="middle" fill="rgba(255,255,255,0.95)" font-size="35" font-weight="800" font-family="Inter, system-ui" letter-spacing="-0.5">A</text>
+          <g transform="translate(81.1, 25.6)"><path d="M-3.5 0h7" fill="none" stroke="#6babdf" stroke-width="2.4" stroke-linecap="round" /><path d="M1.8 -2.6l3.2 2.6-3.2 2.6" fill="none" stroke="#6babdf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></g>
+          <g transform="translate(55.3, 22.9)"><path d="M-4 2.5l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><path d="M-4 -0.2l4-3 4 2.5" fill="none" stroke="#ab9ed4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" /></g>
+          <g transform="translate(32.8, 35.9)"><rect x="-5.2" y="-3.2" width="9" height="6.4" rx="1.4" fill="none" stroke="#6bcf9a" stroke-width="1.8" /><line x1="-2.2" y1="-1.4" x2="-2.2" y2="1.4" stroke="#6bcf9a" stroke-width="2" stroke-linecap="round" /></g>
+          <g transform="translate(22.2, 59.6)"><circle cx="0" cy="-3" r="2.5" fill="none" stroke="#e0b45e" stroke-width="1.8" /><path d="M-4.2 4.5v-0.8a4.2 4.2 0 0 1 8.4 0v0.8" fill="none" stroke="#e0b45e" stroke-width="1.8" stroke-linecap="round" /></g>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold</div>
+    </div>
+    <div class="hs-icon"><div class="hs-placeholder" style="background: linear-gradient(135deg, #4285F4, #34A853); border-radius: 13px;"></div><div class="hs-label">Gemini</div></div>
+    <div class="hs-icon"><div class="hs-placeholder" style="background: #1a1a1a; border-radius: 13px;"></div><div class="hs-label">GitHub</div></div>
+    <div class="hs-icon"><div class="hs-placeholder" style="background: linear-gradient(135deg, #FF6B35, #FF4500); border-radius: 13px;"></div><div class="hs-label">Strava</div></div>
+  </div>
+</div>
+
+</body>
+</html>

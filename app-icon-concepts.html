@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold — App Icon Concepts</title>
+<style>
+  body { background: #0b0c12; color: #fff; font-family: 'Inter', -apple-system, system-ui, sans-serif; margin: 0; padding: 24px 16px; }
+  h1 { font-size: 16px; margin-bottom: 3px; font-weight: 700; }
+  .sub { font-size: 10px; color: rgba(255,255,255,0.3); margin-bottom: 30px; }
+  h2 { font-size: 11px; color: rgba(255,255,255,0.4); margin: 32px 0 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  .grid { display: flex; gap: 16px; flex-wrap: wrap; }
+  .card {
+    width: 110px; text-align: center; padding: 16px 8px 12px; border-radius: 14px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  }
+  .card .name { font-size: 9px; color: rgba(255,255,255,0.5); margin-top: 10px; font-weight: 700; letter-spacing: 0.04em; }
+  .card .desc { font-size: 7px; color: rgba(255,255,255,0.25); margin-top: 3px; line-height: 1.4; }
+  .icon-wrap {
+    width: 72px; height: 72px; border-radius: 18px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    position: relative; overflow: hidden;
+  }
+
+  /* Home screen sim */
+  .homescreen {
+    margin: 40px auto; max-width: 340px; padding: 30px 20px;
+    background: linear-gradient(160deg, #0d0e15, #0f1018, #0b0c12);
+    border-radius: 20px; border: 1px solid rgba(255,255,255,0.06);
+  }
+  .hs-row { display: flex; justify-content: space-around; margin-bottom: 24px; }
+  .hs-icon { text-align: center; }
+  .hs-icon .hs-label { font-size: 8px; color: rgba(255,255,255,0.55); margin-top: 5px; font-weight: 500; }
+  .hs-placeholder {
+    width: 52px; height: 52px; border-radius: 13px; background: rgba(255,255,255,0.06);
+  }
+</style>
+</head>
+<body>
+
+<h1>Arnold — App Icon Concepts</h1>
+<p class="sub">Dark premium aesthetic matching the dashboard style</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Concept A — Readiness Ring</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.3); margin: -6px 0 12px;">The signature readiness score ring as the icon identity</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #0e1019, #0b0c14); border: 1px solid rgba(107,171,223,0.12);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="rg1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <circle cx="26" cy="26" r="20" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="3.5" />
+        <circle cx="26" cy="26" r="20" fill="none" stroke="url(#rg1)" stroke-width="3.5"
+          stroke-dasharray="94.25" stroke-dashoffset="23.5" stroke-linecap="round"
+          transform="rotate(-90 26 26)" />
+        <text x="26" y="30" text-anchor="middle" fill="white" font-size="16" font-weight="800" font-family="Inter, system-ui">A</text>
+      </svg>
+    </div>
+    <div class="name">A1: Ring + Letter</div>
+    <div class="desc">Blue-cyan gradient ring with A monogram</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #0e1019, #0b0c14); border: 1px solid rgba(107,171,223,0.12);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="rg2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="50%" stop-color="#6fd4e4" />
+            <stop offset="100%" stop-color="#6bcf9a" />
+          </linearGradient>
+        </defs>
+        <circle cx="26" cy="26" r="20" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="3.5" />
+        <circle cx="26" cy="26" r="20" fill="none" stroke="url(#rg2)" stroke-width="3.5"
+          stroke-dasharray="94.25" stroke-dashoffset="18.85" stroke-linecap="round"
+          transform="rotate(-90 26 26)" />
+        <text x="26" y="31" text-anchor="middle" fill="white" font-size="18" font-weight="800" font-family="Inter, system-ui">75</text>
+      </svg>
+    </div>
+    <div class="name">A2: Ring + Score</div>
+    <div class="desc">Tri-color gradient, shows a score number</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #0e1019, #12131d); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="rg3" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <circle cx="26" cy="26" r="21" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="3" />
+        <circle cx="26" cy="26" r="21" fill="none" stroke="url(#rg3)" stroke-width="3"
+          stroke-dasharray="131.95" stroke-dashoffset="33" stroke-linecap="round"
+          transform="rotate(-90 26 26)" />
+        <circle cx="26" cy="26" r="13" fill="none" stroke="rgba(171,158,212,0.4)" stroke-width="2.5"
+          stroke-dasharray="81.68" stroke-dashoffset="32.67" stroke-linecap="round"
+          transform="rotate(-90 26 26)" />
+        <circle cx="26" cy="26" r="6" fill="none" stroke="rgba(107,207,154,0.5)" stroke-width="2"
+          stroke-dasharray="37.7" stroke-dashoffset="15" stroke-linecap="round"
+          transform="rotate(-90 26 26)" />
+      </svg>
+    </div>
+    <div class="name">A3: Triple Ring</div>
+    <div class="desc">Three concentric arcs — run, strength, recovery</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Concept B — Bold Monogram</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.3); margin: -6px 0 12px;">Strong typographic "A" with subtle tech accents</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="mg1" x1="0" y1="0" x2="0.5" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <!-- Geometric A -->
+        <path d="M26 8L12 42h6l3-8h10l3 8h6z" fill="url(#mg1)" opacity="0.9" />
+        <path d="M21 30l5-14 5 14" fill="#0c0d15" />
+      </svg>
+    </div>
+    <div class="name">B1: Gradient A</div>
+    <div class="desc">Bold geometric A with blue-cyan fill</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="mg2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <!-- Outline A with glow -->
+        <path d="M26 10L13 40h5l3-7.5h10l3 7.5h5z" fill="none" stroke="url(#mg2)" stroke-width="2" stroke-linejoin="round" />
+        <line x1="19" y1="30" x2="33" y2="30" stroke="url(#mg2)" stroke-width="1.5" />
+        <!-- Subtle pulse line through A -->
+        <path d="M8 26h8l3-5 3 10 3-5h8" stroke="rgba(107,207,154,0.35)" stroke-width="1.2" fill="none" stroke-linecap="round" />
+      </svg>
+    </div>
+    <div class="name">B2: A + Pulse</div>
+    <div class="desc">Outline A with heartbeat line through it</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="mg3" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#ab9ed4" />
+          </linearGradient>
+        </defs>
+        <text x="26" y="36" text-anchor="middle" fill="url(#mg3)" font-size="32" font-weight="900" font-family="Inter, system-ui" letter-spacing="-1">A</text>
+        <!-- Corner accent lines -->
+        <line x1="8" y1="8" x2="14" y2="8" stroke="#6babdf" stroke-width="1.5" opacity="0.4" stroke-linecap="round" />
+        <line x1="8" y1="8" x2="8" y2="14" stroke="#6babdf" stroke-width="1.5" opacity="0.4" stroke-linecap="round" />
+        <line x1="44" y1="44" x2="38" y2="44" stroke="#ab9ed4" stroke-width="1.5" opacity="0.4" stroke-linecap="round" />
+        <line x1="44" y1="44" x2="44" y2="38" stroke="#ab9ed4" stroke-width="1.5" opacity="0.4" stroke-linecap="round" />
+      </svg>
+    </div>
+    <div class="name">B3: A + Brackets</div>
+    <div class="desc">Bold A with tech corner brackets</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Concept C — Shield / Crest</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.3); margin: -6px 0 12px;">Premium crest with the A mark — sport meets luxury</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(150deg, #10111a, #0c0d16); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="sh1" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgba(107,171,223,0.15)" />
+            <stop offset="100%" stop-color="rgba(107,171,223,0.02)" />
+          </linearGradient>
+          <linearGradient id="sh1s" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <path d="M26 5L8 13v10c0 10 6 18 18 22 12-4 18-12 18-22V13z" fill="url(#sh1)" stroke="url(#sh1s)" stroke-width="1.5" />
+        <text x="26" y="32" text-anchor="middle" fill="white" font-size="18" font-weight="800" font-family="Inter, system-ui">A</text>
+      </svg>
+    </div>
+    <div class="name">C1: Shield + A</div>
+    <div class="desc">Gradient shield with white A</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(150deg, #10111a, #0c0d16); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="sh2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="50%" stop-color="#6fd4e4" />
+            <stop offset="100%" stop-color="#6bcf9a" />
+          </linearGradient>
+        </defs>
+        <path d="M26 5L8 13v10c0 10 6 18 18 22 12-4 18-12 18-22V13z" fill="none" stroke="url(#sh2)" stroke-width="2" />
+        <!-- Ring inside shield -->
+        <circle cx="26" cy="25" r="10" fill="none" stroke="url(#sh2)" stroke-width="2"
+          stroke-dasharray="47.12" stroke-dashoffset="11.78" stroke-linecap="round"
+          transform="rotate(-90 26 25)" />
+        <text x="26" y="29" text-anchor="middle" fill="white" font-size="12" font-weight="800" font-family="Inter, system-ui">A</text>
+      </svg>
+    </div>
+    <div class="name">C2: Shield + Ring</div>
+    <div class="desc">Shield outline with readiness arc inside</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Concept D — Hex / Abstract</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.3); margin: -6px 0 12px;">Geometric shapes — modern, tech-forward</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="hx1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="rgba(107,171,223,0.12)" />
+            <stop offset="100%" stop-color="rgba(107,207,154,0.06)" />
+          </linearGradient>
+          <linearGradient id="hx1s" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6bcf9a" />
+          </linearGradient>
+        </defs>
+        <polygon points="26,4 46,15 46,37 26,48 6,37 6,15" fill="url(#hx1)" stroke="url(#hx1s)" stroke-width="1.5" />
+        <text x="26" y="32" text-anchor="middle" fill="white" font-size="20" font-weight="800" font-family="Inter, system-ui">A</text>
+      </svg>
+    </div>
+    <div class="name">D1: Hex + A</div>
+    <div class="desc">Hexagon with gradient border</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="hx2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <!-- Layered diamonds -->
+        <rect x="13" y="13" width="26" height="26" rx="4" transform="rotate(45 26 26)" fill="none" stroke="url(#hx2)" stroke-width="1.8" />
+        <rect x="17.5" y="17.5" width="17" height="17" rx="2" transform="rotate(45 26 26)" fill="rgba(107,171,223,0.06)" stroke="rgba(107,171,223,0.25)" stroke-width="1.2" />
+        <text x="26" y="31" text-anchor="middle" fill="white" font-size="14" font-weight="800" font-family="Inter, system-ui">A</text>
+      </svg>
+    </div>
+    <div class="name">D2: Diamond Nest</div>
+    <div class="desc">Nested rotated squares — depth</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="hx3" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="40%" stop-color="#ab9ed4" />
+            <stop offset="100%" stop-color="#e088ab" />
+          </linearGradient>
+        </defs>
+        <!-- Abstract A made of geometric shapes -->
+        <path d="M26 6L14 44" stroke="url(#hx3)" stroke-width="3.5" stroke-linecap="round" />
+        <path d="M26 6L38 44" stroke="url(#hx3)" stroke-width="3.5" stroke-linecap="round" />
+        <line x1="18" y1="32" x2="34" y2="32" stroke="url(#hx3)" stroke-width="2.5" stroke-linecap="round" />
+        <!-- Glow dot at peak -->
+        <circle cx="26" cy="6" r="2.5" fill="#6babdf" opacity="0.6" />
+      </svg>
+    </div>
+    <div class="name">D3: Neon A</div>
+    <div class="desc">Stroke-only A with gradient glow</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Concept E — Minimal Luxury</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.3); margin: -6px 0 12px;">Ultra-clean, lets the dark background breathe</p>
+<div class="grid">
+
+  <div class="card">
+    <div class="icon-wrap" style="background: #0e0f17; border: 1px solid rgba(255,255,255,0.08);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <text x="26" y="34" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="24" font-weight="300" font-family="Inter, system-ui" letter-spacing="-0.5">Arnold</text>
+        <line x1="10" y1="38" x2="42" y2="38" stroke="#6babdf" stroke-width="1.5" opacity="0.5" stroke-linecap="round" />
+      </svg>
+    </div>
+    <div class="name">E1: Wordmark</div>
+    <div class="desc">Light weight text + blue accent line</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: #0e0f17; border: 1px solid rgba(255,255,255,0.08);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="e2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <circle cx="26" cy="26" r="22" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
+        <text x="26" y="33" text-anchor="middle" fill="url(#e2)" font-size="26" font-weight="200" font-family="Inter, system-ui">A</text>
+      </svg>
+    </div>
+    <div class="name">E2: Thin A + Ring</div>
+    <div class="desc">Ultra-light A inside subtle circle</div>
+  </div>
+
+  <div class="card">
+    <div class="icon-wrap" style="background: linear-gradient(160deg, #0e0f18, #0b0c13); border: 1px solid rgba(107,171,223,0.08);">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <defs>
+          <linearGradient id="e3" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6babdf" />
+            <stop offset="100%" stop-color="#6fd4e4" />
+          </linearGradient>
+        </defs>
+        <!-- Just the crossbar of the A, stylized -->
+        <line x1="10" y1="26" x2="42" y2="26" stroke="url(#e3)" stroke-width="2" stroke-linecap="round" />
+        <!-- Two converging lines above = peak of A -->
+        <line x1="26" y1="8" x2="14" y2="26" stroke="url(#e3)" stroke-width="1.8" stroke-linecap="round" />
+        <line x1="26" y1="8" x2="38" y2="26" stroke="url(#e3)" stroke-width="1.8" stroke-linecap="round" />
+        <!-- Legs fade out below -->
+        <line x1="14" y1="26" x2="8" y2="44" stroke="#6babdf" stroke-width="1.5" stroke-linecap="round" opacity="0.3" />
+        <line x1="38" y1="26" x2="44" y2="44" stroke="#6fd4e4" stroke-width="1.5" stroke-linecap="round" opacity="0.3" />
+      </svg>
+    </div>
+    <div class="name">E3: Fade A</div>
+    <div class="desc">A with legs fading into the dark</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="homescreen">
+  <h2 style="margin-top: 0; color: rgba(255,255,255,0.35);">Home Screen Preview</h2>
+  <p style="font-size: 9px; color: rgba(255,255,255,0.2); margin-bottom: 20px;">Showing top picks at 52px alongside other app icons</p>
+
+  <div class="hs-row">
+    <div class="hs-icon">
+      <div class="icon-wrap" style="width:52px; height:52px; border-radius:13px; background: linear-gradient(145deg, #0e1019, #0b0c14); border: 1px solid rgba(107,171,223,0.12);">
+        <svg width="36" height="36" viewBox="0 0 52 52">
+          <defs><linearGradient id="hs1" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6babdf" /><stop offset="100%" stop-color="#6fd4e4" /></linearGradient></defs>
+          <circle cx="26" cy="26" r="20" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="3.5" />
+          <circle cx="26" cy="26" r="20" fill="none" stroke="url(#hs1)" stroke-width="3.5"
+            stroke-dasharray="94.25" stroke-dashoffset="23.5" stroke-linecap="round" transform="rotate(-90 26 26)" />
+          <text x="26" y="30" text-anchor="middle" fill="white" font-size="16" font-weight="800" font-family="Inter, system-ui">A</text>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #1DB954, #1ed760);"></div>
+      <div class="hs-label">Spotify</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #007AFF, #5AC8FA);"></div>
+      <div class="hs-label">Health</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #FF6B35, #FF4500);"></div>
+      <div class="hs-label">Strava</div>
+    </div>
+  </div>
+
+  <div class="hs-row">
+    <div class="hs-icon">
+      <div class="icon-wrap" style="width:52px; height:52px; border-radius:13px; background: linear-gradient(150deg, #10111a, #0c0d16); border: 1px solid rgba(107,171,223,0.1);">
+        <svg width="36" height="36" viewBox="0 0 52 52">
+          <defs><linearGradient id="hs2" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6babdf" /><stop offset="50%" stop-color="#6fd4e4" /><stop offset="100%" stop-color="#6bcf9a" /></linearGradient></defs>
+          <path d="M26 5L8 13v10c0 10 6 18 18 22 12-4 18-12 18-22V13z" fill="none" stroke="url(#hs2)" stroke-width="2" />
+          <circle cx="26" cy="25" r="10" fill="none" stroke="url(#hs2)" stroke-width="2"
+            stroke-dasharray="47.12" stroke-dashoffset="11.78" stroke-linecap="round" transform="rotate(-90 26 25)" />
+          <text x="26" y="29" text-anchor="middle" fill="white" font-size="12" font-weight="800" font-family="Inter, system-ui">A</text>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #333, #555);"></div>
+      <div class="hs-label">Settings</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="icon-wrap" style="width:52px; height:52px; border-radius:13px; background: linear-gradient(145deg, #10111a, #0c0d15); border: 1px solid rgba(107,171,223,0.1);">
+        <svg width="36" height="36" viewBox="0 0 52 52">
+          <defs><linearGradient id="hs3" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6babdf" /><stop offset="40%" stop-color="#ab9ed4" /><stop offset="100%" stop-color="#e088ab" /></linearGradient></defs>
+          <path d="M26 6L14 44" stroke="url(#hs3)" stroke-width="3.5" stroke-linecap="round" />
+          <path d="M26 6L38 44" stroke="url(#hs3)" stroke-width="3.5" stroke-linecap="round" />
+          <line x1="18" y1="32" x2="34" y2="32" stroke="url(#hs3)" stroke-width="2.5" stroke-linecap="round" />
+          <circle cx="26" cy="6" r="2.5" fill="#6babdf" opacity="0.6" />
+        </svg>
+      </div>
+      <div class="hs-label">Arnold</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #5B5EA6, #9B59B6);"></div>
+      <div class="hs-label">WHOOP</div>
+    </div>
+  </div>
+
+</div>
+
+<div style="height: 30px;"></div>
+</body>
+</html>

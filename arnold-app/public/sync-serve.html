@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Sync Server</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:30px 20px;text-align:center;}
+  h1{color:#00e676;font-size:22px;margin-bottom:20px;}
+  .status{margin:16px auto;padding:14px;border-radius:8px;font-size:14px;max-width:500px;}
+  .ok{background:#1b3a1b;color:#00e676;}
+  .info{background:#1a1a2e;color:#90caf9;}
+  .err{background:#3a1b1b;color:#f44336;}
+  #qr{margin:20px auto;}
+  .step{color:#888;font-size:13px;margin-top:12px;max-width:400px;margin-left:auto;margin-right:auto;line-height:1.6;}
+  a{color:#00e676;}
+</style>
+</head>
+<body>
+<h1>Arnold Data Sync</h1>
+<div id="msg">Preparing sync...</div>
+<div id="qr"></div>
+<div id="link"></div>
+
+<script>
+(async function(){
+  const msg = document.getElementById('msg');
+  const qrDiv = document.getElementById('qr');
+  const linkDiv = document.getElementById('link');
+
+  // Check if we're RECEIVING data
+  const params = new URLSearchParams(window.location.search);
+  if(params.has('data')){
+    msg.innerHTML = '<div class="status info">Receiving data...</div>';
+    try {
+      const b64 = params.get('data');
+      // Decode base64 → compressed bytes → decompress
+      const compressed = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const ds = new DecompressionStream('gzip');
+      const writer = ds.writable.getWriter();
+      writer.write(compressed);
+      writer.close();
+      const reader = ds.readable.getReader();
+      const chunks = [];
+      while(true){
+        const {done, value} = await reader.read();
+        if(done) break;
+        chunks.push(value);
+      }
+      const blob = new Blob(chunks);
+      const text = await blob.text();
+      const data = JSON.parse(text);
+      const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
+      keys.forEach(k => localStorage.setItem(k, data[k]));
+      msg.innerHTML = `<div class="status ok">✅ Restored ${keys.length} keys! <br><br><a href="/">Open Arnold →</a></div>`;
+    } catch(e) {
+      msg.innerHTML = `<div class="status err">Error: ${e.message}</div>`;
+    }
+    return;
+  }
+
+  // We're SENDING — gather data and compress
+  const backup = {};
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(key && key.startsWith('arnold:')) backup[key] = localStorage.getItem(key);
+  }
+  const keyCount = Object.keys(backup).length;
+  if(!keyCount){
+    msg.innerHTML = '<div class="status err">No Arnold data found on this device.</div>';
+    return;
+  }
+
+  msg.innerHTML = `<div class="status info">Compressing ${keyCount} keys...</div>`;
+
+  // Compress with gzip
+  const json = JSON.stringify(backup);
+  const encoder = new TextEncoder();
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(encoder.encode(json));
+  writer.close();
+  const reader = cs.readable.getReader();
+  const chunks = [];
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    chunks.push(value);
+  }
+  const compressed = new Uint8Array(chunks.reduce((s,c) => s + c.length, 0));
+  let offset = 0;
+  for(const chunk of chunks){ compressed.set(chunk, offset); offset += chunk.length; }
+
+  // Base64 encode
+  let b64 = '';
+  const CHUNK = 8192;
+  for(let i = 0; i < compressed.length; i += CHUNK){
+    b64 += String.fromCharCode(...compressed.subarray(i, i + CHUNK));
+  }
+  b64 = btoa(b64);
+
+  const syncUrl = window.location.origin + '/sync-serve.html?data=' + encodeURIComponent(b64);
+
+  msg.innerHTML = `<div class="status ok">Ready to sync ${keyCount} keys (${(b64.length/1024).toFixed(0)} KB compressed)</div>
+    <div class="step"><strong>On your phone:</strong> Open Chrome and go to the link below, or scan the QR code.</div>`;
+
+  // Show clickable link
+  linkDiv.innerHTML = `<div style="margin:16px auto;padding:12px;background:#111;border:1px solid #333;border-radius:8px;max-width:500px;word-break:break-all;font-size:11px;font-family:monospace;text-align:left;">
+    <a href="${syncUrl}" style="color:#00e676;">${syncUrl.substring(0, 80)}...</a>
+  </div>
+  <div style="margin-top:8px;font-size:12px;color:#666;">URL is ${(syncUrl.length/1024).toFixed(0)} KB — may be too long for QR. Use the link directly on phone.</div>`;
+
+  // Try QR code (may fail if URL too long)
+  if(b64.length < 2000){
+    const qrImg = document.createElement('img');
+    qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(syncUrl)}`;
+    qrImg.style.cssText = 'border-radius:8px;margin-top:12px;';
+    qrDiv.appendChild(qrImg);
+  }
+
+})();
+</script>
+</body>
+</html>

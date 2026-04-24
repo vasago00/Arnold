@@ -87,7 +87,7 @@ function detectIntensityCorrelation(activities, sleepData) {
   let highIntensityShortSleep = 0;
   for (const a of recent) {
     const next = new Date(a.date); next.setDate(next.getDate() + 1);
-    const nextISO = next.toISOString().slice(0, 10);
+    const nextISO = `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}-${String(next.getDate()).padStart(2,'0')}`;
     const sleep = sleepByDate[nextISO];
     if (!sleep) continue;
     const zone = hrZoneFromBpm(a.avgHR, a.maxHR);

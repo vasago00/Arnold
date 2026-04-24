@@ -5,7 +5,9 @@ export function parseTodayNutrition(csvText) {
   const lines = csvText.trim().split(/\r?\n/);
   if (lines.length < 2) return null;
   const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-  const today = new Date().toISOString().split('T')[0];
+  // Use LOCAL date (not UTC) so late-night uploads still match today's row
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
 
   const findIdx = name => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
 

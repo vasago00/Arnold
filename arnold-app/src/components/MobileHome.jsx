@@ -9,9 +9,177 @@ import { Sparkline } from "./Sparkline.jsx";
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
 import { computeDailyScore, computeRolling7d, computeRolling30d } from "../core/trainingStress.js";
+import { dcy as dcyToday, dcyWeekly, formatDcy, glyphFor, stateFor } from "../core/dcy.js";
 import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
+import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
+import { cleanSleepForAveraging } from "../core/parsers/sleepParser.js";
+import useCronometerToday from "../hooks/useCronometerToday.js";
+
+// ─── Local date helper (avoids UTC rollover bug with toISOString) ───────────
+const localDate = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// useMobileData — SINGLE SOURCE OF TRUTH for the Start screen.
+// Reads ALL data directly from storage. Zero dependence on Arnold.jsx props.
+// ═══════════════════════════════════════════════════════════════════════════════
+function useMobileData() {
+  return useMemo(() => {
+    const G = getGoals();
+    const profile = storage.get('profile') || {};
+    const now = new Date();
+    const today = localDate();
+    const d30Cutoff = localDate((() => { const d = new Date(); d.setDate(d.getDate() - 30); return d; })());
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+
+    // ── Raw storage reads ──
+    const allActivities = (storage.get('activities') || []).filter(a => a.source !== 'health_connect');
+    const dailyLogs = storage.get('dailyLogs') || [];
+    const hrvData = storage.get('hrv') || [];
+    const rawSleep = storage.get('sleep') || [];
+    const sleepData = cleanSleepForAveraging(rawSleep);
+    const weightData = storage.get('weight') || [];
+    const cronometer = storage.get('cronometer') || [];
+
+    // ── Unified activities (CSV + dailyLogs FIT, deduped) ──
+    // Key CSV rows by date|title|time so same-day same-title activities coexist.
+    // Iterate every entry in `fitActivities` (new array) and fall back to legacy singular
+    // `fitData` for older rows — both paths yield one or more activities per day.
+    const csvKey = a => `${a.date}|${a.title || a.activityType || ''}|${a.time || ''}`;
+    const byKey = new Map(allActivities.map(a => [csvKey(a), a]));
+    const fitCountByDateType = new Map();
+    for (const log of dailyLogs) {
+      if (!log?.date) continue;
+      const fits = Array.isArray(log.fitActivities) && log.fitActivities.length
+        ? log.fitActivities
+        : (log.fitData ? [log.fitData] : []);
+      for (const fd of fits) {
+        if (!fd) continue;
+        const type = fd.activityType || fd.type || 'workout';
+        const dtKey = `${log.date}|${type}`;
+        const n = fitCountByDateType.get(dtKey) || 0;
+        fitCountByDateType.set(dtKey, n + 1);
+        const uniqueKey = `${dtKey}|${fd.startTime || fd.time || n}`;
+        if (byKey.has(uniqueKey)) continue;
+        byKey.set(uniqueKey, {
+          date: log.date,
+          distanceMi: fd.distanceMi || null,
+          durationSecs: fd.durationSecs || 0,
+          activityType: type,
+          avgPaceRaw: fd.avgPacePerMi || null,
+          startTime: fd.startTime || fd.time || null,
+        });
+      }
+    }
+    const activities = [...byKey.values()];
+
+    // ── This week (Mon→Sun) ──
+    const dow = now.getDay();
+    const mondayOffset = dow === 0 ? 6 : dow - 1;
+    const wkStart = new Date(now); wkStart.setDate(now.getDate() - mondayOffset); wkStart.setHours(0, 0, 0, 0);
+    const wkEnd = new Date(wkStart); wkEnd.setDate(wkStart.getDate() + 7);
+    const inThisWeek = (a) => { if (!a.date) return false; const ad = new Date(a.date + 'T12:00:00'); return ad >= wkStart && ad < wkEnd; };
+    const thisWeekActs = activities.filter(inThisWeek);
+    const thisWeekRuns = thisWeekActs.filter(a => /run/i.test(a.activityType || ''));
+    const thisWeekStr = thisWeekActs.filter(a => !/run/i.test(a.activityType || ''));
+    const twMi = thisWeekRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
+    const twHrs = thisWeekActs.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
+    const twSessions = thisWeekActs.length;
+    const twStrSessions = thisWeekStr.length;
+
+    // ── 30-day activities ──
+    const d30Date = new Date(now - 30 * 86400000);
+    const recent30 = activities.filter(a => a.date && new Date(a.date) >= d30Date);
+    const recent30Runs = recent30.filter(a => /run/i.test(a.activityType || ''));
+    const recent30Str = recent30.filter(a => !/run/i.test(a.activityType || ''));
+    const weeks43 = 30 / 7;
+    const avg30Mi = (recent30Runs.reduce((s, a) => s + (a.distanceMi || 0), 0) / weeks43).toFixed(1);
+    const avg30StrSess = (recent30Str.length / weeks43).toFixed(1);
+
+    // ── Pace (YTD for current value, 30d for avg) ──
+    const ytdRuns = activities.filter(a => a.date && new Date(a.date) >= yearStart && /run/i.test(a.activityType || ''));
+    const parsePace = (raw) => { if (!raw) return null; const [m, s] = raw.split(':').map(Number); return m * 60 + (s || 0); };
+    const fmtPace = (secs) => secs ? `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, '0')}` : '—';
+    const allPaces = ytdRuns.map(a => parsePace(a.avgPaceRaw)).filter(Boolean);
+    const avgPaceSecs = allPaces.length ? allPaces.reduce((s, v) => s + v, 0) / allPaces.length : null;
+    const goalPaceSecs = (() => { const p = profile?.targetRacePace || '9:30'; const [m, s] = p.split(':').map(Number); return m * 60 + (s || 0); })();
+
+    // ── YTD totals (for annual goals) ──
+    const ytdActs = activities.filter(a => a.date && new Date(a.date) >= yearStart);
+    const totalMi = ytdRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
+    const totalSessions = ytdActs.length;
+
+    // ── 8-week history (for trend sparklines) ──
+    const weeklyStats = Array.from({ length: 8 }, (_, i) => {
+      const ws = new Date(now); ws.setDate(now.getDate() - (7 * (7 - i) + now.getDay())); ws.setHours(0, 0, 0, 0);
+      const we = new Date(ws); we.setDate(ws.getDate() + 7);
+      const wAll = activities.filter(a => { const d = new Date(a.date); return d >= ws && d < we; });
+      const wRuns = wAll.filter(a => /run/i.test(a.activityType || ''));
+      return { mi: wRuns.reduce((s, a) => s + (a.distanceMi || 0), 0), hrs: wAll.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600, sessions: wAll.length };
+    });
+
+    // ── Sleep ──
+    const sortedSleep = [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const latestSleepScore = (() => { const s = sortedSleep.find(s => s.sleepScore != null); return s ? Math.min(s.sleepScore, 100) : null; })();
+    const latestRHR = sortedSleep.find(s => s.restingHR)?.restingHR || null;
+    const sleep30 = sortedSleep.filter(v => (v?.date || '') >= d30Cutoff);
+    const sleep30Scores = sleep30.map(s => s.sleepScore).filter(v => typeof v === 'number' && !isNaN(v));
+    const avg30Sleep = sleep30Scores.length ? (sleep30Scores.reduce((s, v) => s + v, 0) / sleep30Scores.length).toFixed(0) : '—';
+
+    // ── HRV ──
+    const sortedHRV = [...hrvData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const latestHRV = sortedHRV.find(h => h.overnightHRV)?.overnightHRV || null;
+    const hrv30 = sortedHRV.filter(v => (v?.date || '') >= d30Cutoff && v.overnightHRV);
+    const avg30HRV = hrv30.length ? (hrv30.reduce((s, h) => s + h.overnightHRV, 0) / hrv30.length).toFixed(0) : '—';
+
+    // ── Weight ──
+    const sortedW = [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const currentWeight = sortedW[0]?.weightLbs || null;
+    const currentBF = sortedW[0]?.bodyFatPct || null;
+    const w30 = sortedW.filter(v => (v?.date || '') >= d30Cutoff).map(v => v.weightLbs).filter(v => typeof v === 'number');
+    const avg30Weight = w30.length ? (w30.reduce((s, v) => s + v, 0) / w30.length).toFixed(1) : '—';
+
+    // ── Nutrition (today + 30d average) ──
+    const todayNut = nutDailyTotals(today);
+    const todayProtein = todayNut.protein || 0;
+    const todayCalories = todayNut.calories || 0;
+    // 30-day: build per-day totals from cronometer + nutritionLog
+    const recentNut = [];
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(); d.setDate(now.getDate() - i);
+      const ds = localDate(d);
+      const t = nutDailyTotals(ds);
+      if (t.calories > 0 || t.protein > 0) recentNut.push({ date: ds, ...t });
+    }
+    const avg30Protein = recentNut.length ? (recentNut.reduce((s, n) => s + (n.protein || 0), 0) / recentNut.length).toFixed(0) : '—';
+
+    // ── Next race ──
+    const nextRace = (() => { try { const races = JSON.parse(localStorage.getItem('arnold:races') || '[]'); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => r.date && new Date(r.date) >= n2).sort((a, b) => new Date(a.date) - new Date(b.date))[0] || null; } catch { return null; } })();
+
+    return {
+      G, profile, today, d30Cutoff,
+      // This week
+      twMi, twHrs, twSessions, twStrSessions,
+      // 30d averages
+      avg30Mi, avg30StrSess, avg30Sleep, avg30HRV, avg30Weight, avg30Protein,
+      // Latest / current values
+      latestSleepScore, latestRHR, latestHRV, currentWeight, currentBF,
+      todayProtein, todayCalories,
+      // Pace
+      avgPaceSecs, goalPaceSecs, fmtPace,
+      // YTD / annual
+      totalMi, totalSessions, ytdRuns,
+      // History arrays (for trends, sparklines)
+      weeklyStats, sortedSleep, sortedW, hrvData: sortedHRV, recentNut,
+      // Race
+      nextRace,
+      // Activities for annual timeline
+      activities,
+    };
+  }, [localDate()]); // recompute when day changes (or on remount after sync)
+}
 
 // ─── Muted warm color palette (matches mockup) ─────────────────────────────
 const C = {
@@ -263,9 +431,12 @@ function shortRaceName(name, max = 22) {
   return s;
 }
 
-function HeroRail({ score, moonScore, scoreSuffix, statusWord, statusColor, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance }) {
+function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, scoreSuffix, statusWord, statusColor, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance }) {
+  // `score` / `moonScore` are 0-100 projections of the signed DCY value, used
+  // only for the ring geometry. `scoreLabel` / `moonScoreLabel` hold the
+  // signed text ("+7", "−4") shown inside the ring.
   // Main ring (7-day) geometry
-  const mainR = 24, mainSW = 4, mainSize = 58;
+  const mainR = 26, mainSW = 4, mainSize = 62;
   const mainCX = mainSize / 2, mainCY = mainSize / 2;
   const mainCirc = 2 * Math.PI * mainR;
   const mainOffset = mainCirc * (1 - Math.min(Math.max(score / 100, 0), 1));
@@ -298,22 +469,22 @@ function HeroRail({ score, moonScore, scoreSuffix, statusWord, statusColor, fact
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
 
         {/* Ring cluster: main 7d ring with moon 30d satellite */}
-        <div style={{ position: 'relative', width: 62, height: 62, flexShrink: 0, alignSelf: 'center' }}>
-          {/* Main ring (7-day) */}
-          <svg width="58" height="58" viewBox="0 0 58 58" style={{ position: 'absolute', top: 2, left: 0, transform: 'rotate(-90deg)' }}>
-            <circle cx="29" cy="29" r="24" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
-            <circle cx="29" cy="29" r="24" fill="none" stroke={statusColor} strokeWidth="4"
+        <div style={{ position: 'relative', width: 66, height: 66, flexShrink: 0, alignSelf: 'center' }}>
+          {/* Main ring (7-day) — centered in container */}
+          <svg width="62" height="62" viewBox="0 0 62 62" style={{ position: 'absolute', top: 2, left: 2, transform: 'rotate(-90deg)' }}>
+            <circle cx="31" cy="31" r="26" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+            <circle cx="31" cy="31" r="26" fill="none" stroke={statusColor} strokeWidth="4"
               strokeDasharray={mainCirc} strokeDashoffset={mainOffset} strokeLinecap="round"
               style={{ transition: 'stroke-dashoffset 0.8s ease' }} />
           </svg>
-          <div style={{ position: 'absolute', top: 2, left: 0, width: 58, height: 58, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
-            <span style={{ fontSize: 20, fontWeight: 800, lineHeight: 1, color: T1 }}>{score}</span>
-            <span style={{ fontSize: 7, fontWeight: 600, color: T4, marginTop: 1 }}>7d</span>
+          <div style={{ position: 'absolute', top: 2, left: 2, width: 62, height: 62, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 18, fontWeight: 800, lineHeight: 1, color: T1 }}>{scoreLabel ?? score}</span>
+            <span style={{ position: 'absolute', bottom: 10, fontSize: 8, fontWeight: 700, color: statusColor, letterSpacing: '0.02em' }}>{scoreGlyph || 'DCY'}</span>
           </div>
 
           {/* Moon ring (30-day) — small satellite, top-left (10 o'clock) of main ring */}
           <div style={{
-            position: 'absolute', top: -4, left: -8, width: 28, height: 28,
+            position: 'absolute', top: -3, left: -6, width: 28, height: 28,
             borderRadius: '50%', background: BG,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
@@ -323,7 +494,7 @@ function HeroRail({ score, moonScore, scoreSuffix, statusWord, statusColor, fact
                 strokeDasharray={moonCirc} strokeDashoffset={moonOffset} strokeLinecap="round"
                 style={{ transition: 'stroke-dashoffset 0.8s ease' }} />}
             </svg>
-            <span style={{ fontSize: 9, fontWeight: 800, color: T1, zIndex: 1 }}>{ms}</span>
+            <span style={{ fontSize: 9, fontWeight: 800, color: T1, zIndex: 1 }}>{moonScoreLabel ?? ms}</span>
           </div>
         </div>
 
@@ -385,14 +556,120 @@ function HeroRail({ score, moonScore, scoreSuffix, statusWord, statusColor, fact
 }
 
 // ─── SLEEP INSIGHT ──────────────────────────────────────────────────────────
-function SleepInsight({ headline, detail }) {
+// ─── DCY DIAGNOSTICS PANEL ──────────────────────────────────────────────────
+// Collapsed by default. Tap the header to expand and see every raw input
+// driving today's DCY — useful for sanity-checking Fuel / Recovery readings
+// on-device without a debugger. Purely read-only.
+function DcyDetails({ dcyDaily }) {
+  const [open, setOpen] = useState(false);
+  if (!dcyDaily) return null;
+
+  const { F = 0, G = 0, N = 0, R = 0 } = dcyDaily;
+  const src = dcyDaily.sources || {};
+  const nut = src.nutritionIntake || {};
+  const intake = nut.intake || {};
+  const tgt = nut.targets || {};
+  const sub = nut.sub || {};
+  const hrv = src.hrv;
+  const rhr = src.rhr;
+  const sleep = src.sleep;
+  const contrib = dcyDaily.contributions || {};
+
+  const pct = (num, den) => (den > 0 ? Math.round((num / den) * 100) : 0);
+  const warnIf = (p) => (p < 80 ? C.red : p > 110 ? C.amber : C.green);
+
+  // Row helper keeps the JSX uniform and easy to scan.
+  const Row = ({ label, value, hint, color = T1 }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+      padding: '4px 0', fontSize: 11, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <span style={{ color: T3 }}>{label}</span>
+      <span>
+        <span style={{ color, fontWeight: 600 }}>{value}</span>
+        {hint && <span style={{ color: T4, fontSize: 10, marginLeft: 6 }}>{hint}</span>}
+      </span>
+    </div>
+  );
+  const SectionHead = ({ children }) => (
+    <div style={{ fontSize: 10, fontWeight: 700, color: T3, textTransform: 'uppercase',
+      letterSpacing: '0.06em', marginTop: 10, marginBottom: 2 }}>{children}</div>
+  );
+
+  return (
+    <div style={{ ...card, borderRadius: 12, padding: '10px 12px', fontSize: 11 }}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          cursor: 'pointer', userSelect: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: T1 }}>DCY Details</span>
+          <span style={{ fontSize: 10, color: T3 }}>
+            F·N − G·(1.1−R) = {(F * N).toFixed(1)} − {(G * (1.1 - R)).toFixed(1)} = {dcyDaily.dcy?.toFixed?.(1) ?? '—'}
+          </span>
+        </div>
+        <span style={{ fontSize: 14, color: T3 }}>{open ? '▾' : '▸'}</span>
+      </div>
+
+      {open && (
+        <div>
+          <SectionHead>Fuel — N {(N * 100).toFixed(0)}%</SectionHead>
+          <Row label="Calories" value={`${intake.calories ?? '—'} / ${tgt.calories ?? '—'}`}
+            hint={sub.cal != null ? `${(sub.cal * 100).toFixed(0)}%` : '—'}
+            color={sub.cal != null ? warnIf(sub.cal * 100) : T1} />
+          <Row label="Protein" value={`${intake.protein ?? '—'} g / ${tgt.protein ?? '—'} g`}
+            hint={sub.protein != null ? `${(sub.protein * 100).toFixed(0)}%` : '—'}
+            color={sub.protein != null ? warnIf(sub.protein * 100) : T1} />
+          <Row label="Hydration" value={`${intake.waterL ?? '—'} / ${tgt.waterL ?? '—'} L`}
+            hint={sub.hydro != null ? `${(sub.hydro * 100).toFixed(0)}%` : '—'}
+            color={sub.hydro != null ? warnIf(sub.hydro * 100) : T1} />
+          <Row label="BMR → TDEE" value={`${nut.bmr ?? '—'} → ${nut.tdee ?? '—'}`}
+            hint={`${nut.bmrTier || '?'} · burn ${nut.activityBurn ?? 0} · TEF ${nut.tef ?? 0}`} />
+
+          <SectionHead>Recovery — R {(R * 100).toFixed(0)}%</SectionHead>
+          {hrv ? (
+            <Row label="HRV" value={`${hrv.acute?.toFixed?.(0) ?? '—'} ms`}
+              hint={`vs ${hrv.chronic?.toFixed?.(0) ?? '—'} → ${hrv.delta?.toFixed?.(2) ?? '—'}`}
+              color={hrv.delta != null ? warnIf(hrv.delta * 100) : T1} />
+          ) : <Row label="HRV" value="—" />}
+          {rhr ? (
+            <Row label="RHR" value={`${rhr.acute?.toFixed?.(0) ?? '—'} bpm`}
+              hint={`vs ${rhr.chronic?.toFixed?.(0) ?? '—'} → ${rhr.delta?.toFixed?.(2) ?? '—'}`}
+              color={rhr.delta != null ? warnIf(rhr.delta * 100) : T1} />
+          ) : <Row label="RHR" value="—" />}
+          {sleep ? (
+            <Row label="Sleep" value={`${sleep.score ?? '—'}/100`}
+              hint={`${sleep.date} · sub ${sleep.sub?.toFixed?.(2) ?? '—'}${sleep.hasStages ? ' · stages' : ''}`}
+              color={sleep.sub != null ? warnIf(sleep.sub * 100) : T1} />
+          ) : src.sleepLatest ? (
+            <Row label="Sleep (stale)" value={`${src.sleepLatest.score ?? '—'}/100`}
+              hint={`${src.sleepLatest.date} · dropped from R`}
+              color={C.amber} />
+          ) : <Row label="Sleep" value="—" />}
+
+          <SectionHead>Stock</SectionHead>
+          <Row label="Fitness (F)" value={F.toFixed(1)} hint="EWMA τ=42d" />
+          <Row label="Fatigue (G)" value={G.toFixed(1)}
+            hint={`τ=7d · ratio ${F > 0 ? (G / F).toFixed(2) : '—'}`}
+            color={F > 0 && G > 1.5 * F ? C.red : T1} />
+          <Row label="Stress today" value={(src.stressToday ?? 0).toFixed?.(1) ?? '—'} hint="TRIMP-equivalent" />
+          <Row label="F·N (absorb)" value={(contrib.fitness ?? F * N).toFixed(1)} />
+          <Row label="G·(1.1−R) (drag)" value={(contrib.fatigue ?? G * (1.1 - R)).toFixed(1)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SleepInsight({ headline, detail, iconKey = 'Moon', iconColor = C.cyan }) {
+  // The icon + tone are parametrized so the same card can surface a DCY
+  // limiting-factor advisory (fuel / recovery / overload) OR the sleep
+  // fallback, without us forking a second component.
+  const Ico = Icon[iconKey] || Icon.Moon;
   return (
     <div style={{ ...card, borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px' }}>
       <div style={{
-        width: 30, height: 30, borderRadius: 8, background: 'rgba(94,196,212,0.08)',
+        width: 30, height: 30, borderRadius: 8, background: `${iconColor}22`,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}>
-        <Icon.Moon />
+        <Ico color={iconColor} size={16} />
       </div>
       <div>
         <div style={{ fontSize: 13, fontWeight: 700, color: T1 }}>{headline}</div>
@@ -701,15 +978,21 @@ function LabsSummary({ labSnapshots, onTap }) {
   })();
 
   const markers = latest?.markers || {};
+  // Find a marker value by partial key match (handles long-form keys like "Testosterone (ng/dL)")
+  const findMarker = (shortKey) => {
+    const lk = shortKey.toLowerCase();
+    const found = Object.keys(markers).find(k => k.toLowerCase().includes(lk));
+    return found != null ? markers[found] : undefined;
+  };
   // Pick key markers to show
   const keyMarkers = [
     { key: 'testosterone', label: 'Testo', unit: 'ng/dL', color: C.blue },
-    { key: 'vitaminD', label: 'Vit D', unit: 'ng/mL', color: C.amber },
-    { key: 'hsCRP', label: 'hsCRP', unit: 'mg/L', color: C.red },
+    { key: 'vitamin d', label: 'Vit D', unit: 'ng/mL', color: C.amber },
+    { key: 'hscrp', label: 'hsCRP', unit: 'mg/L', color: C.red },
     { key: 'ferritin', label: 'Ferritin', unit: 'ng/mL', color: C.green },
-    { key: 'HbA1c', label: 'A1c', unit: '%', color: C.pink },
-    { key: 'TSH', label: 'TSH', unit: 'mU/L', color: C.purple },
-  ].filter(m => markers[m.key] != null);
+    { key: 'hba1c', label: 'A1c', unit: '%', color: C.pink },
+    { key: 'tsh', label: 'TSH', unit: 'mU/L', color: C.purple },
+  ].map(m => ({ ...m, value: findMarker(m.key) })).filter(m => m.value != null);
 
   const dateStr = latest?.date ? new Date(latest.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '';
 
@@ -728,7 +1011,7 @@ function LabsSummary({ labSnapshots, onTap }) {
           {keyMarkers.slice(0, 6).map((m, i) => (
             <div key={i} style={{ textAlign: 'center' }}>
               <div style={{ fontSize: 7, color: m.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{m.label}</div>
-              <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1 }}>{typeof markers[m.key] === 'number' ? markers[m.key].toFixed(markers[m.key] < 10 ? 1 : 0) : markers[m.key]}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1 }}>{typeof m.value === 'number' ? m.value.toFixed(m.value < 10 ? 1 : 0) : m.value}</div>
               <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{m.unit}</div>
             </div>
           ))}
@@ -876,20 +1159,33 @@ function hexToRgb(hex) {
 }
 
 // ─── ERROR BOUNDARY WRAPPER ─────────────────────────────────────────────────
-function MobileHomeInner({
-  data, focusItems, weeklyStats, avgWeeklyMi, avgWeeklyHrsTotal,
-  avgPaceSecs, goalPaceSecs, fmtPace, totalMi, annualRunTarget, totalSessions,
-  thisWeek, sortedSleep, hrvData, sortedW, currentWeight, currentBF, latestSleepScore,
-  avgHRV30, recentNut, avgProtein, latestRHR, nextRace, onOpenTab, initialView
-}) {
+function MobileHomeInner({ data, onOpenTab, initialView }) {
+  // ── ALL data from single hook — no Arnold.jsx prop dependencies ──
+  const D = useMobileData();
   const [activeNav, setActiveNav] = useState(initialView || 'start');
   const [moreOpen, setMoreOpen] = useState(false);
+
+  // ── Live Cronometer pull (intra-day nutrition) ──────────────────────────
+  // Mounting this side-effect hook high up keeps today's Cronometer totals
+  // fresh for fuelAdequacy() / DCY without any downstream wiring. The hook
+  // stays inert until the user configures both a Cloud Sync Worker endpoint
+  // and their Cronometer email+password in the Cloud Sync panel (Phase 3).
+  const crono = useCronometerToday();
+  useEffect(() => {
+    if (crono.data?.fetchedAt) {
+      // New data landed — tell React to recompute DCY-dependent memos.
+      // `today` is the canonical "something fresh happened" trigger already
+      // used by dcyDaily / dcyWeek memos below, so we bump nothing explicit;
+      // instead, the hook's state change is enough to retrigger a render
+      // and the nutritionLog read inside dailyTotals() picks up the new row.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crono.data?.fetchedAt]);
 
   useEffect(() => {
     if (initialView && initialView !== activeNav) setActiveNav(initialView);
   }, [initialView]);
 
-  const G = getGoals();
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
@@ -909,65 +1205,140 @@ function MobileHomeInner({
     } catch { return 'Emil'; }
   })();
 
-  // ── Format pace helper (fmtPace may be a function or a string) ──
-  const paceStr = typeof fmtPace === 'function' ? fmtPace(avgPaceSecs) : (fmtPace || '—');
+  // ── Destructure everything from the single data hook ──
+  const {
+    G, today, twMi, twHrs, twSessions, twStrSessions,
+    avg30Mi, avg30StrSess: avg30StrSessions, avg30Sleep, avg30HRV, avg30Weight, avg30Protein,
+    latestSleepScore, latestRHR, latestHRV, currentWeight, currentBF,
+    todayProtein, avgPaceSecs, goalPaceSecs, fmtPace,
+    totalMi, totalSessions, weeklyStats, sortedSleep, sortedW,
+    hrvData, recentNut, nextRace, activities: unifiedActivities,
+  } = D;
 
-  // ── Rolling Scores (7-day weighted + 30-day average) ──
+  const paceStr = fmtPace(avgPaceSecs);
+
+  // ── DCY readiness (Big Moon = today, Small Moon = week mean) ────────────
+  // Reads F/G/N/R and composes F·N − G·(1.1 − R). See core/dcy.js.
+  // Legacy computeRolling7d is still called to keep `todayResult.sessionMetric`
+  // (feeds the scoreSuffix) flowing — pure display garnish, no effect on DCY.
+  const dcyDaily = useMemo(() => {
+    try { return dcyToday(); } catch (e) { console.warn('dcy() failed:', e); return null; }
+  }, [today]);
+  const dcyWeek = useMemo(() => {
+    try { return dcyWeekly(); } catch (e) { console.warn('dcyWeekly() failed:', e); return null; }
+  }, [today]);
   const rolling7 = useMemo(() => {
-    try { return computeRolling7d(); } catch { return { score: 0, daily: [], todayScore: { score: 0, sessionType: 'rest', sessionMetric: null, factors: [] } }; }
-  }, []);
-  const rolling30 = useMemo(() => {
-    try { return computeRolling30d(); } catch { return { score: 0, daily: [] }; }
-  }, []);
+    try { return computeRolling7d(); } catch { return { todayScore: {} }; }
+  }, [today]);
 
-  const mainScore = rolling7.score;
-  const moonScore = rolling30.score;
+  // Signed DCY values → displayed as "+7" / "−4" on the rings.
+  const dcyValue = dcyDaily?.dcy ?? 0;
+  const dcyWeekValue = dcyWeek?.dcy ?? 0;
+
+  // Ring arc: map DCY ∈ [−30, +25] → percentage ∈ [0, 100] so the existing
+  // HeroRail geometry (which expects 0-100) renders sensibly. 50% = neutral.
+  const dcyToArcPct = (v) => Math.max(0, Math.min(100, Math.round(50 + v * 2)));
+  const mainScore = dcyToArcPct(dcyValue);
+  const moonScore = dcyToArcPct(dcyWeekValue);
+
+  // Show the signed number next to the arc instead of the 0-100 projection.
+  const dcyNumberText = (v) => {
+    if (v == null || isNaN(v)) return '—';
+    const n = Math.round(v);
+    if (n > 0) return `+${n}`;
+    if (n < 0) return `−${Math.abs(n)}`;
+    return '±0';
+  };
+  const mainScoreLabel = dcyNumberText(dcyValue);
+  const moonScoreLabel = dcyNumberText(dcyWeekValue);
+
+  // Status color follows the DCY state buckets from stateFor().
+  const stateColor = (s) => {
+    switch (s) {
+      case 'absorbing-strong': return C.green;
+      case 'absorbing':        return C.green;
+      case 'neutral':          return C.blue;
+      case 'depleting':        return C.amber;
+      case 'depleting-strong': return C.red;
+      case 'warning':          return C.red;
+      default:                 return C.blue;
+    }
+  };
+  const stateWord = (s) => {
+    switch (s) {
+      case 'absorbing-strong': return 'Strongly Absorbing';
+      case 'absorbing':        return 'Absorbing';
+      case 'neutral':          return 'Balanced';
+      case 'depleting':        return 'Depleting';
+      case 'depleting-strong': return 'Strongly Depleting';
+      case 'warning':          return 'Overreaching';
+      default:                 return 'No Data';
+    }
+  };
+  const statusColor = stateColor(dcyDaily?.state);
+  const statusWord = stateWord(dcyDaily?.state);
+  const statusGlyph = glyphFor(dcyValue);
+
+  // scoreSuffix: keep the legacy "session metric" garnish when present.
   const todayResult = rolling7.todayScore || {};
-
-  // Today's deposit for the parenthetical
   const scoreSuffix = todayResult.sessionMetric
     ? ` (${todayResult.sessionMetric.label} ${todayResult.sessionMetric.value})`
     : '';
 
-  let statusColor = C.blue, statusWord = 'On Track';
-  if (mainScore >= 70) { statusColor = C.green; statusWord = 'On Track'; }
-  else if (mainScore >= 45) { statusColor = C.amber; statusWord = 'Needs Work'; }
-  else if (mainScore > 0) { statusColor = C.red; statusWord = 'Behind'; }
-  else { statusColor = C.blue; statusWord = 'No Data'; }
-
-  // ── Factor pills from today's score ──
+  // Factors pills — the four DCY pillars in plain-English labels.
+  // Fitness (F) and Fatigue (G) are EWMA stocks of training stress; Fuel (N)
+  // and Recovery (R) are 0–100%+ coefficients. The limiting-factor sentence
+  // lives in the advisory card above, so chips here are just the at-a-glance
+  // pillar snapshot. Tone rules: Fuel/Recovery below 80% flag warn; Fatigue
+  // flags warn when it's overtaken fitness by 1.5×.
   const factors = useMemo(() => {
-    if (!todayResult.factors?.length) return [{ label: 'No data', type: 'neutral' }];
-    return todayResult.factors.map(f => ({
-      label: f.label,
-      type: f.status === 'good' ? 'ok' : f.status === 'poor' ? 'warn' : 'neutral',
-    }));
-  }, [todayResult]);
+    if (!dcyDaily) return [{ label: 'No data', type: 'neutral' }];
+    const F = dcyDaily.F || 0;
+    const G = dcyDaily.G || 0;
+    const nPct = Math.round((dcyDaily.N || 0) * 100);
+    const rPct = Math.round((dcyDaily.R || 0) * 100);
+    const overloaded = F > 0 && G > 1.5 * F;
+    return [
+      { label: `Fitness ${Math.round(F)}`,   type: 'neutral' },
+      { label: `Fatigue ${Math.round(G)}`,   type: overloaded ? 'warn' : 'neutral' },
+      { label: `Fuel ${nPct}%`,              type: nPct < 80 ? 'warn' : 'ok' },
+      { label: `Recovery ${rPct}%`,          type: rPct < 80 ? 'warn' : 'ok' },
+    ];
+  }, [dcyDaily]);
 
   // ── Race countdown ──
   const raceDaysLeft = nextRace?.date ? Math.ceil((new Date(nextRace.date) - new Date()) / 86400000) : null;
   const raceLabel = nextRace ? `${nextRace.name || 'Race'}` : '';
 
-  // ── Hero stats ──
+  // ── Hero stats (all from hook) ──
   const heroStats = [
-    { label: 'Miles/wk', value: (thisWeek?.mi || 0).toFixed(1), unit: 'mi' },
+    { label: 'Miles/wk', value: twMi.toFixed(1), unit: 'mi' },
     { label: 'Sleep', value: latestSleepScore || '—', unit: '/100' },
-    { label: 'Protein', value: avgProtein?.toFixed(0) || '0', unit: 'g' },
+    { label: 'Protein', value: todayProtein ? Math.round(todayProtein) : '—', unit: 'g' },
     { label: 'Weight', value: currentWeight?.toFixed(1) || '—', unit: 'lb' },
   ];
 
-  // ── Sleep insight ──
-  const sleepHrs = (() => {
-    if (!sortedSleep?.length) return '7';
-    const last = sortedSleep[sortedSleep.length - 1];
-    const score = typeof last === 'number' ? last : last?.sleepScore;
-    return typeof score === 'number' && !isNaN(score) ? (score / 100 * 8).toFixed(0) : '7';
-  })();
-  const sleepInsight = (() => {
+  // ── Today's advisory — DCY limiting-factor first, sleep as fallback ──
+  // When dcy() classifies a non-balanced factor, surface that message with a
+  // factor-specific icon/color. Otherwise fall back to the sleep-based line
+  // so the card is always saying something useful.
+  const advisory = (() => {
+    const lf = dcyDaily?.limitingFactor;
+    const lm = dcyDaily?.limitingMessage;
+    if (lm && lf && lf !== 'balanced') {
+      const tone =
+        lf === 'fuel_adequacy'  ? { iconKey: 'GasPump', color: C.amber } :
+        lf === 'recovery'       ? { iconKey: 'Pulse',   color: C.red   } :
+        lf === 'acute_overload' ? { iconKey: 'Bolt',    color: C.red   } :
+        lf === 'detraining'     ? { iconKey: 'Bolt',    color: C.amber } :
+                                  { iconKey: 'Moon',    color: C.cyan  };
+      return { hl: lm, detail: `DCY ${mainScoreLabel} · ${statusWord}`, ...tone };
+    }
     const score = latestSleepScore || 0;
-    if (score >= 85) return { hl: 'Great sleep — ready to push', detail: `${score}/100 recovery` };
-    if (score >= 70) return { hl: 'Solid sleep — ready for strength', detail: `${score}/100 recovery` };
-    return { hl: 'Light sleep — easy effort today', detail: `${score}/100 recovery` };
+    const hl = score >= 85 ? 'Great sleep — ready to push'
+             : score >= 70 ? 'Solid sleep — ready for strength'
+             :               'Light sleep — easy effort today';
+    return { hl, detail: `${score}/100 recovery`, iconKey: 'Moon', color: C.cyan };
   })();
 
   // ── Trend helper ──
@@ -981,73 +1352,6 @@ function MobileHomeInner({
     if (Math.abs(diff) < 0.5) return flat;
     return diff > 0 ? { text: `↑ ${Math.abs(diff).toFixed(1)}`, dir: 'up' } : { text: `↓ ${Math.abs(diff).toFixed(1)}`, dir: 'down' };
   };
-
-  // ── 30-day averages for gauge tiles ──
-  const avg30Mi = (() => {
-    try {
-      // Merge CSV activities + dailyLogs FIT data (same logic as getUnifiedActivities)
-      const csvActs = (storage.get('activities') || []).filter(a => a.source !== 'health_connect');
-      const dlogs = storage.get('dailyLogs') || [];
-      const byKey = new Map(csvActs.map(a => [`${a.date}|${a.title || a.activityType || ''}`, a]));
-      for (const log of dlogs) {
-        const fd = log.fitData;
-        if (!fd || !log.date) continue;
-        const type = fd.activityType || fd.type || 'workout';
-        const key = `${log.date}|${type}`;
-        if (byKey.has(key)) continue;
-        byKey.set(key, { date: log.date, distanceMi: fd.distanceMi || null, activityType: type });
-      }
-      const acts = [...byKey.values()];
-      const now = new Date();
-      const d30 = new Date(now - 30 * 86400000);
-      const recent = acts.filter(a => a.date && new Date(a.date) >= d30);
-      const totalMi30 = recent.reduce((s, a) => s + (a.distanceMi || 0), 0);
-      const weeks = 30 / 7;
-      return (totalMi30 / weeks).toFixed(1);
-    } catch { return '0'; }
-  })();
-
-  const avg30Sleep = (() => {
-    try {
-      if (!sortedSleep || sortedSleep.length < 2) return '—';
-      // sortedSleep may be objects with .sleepScore or plain numbers
-      const last30 = sortedSleep.slice(-30).map(v => typeof v === 'number' ? v : v?.sleepScore).filter(v => typeof v === 'number' && !isNaN(v));
-      if (!last30.length) return '—';
-      const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
-      return isNaN(avg) ? '—' : avg.toFixed(0);
-    } catch { return '—'; }
-  })();
-
-  const avg30Protein = (() => {
-    try {
-      const nuts = recentNut || [];
-      if (!nuts.length) return '—';
-      const last30 = nuts.slice(-30);
-      return (last30.reduce((s, n) => s + (n.protein || 0), 0) / last30.length).toFixed(0);
-    } catch { return '—'; }
-  })();
-
-  const avg30Weight = (() => {
-    try {
-      if (!sortedW || sortedW.length < 2) return '—';
-      // sortedW may be objects with .weightLbs or plain numbers
-      const last30 = sortedW.slice(-30).map(v => typeof v === 'number' ? v : v?.weightLbs).filter(v => typeof v === 'number' && !isNaN(v));
-      if (!last30.length) return '—';
-      const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
-      return isNaN(avg) ? '—' : avg.toFixed(1);
-    } catch { return '—'; }
-  })();
-
-  const avg30HRV = (() => {
-    try {
-      if (!hrvData || hrvData.length < 2) return '—';
-      // hrvData may be objects with .overnightHRV or plain numbers
-      const last30 = hrvData.slice(-30).map(v => typeof v === 'number' ? v : v?.overnightHRV).filter(v => typeof v === 'number' && !isNaN(v));
-      if (!last30.length) return '—';
-      const avg = last30.reduce((s, v) => s + v, 0) / last30.length;
-      return isNaN(avg) ? '—' : avg.toFixed(0);
-    } catch { return '—'; }
-  })();
 
   // ── Trend text helper (vs last week) ──
   const trendVsLastWk = (current, history) => {
@@ -1066,11 +1370,7 @@ function MobileHomeInner({
     tileColor, tapTab,
   });
 
-  // ── This Week (actual current week, not YTD averages) ──
-  const twMi = thisWeek?.mi || 0;
-  const twSessions = thisWeek?.sessions || 0;
-  const twRuns = thisWeek?.runs || 0;
-  const twHrs = thisWeek?.hrs || 0;
+  // ── This Week — all from hook, no props ──
   const weeklyMiPct = twMi / (G.weeklyRunDistanceTarget || 50);
 
   // RUN
@@ -1084,11 +1384,16 @@ function MobileHomeInner({
   ];
 
   // STRENGTH
+  const twStrTarget = G.weeklyStrengthTarget || 2;
+  const twStr = twStrSessions;
+  const strTrend = twStr >= twStrTarget
+    ? { text: '→ on target', color: C.green }
+    : { text: `${twStr}/${twStrTarget} this wk`, color: C.amber };
   const strengthTiles = [
-    buildTile('Sessions', G.weeklyStrengthTarget || 2, '/wk',
-      { text: '→ on target', color: C.green },
-      ((totalSessions || 0) / Math.max(new Date().getMonth() + 1, 1) / 4.3).toFixed(1),
-      1.0, C.purple, 'activity'),
+    buildTile('Sessions', twStr, '/wk',
+      strTrend,
+      avg30StrSessions,
+      twStr / twStrTarget, C.purple, 'activity'),
     buildTile('Pull-ups', G.pullUpsTarget || '—', 'reps',
       { text: '', color: T3 },
       '—', 0, C.pink, 'activity'),
@@ -1099,8 +1404,8 @@ function MobileHomeInner({
     buildTile('Sleep Score', latestSleepScore || '—', 'pts',
       trendVsLastWk(latestSleepScore, sortedSleep?.slice(-8).map(s => typeof s === 'number' ? s : s?.sleepScore)),
       avg30Sleep, parseFloat(avg30Sleep) / (G.targetSleepScore || 85), C.cyan, 'clinical'),
-    buildTile('HRV', avgHRV30?.toFixed(0) || '—', 'ms',
-      trendVsLastWk(avgHRV30, hrvData?.slice(-8).map(h => typeof h === 'number' ? h : h?.overnightHRV)),
+    buildTile('HRV', latestHRV?.toFixed?.(0) ?? latestHRV ?? '—', 'ms',
+      trendVsLastWk(latestHRV, hrvData?.slice(-8).map(h => typeof h === 'number' ? h : h?.overnightHRV)),
       avg30HRV, parseFloat(avg30HRV) / (G.targetHRV || 70), C.green, 'clinical'),
   ];
 
@@ -1117,8 +1422,8 @@ function MobileHomeInner({
       weightTrend,
       avg30Weight, G.targetWeight ? Math.max(0, 1 - Math.abs(parseFloat(avg30Weight || 0) - G.targetWeight) / 20) : 0.5,
       C.amber, 'clinical'),
-    buildTile('Protein', avgProtein?.toFixed(0) || '0', 'g',
-      trendVsLastWk(avgProtein, recentNut?.map(n => n.protein)),
+    buildTile('Protein', todayProtein ? Math.round(todayProtein) : '—', 'g',
+      trendVsLastWk(todayProtein, recentNut?.slice(-7).map(n => n.protein)),
       avg30Protein, parseFloat(avg30Protein || 0) / (G.dailyProteinTarget || 150),
       C.pink, 'nutrition_mobile'),
   ];
@@ -1152,6 +1457,45 @@ function MobileHomeInner({
       items.push({ iconType: 'run', title: 'Easy Run', detail: 'Recovery · 3 mi @ 10:30 pace', time: 'PM' });
     }
     return items;
+  })();
+
+  // ── Today's completed training (Phase 4a) ─────────────────────────────────
+  // Summary-level rendering for the "Today's Activity" strip under the Plan
+  // card. Reads structured workouts from `activities` filtered to today.
+  // Used as the source for both the summary UI and the adaptive-layout
+  // branch of "Going about my day" (compact when training exists).
+  const todayDoneItems = (() => {
+    try {
+      const today = localDate();
+      const acts = (storage.get('activities') || []).filter(a => a && a.date === today);
+      return acts.map(a => {
+        const typ = (a.activityType || '').toLowerCase();
+        const isRun = /run/.test(typ);
+        const isStrength = /strength|weight|gym|hyrox|circuit/.test(typ);
+        const kind = isRun ? 'Run' : isStrength ? 'Strength' : (a.activityType || 'Activity');
+        const mins = Math.round((Number(a.durationSecs) || (Number(a.durationMins) || 0) * 60) / 60);
+        const miles = a.distanceMi ? `${Number(a.distanceMi).toFixed(1)} mi · ` : '';
+        return { kind, summary: `${miles}${mins} min`, iconType: isStrength ? 'strength' : 'run' };
+      });
+    } catch { return []; }
+  })();
+  const hasTraining = todayDoneItems.length > 0;
+
+  // ── Today's Movement (Phase 4a) ───────────────────────────────────────────
+  // Ambient NEAT from Health Connect via syncDailyEnergy(). Null when no row
+  // exists for today yet. Drives the "Going about my day" card.
+  const todayMovement = (() => {
+    try {
+      const today = localDate();
+      const logs = storage.get('dailyLogs') || [];
+      const entry = logs.find(e => e && e.date === today);
+      if (!entry) return null;
+      const steps = Number(entry.steps) || 0;
+      const active = Number(entry.activeCalories) || 0;
+      const total = Number(entry.totalCalories) || 0;
+      if (steps === 0 && total === 0) return null;
+      return { steps, active, total };
+    } catch { return null; }
   })();
 
   // ── Swipe ──
@@ -1200,6 +1544,9 @@ function MobileHomeInner({
       <HeroRail
         score={mainScore}
         moonScore={moonScore}
+        scoreLabel={mainScoreLabel}
+        moonScoreLabel={moonScoreLabel}
+        scoreGlyph={statusGlyph}
         scoreSuffix={scoreSuffix}
         statusWord={statusWord}
         statusColor={statusColor}
@@ -1211,7 +1558,9 @@ function MobileHomeInner({
         raceDistance={nextRace?.distanceMi ? `${nextRace.distanceMi} mi` : nextRace?.distanceKm ? `${nextRace.distanceKm} km` : ''}
       />
 
-      <SleepInsight headline={sleepInsight.hl} detail={sleepInsight.detail} />
+      <DcyDetails dcyDaily={dcyDaily} />
+
+      <SleepInsight headline={advisory.hl} detail={advisory.detail} iconKey={advisory.iconKey} iconColor={advisory.color} />
 
       {/* ── RUN ── */}
       <CategoryLabel label="Run" color={C.blue} />
@@ -1271,7 +1620,7 @@ function MobileHomeInner({
         headline={weeklyHeadline}
         miles={twMi.toFixed(1)}
         sessions={twSessions}
-        runs={twRuns}
+        runs={twSessions - twStrSessions}
         time={weeklyTime}
         weeklyMiPct={weeklyMiPct}
         weeklyTarget={G.weeklyRunDistanceTarget || 50}
@@ -1292,10 +1641,65 @@ function MobileHomeInner({
       <div style={sectionHeader}>Today's Plan <div style={shLine} /></div>
       <TodaysPlan items={planItems} onTap={() => onOpenTab?.('plan')} />
 
+      {/* Today's Activity — completed training summary under the Plan tile.
+          Hidden when no training was done today to keep the plan crisp. */}
+      {hasTraining && (
+        <div style={{ ...card, marginTop: -4 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+            Today's Activity
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {todayDoneItems.map((it, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: T2 }}>
+                <span style={{ fontSize: 11, color: '#4ade80', fontWeight: 700 }}>✓</span>
+                <span style={{ fontWeight: 600 }}>{it.kind}</span>
+                <span style={{ color: T3 }}>· {it.summary}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Going about my day — ambient NEAT card. Adaptive: three-tile on
+          rest days (ambient is the hero), single-row strip on training days. */}
+      <div style={sectionHeader}>Going about my day <div style={shLine} /></div>
+      <div style={card}>
+        {todayMovement ? (
+          hasTraining ? (
+            // Compact strip — training already has its own card, so this stays terse.
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12, color: T2, padding: '2px 0', flexWrap: 'wrap' }}>
+              <span><strong style={{ color: T1, fontWeight: 700 }}>{todayMovement.steps.toLocaleString()}</strong> <span style={{ color: T4 }}>steps</span></span>
+              <span><strong style={{ color: T1, fontWeight: 700 }}>{Math.round(todayMovement.active)}</strong> <span style={{ color: T4 }}>active kcal</span></span>
+              <span><strong style={{ color: T1, fontWeight: 700 }}>{Math.round(todayMovement.total)}</strong> <span style={{ color: T4 }}>total kcal</span></span>
+            </div>
+          ) : (
+            // Three-tile layout — rest/mobility day, ambient is the main event.
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: C.blue, lineHeight: 1 }}>{todayMovement.steps.toLocaleString()}</div>
+                <div style={{ fontSize: 9, color: T4, marginTop: 4 }}>steps</div>
+              </div>
+              <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: C.amber, lineHeight: 1 }}>{Math.round(todayMovement.active)}</div>
+                <div style={{ fontSize: 9, color: T4, marginTop: 4 }}>active kcal</div>
+              </div>
+              <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: C.green, lineHeight: 1 }}>{Math.round(todayMovement.total)}</div>
+                <div style={{ fontSize: 9, color: T4, marginTop: 4 }}>total kcal</div>
+              </div>
+            </div>
+          )
+        ) : (
+          <div style={{ fontSize: 11, color: T4, textAlign: 'center', padding: '10px 0' }}>
+            Sync your Android phone to populate daily movement.
+          </div>
+        )}
+      </div>
+
       {/* Core Summary */}
       <div style={sectionHeader}>Core <div style={shLine} /></div>
       <CoreSummary
-        hrv={avgHRV30?.toFixed(0)}
+        hrv={latestHRV?.toFixed?.(0) ?? latestHRV ?? '—'}
         rhr={latestRHR}
         weight={currentWeight?.toFixed(1)}
         bodyFat={currentBF?.toFixed(1)}
@@ -1366,8 +1770,7 @@ export function MobileHome(props) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MOBILE EDGEIQ — standalone screen for the EdgeIQ tab on mobile
 // ═══════════════════════════════════════════════════════════════════════════════
-import { getSystemsReport } from "../core/healthSystems.js";
-import { cleanSleepForAveraging } from "../core/parsers/sleepParser.js";
+import { getSystemsReport, getSystemDetail, getSystemWeekly, SYSTEMS } from "../core/healthSystems.js";
 
 // Keys must match system IDs from healthSystems.js: brain, heart, bones, gut, immune, energy, longevity, sleep, metabolism, endurance
 const SYSTEM_ICONS_M = {
@@ -1383,44 +1786,382 @@ const SYSTEM_ICONS_M = {
   endurance: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c4-6 8-6 12 0s8 6 12 0"/></svg>,
 };
 
-function MobileSystemTile({ sys }) {
+function MobileSystemTile({ sys, isActive, onTap }) {
   const statusColor = sys.status === 'good' ? '#4ade80' : sys.status === 'focus' ? '#fbbf24' : '#f87171';
   const fillTint = sys.status === 'good' ? 'rgba(74,222,128,0.12)'
     : sys.status === 'focus' ? 'rgba(251,191,36,0.12)' : 'rgba(248,113,113,0.15)';
   const icon = SYSTEM_ICONS_M[sys.id]?.(sys.color) || null;
   return (
-    <div style={{
-      position: 'relative', background: CARD_BG, border: `0.5px solid ${BORDER}`,
-      borderRadius: 10, padding: '8px 4px 7px', overflow: 'hidden',
+    <div onClick={() => onTap(sys.id)} style={{
+      position: 'relative', background: CARD_BG,
+      border: isActive ? `1.5px solid ${sys.color}` : `1px solid ${BORDER}`,
+      borderRadius: 12, padding: '10px 4px 8px', overflow: 'hidden',
+      cursor: 'pointer', transition: 'border 0.2s ease',
+      boxShadow: isActive ? `0 0 8px ${sys.color}33` : 'none',
     }}>
+      {/* Top accent line */}
+      <div style={{ position: 'absolute', top: 0, left: 6, right: 6, height: 2, borderRadius: '0 0 2px 2px', background: sys.color, opacity: 0.6 }} />
       <div style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         height: `${Math.max(8, sys.pct)}%`,
         background: `linear-gradient(180deg, transparent, ${fillTint})`,
-        borderRadius: '0 0 10px 10px', transition: 'height 0.6s ease', zIndex: 0,
+        borderRadius: '0 0 12px 12px', transition: 'height 0.6s ease', zIndex: 0,
       }} />
       <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
         <div style={{
-          width: 22, height: 22, margin: '0 auto 4px', borderRadius: 6,
-          background: CARD_BG, border: `0.5px solid ${BORDER}`,
+          width: 26, height: 26, margin: '0 auto 5px', borderRadius: 7,
+          background: `${sys.color}12`, border: `1px solid ${sys.color}30`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>{icon}</div>
-        <div style={{ fontSize: 8, fontWeight: 600, color: T1, lineHeight: 1.15, marginBottom: 2, minHeight: 18 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, color: T2, lineHeight: 1.15, marginBottom: 3, minHeight: 20 }}>
           {sys.name.replace(' & ', '/')}
         </div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: statusColor, marginBottom: 2 }}>{sys.pct}%</div>
-        <div style={{ fontSize: 7, color: T3, lineHeight: 1.2, minHeight: 16 }}>{sys.comment}</div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: statusColor }}>{sys.pct}%</div>
       </div>
     </div>
   );
 }
 
+// ── Training / Body / Blood signals mapped per system ──────────────────────
+const SYSTEM_SIGNALS = {
+  brain:     { training: ['HRV', 'Sleep Score'], body: ['Body Fat %'], blood: ['Vitamin B12', 'Folate', 'Vitamin D'] },
+  heart:     { training: ['RHR', 'Avg HR', 'Weekly Miles'], body: ['Weight'], blood: ['Cholesterol', 'Triglycerides', 'CRP'] },
+  bones:     { training: ['Strength Sessions', 'Weekly Hours'], body: ['Lean Mass', 'Weight'], blood: ['Vitamin D', 'Calcium'] },
+  gut:       { training: [], body: ['Body Fat %'], blood: ['CRP', 'Iron'] },
+  immune:    { training: ['HRV', 'Sleep Score'], body: [], blood: ['Vitamin D', 'Vitamin C', 'Zinc', 'WBC'] },
+  energy:    { training: ['Weekly Hours', 'Weekly Miles'], body: ['Weight'], blood: ['Iron', 'Ferritin', 'Vitamin B12'] },
+  longevity: { training: ['HRV', 'RHR', 'Weekly Hours'], body: ['Body Fat %', 'Weight'], blood: ['Glucose', 'HbA1c', 'CRP'] },
+  sleep:     { training: ['Sleep Score', 'HRV', 'RHR'], body: [], blood: ['Magnesium'] },
+  metabolism:{ training: ['Weekly Hours', 'Weekly Miles'], body: ['Weight', 'Body Fat %'], blood: ['Glucose', 'HbA1c', 'Triglycerides'] },
+  endurance: { training: ['Weekly Miles', 'Avg Pace', 'Weekly Hours'], body: ['Weight'], blood: ['Iron', 'Ferritin', 'Hemoglobin'] },
+};
+
+// ── Expanded System Detail Panel ───────────────────────────────────────────
+function SystemDetailPanel({ systemId, data, comment }) {
+  const [detailTab, setDetailTab] = useState('daily');
+  const today = localDate();
+  const detail = useMemo(() => getSystemDetail(systemId, today), [systemId, today]);
+  const weekly = useMemo(() => getSystemWeekly(systemId), [systemId]);
+
+  if (!detail) return null;
+  const { system, details: nutrients } = detail;
+  const signals = SYSTEM_SIGNALS[systemId] || { training: [], body: [], blood: [] };
+  const icon = SYSTEM_ICONS_M[systemId]?.(system.color) || null;
+  // Status color matches the tile: green ≥80, yellow ≥50, red <50
+  const statusColor = (system.pct || 0) >= 80 ? '#4ade80' : (system.pct || 0) >= 50 ? '#fbbf24' : '#f87171';
+
+  // Gather live training/body/blood values
+  const activities = storage.get('activities') || [];
+  const sleepData = cleanSleepForAveraging(storage.get('sleep') || []);
+  const hrvData = storage.get('hrv') || [];
+  const weightData = storage.get('weight') || [];
+  const labSnaps = [...(data?.labSnapshots || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const labMarkers = labSnaps[0]?.markers || {};
+
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const d7 = new Date(); d7.setDate(d7.getDate() - 7);
+  const d30 = new Date(); d30.setDate(d30.getDate() - 30);
+
+  const recentSleep = [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const recentHRV = [...hrvData].filter(h => h.overnightHRV).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const recentWeight = [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const ytdRuns = activities.filter(a => a.date && new Date(a.date) >= yearStart && /run/i.test(a.activityType || ''));
+  const ytdAll = activities.filter(a => a.date && new Date(a.date) >= yearStart);
+  const wk7 = activities.filter(a => a.date && new Date(a.date) >= d7);
+  const wk7Runs = wk7.filter(a => /run/i.test(a.activityType || ''));
+  const wk7Str = wk7.filter(a => /strength|weight|gym/i.test(a.activityType || ''));
+
+  // Resolve signal values
+  const resolveSignal = (name, period) => {
+    if (period === 'annual') {
+      if (name === 'Weekly Miles') return { value: (ytdRuns.reduce((s, a) => s + (a.distanceMi || 0), 0) / Math.max((now - yearStart) / 604800000, 1)).toFixed(1), unit: 'mi/wk' };
+      if (name === 'Weekly Hours') return { value: (ytdAll.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600 / Math.max((now - yearStart) / 604800000, 1)).toFixed(1), unit: 'hrs/wk' };
+      if (name === 'Strength Sessions') return { value: ytdAll.filter(a => /strength|weight|gym/i.test(a.activityType || '')).length, unit: 'YTD' };
+      if (name === 'Avg Pace') { const p = ytdRuns.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean); return p.length ? { value: `${Math.floor(p.reduce((s, v) => s + v, 0) / p.length / 60)}:${String(Math.round(p.reduce((s, v) => s + v, 0) / p.length % 60)).padStart(2, '0')}`, unit: '/mi' } : { value: '—', unit: '' }; }
+    }
+    // Daily / Weekly
+    if (name === 'HRV') return { value: recentHRV[0]?.overnightHRV || '—', unit: 'ms' };
+    if (name === 'RHR') return { value: recentSleep[0]?.restingHR || '—', unit: 'bpm' };
+    if (name === 'Sleep Score') return { value: recentSleep.find(s => s.sleepScore)?.sleepScore || '—', unit: '/100' };
+    if (name === 'Avg HR') { const hrs = wk7Runs.map(a => a.avgHR).filter(Boolean); return { value: hrs.length ? Math.round(hrs.reduce((s, v) => s + v, 0) / hrs.length) : '—', unit: 'bpm' }; }
+    if (name === 'Weekly Miles') return { value: wk7Runs.reduce((s, a) => s + (a.distanceMi || 0), 0).toFixed(1), unit: 'mi' };
+    if (name === 'Weekly Hours') return { value: (wk7.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600).toFixed(1), unit: 'hrs' };
+    if (name === 'Strength Sessions') return { value: wk7Str.length, unit: 'this wk' };
+    if (name === 'Avg Pace') { const p = wk7Runs.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean); return p.length ? { value: `${Math.floor(p.reduce((s, v) => s + v, 0) / p.length / 60)}:${String(Math.round(p.reduce((s, v) => s + v, 0) / p.length % 60)).padStart(2, '0')}`, unit: '/mi' } : { value: '—', unit: '' }; }
+    if (name === 'Weight') return { value: recentWeight[0]?.weightLbs?.toFixed(1) || '—', unit: 'lbs' };
+    if (name === 'Body Fat %') return { value: recentWeight[0]?.bodyFatPct?.toFixed(1) || '—', unit: '%' };
+    if (name === 'Lean Mass') return { value: recentWeight[0]?.skeletalMuscleMassLbs?.toFixed(1) || '—', unit: 'lbs' };
+    return { value: '—', unit: '' };
+  };
+
+  const resolveBlood = (name) => {
+    const v = labMarkers[name];
+    return v != null ? { value: v, unit: '' } : { value: '—', unit: '' };
+  };
+
+  const weeklyAvg = weekly.length ? Math.round(weekly.reduce((s, d) => s + d.pct, 0) / weekly.length) : null;
+  const weeklyMax = Math.max(...weekly.map(d => d.pct), 1);
+
+  const tabStyle = (active) => ({
+    flex: 1, textAlign: 'center', fontSize: 11, fontWeight: active ? 700 : 500,
+    padding: '7px 0', color: active ? statusColor : T3,
+    borderBottom: active ? `2px solid ${statusColor}` : '2px solid transparent',
+    cursor: 'pointer', transition: 'all 0.2s', letterSpacing: '0.04em',
+  });
+
+  const barColor = (pct) => pct >= 80 ? '#4ade80' : pct >= 50 ? '#fbbf24' : '#f87171';
+
+  return (
+    <div style={{
+      background: CARD_BG, border: `1px solid ${statusColor}33`,
+      borderRadius: 14, padding: '12px 12px 10px', marginTop: 8,
+      animation: 'slideDown 0.25s ease-out',
+    }}>
+      <style>{`@keyframes slideDown { from { opacity: 0; max-height: 0; transform: translateY(-8px); } to { opacity: 1; max-height: 600px; transform: translateY(0); } }`}</style>
+
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{
+          width: 34, height: 34, borderRadius: 9,
+          background: `${system.color}18`, border: `1px solid ${system.color}44`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>{icon}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: T1 }}>{system.name}</div>
+          <div style={{ fontSize: 9, color: T3, marginTop: 1 }}>{comment || 'Tap tile again to close'}</div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: statusColor, lineHeight: 1 }}>{detail.system.pct || 0}%</div>
+          <div style={{ fontSize: 8, color: T3, marginTop: 2 }}>today</div>
+        </div>
+      </div>
+
+      {/* Tab bar: Daily / Weekly / Annual */}
+      <div style={{ display: 'flex', borderBottom: `1px solid ${BORDER}`, marginBottom: 10 }}>
+        <div style={tabStyle(detailTab === 'daily')} onClick={() => setDetailTab('daily')}>Daily</div>
+        <div style={tabStyle(detailTab === 'weekly')} onClick={() => setDetailTab('weekly')}>Weekly</div>
+        <div style={tabStyle(detailTab === 'annual')} onClick={() => setDetailTab('annual')}>Annual</div>
+      </div>
+
+      {/* ── Daily tab ── */}
+      {detailTab === 'daily' && (
+        <div>
+          {/* Nutrient breakdown */}
+          <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Nutrients</div>
+          {nutrients.map((n, i) => (
+            <div key={i} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T2, marginBottom: 2 }}>
+                <span style={{ fontWeight: 600 }}>{n.short}</span>
+                <span style={{ color: barColor(n.pct), fontWeight: 600 }}>{n.value} / {n.target} <span style={{ color: T4, fontWeight: 500 }}>({n.pct}%)</span></span>
+              </div>
+              <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
+                <div style={{ height: 4, background: barColor(n.pct), borderRadius: 2, width: `${Math.min(n.pct, 100)}%`, transition: 'width 0.4s ease' }} />
+              </div>
+            </div>
+          ))}
+
+          {/* Training signals */}
+          {signals.training.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Training</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.training.map((sig, i) => {
+                  const r = resolveSignal(sig, 'daily');
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Body signals */}
+          {signals.body.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.body.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.body.map((sig, i) => {
+                  const r = resolveSignal(sig, 'daily');
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Blood markers */}
+          {signals.blood.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Blood</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.blood.map((sig, i) => {
+                  const r = resolveBlood(sig);
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Weekly tab ── */}
+      {detailTab === 'weekly' && (
+        <div>
+          {/* 7-day sparkline bar chart */}
+          <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>7-Day Score</div>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+            {weekly.map((d, i) => {
+              const barH = weeklyMax > 0 ? Math.max(4, Math.round((d.pct / weeklyMax) * 70)) : 4;
+              return (
+                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{ fontSize: 9, color: barColor(d.pct), fontWeight: 700, marginBottom: 3 }}>{d.pct}</div>
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: 70 }}>
+                    <div style={{
+                      width: '100%', borderRadius: 4,
+                      height: barH,
+                      background: barColor(d.pct),
+                      transition: 'height 0.4s ease',
+                    }} />
+                  </div>
+                  <div style={{ fontSize: 8, color: T4, marginTop: 3 }}>{d.dayLabel}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T2, padding: '6px 0', borderTop: `1px solid ${BORDER}` }}>
+            <span style={{ fontWeight: 600 }}>Weekly avg</span>
+            <span style={{ fontWeight: 800, color: barColor(weeklyAvg || 0) }}>{weeklyAvg || '—'}%</span>
+          </div>
+
+          {/* Weekly training signals */}
+          {signals.training.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Weekly Training</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.training.map((sig, i) => {
+                  const r = resolveSignal(sig, 'weekly');
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Nutrient averages hint */}
+          <div style={{ fontSize: 9, color: T4, marginTop: 10, textAlign: 'center', fontStyle: 'italic' }}>
+            Nutrient scores reflect today's intake — log consistently for accurate weekly trends
+          </div>
+        </div>
+      )}
+
+      {/* ── Annual tab ── */}
+      {detailTab === 'annual' && (
+        <div>
+          {/* Annual training signals */}
+          {signals.training.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>YTD Training</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.training.map((sig, i) => {
+                  const r = resolveSignal(sig, 'annual');
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Body — current snapshot */}
+          {signals.body.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body (Current)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.body.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.body.map((sig, i) => {
+                  const r = resolveSignal(sig, 'daily');
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Blood markers — latest panel */}
+          {signals.blood.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>
+                Blood (Latest Panel{labSnaps[0]?.date ? ` · ${labSnaps[0].date}` : ''})
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 3)}, 1fr)`, gap: 6 }}>
+                {signals.blood.map((sig, i) => {
+                  const r = resolveBlood(sig);
+                  return (
+                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Top nutrients for this system */}
+          <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Key Nutrients (Today)</div>
+          {nutrients.slice(0, 5).map((n, i) => (
+            <div key={i} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T2, marginBottom: 2 }}>
+                <span style={{ fontWeight: 600 }}>{n.short}</span>
+                <span style={{ color: barColor(n.pct), fontWeight: 600 }}>{n.pct}%</span>
+              </div>
+              <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
+                <div style={{ height: 4, background: barColor(n.pct), borderRadius: 2, width: `${Math.min(n.pct, 100)}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MobileEdgeIQ({ data, onOpenTab }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
   const report = useMemo(() => getSystemsReport(today), [today]);
   const goodCount = report.filter(s => s.status === 'good').length;
   const focusCount = report.filter(s => s.status === 'focus').length;
   const defCount = report.filter(s => s.status === 'def').length;
+  const [expandedSystem, setExpandedSystem] = useState(null);
+  const handleTileTap = (id) => setExpandedSystem(prev => prev === id ? null : id);
 
   // Cockpit data
   const G = getGoals();
@@ -1457,7 +2198,7 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
 
   // Nutrition
   const d30 = new Date(); d30.setDate(d30.getDate() - 30);
-  const recentNut = cronometer.filter(c => c.date >= d30.toISOString().slice(0, 10) && c.calories);
+  const recentNut = cronometer.filter(c => c.date >= localDate(d30) && c.calories);
   const avgProtein = recentNut.length ? Math.round(recentNut.reduce((s, c) => s + (parseFloat(c.protein) || 0), 0) / recentNut.length) : null;
 
   const cockpitItems = [
@@ -1473,44 +2214,53 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
     <div style={{
       background: BG, color: T1, minHeight: '100vh',
       fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
-      padding: '12px 10px 76px', WebkitFontSmoothing: 'antialiased',
+      padding: '0 10px 76px', WebkitFontSmoothing: 'antialiased',
     }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+      {/* Header — matches Start screen */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 0 8px' }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: T1 }}>◈ EdgeIQ</div>
-          <div style={{ fontSize: 9, color: T3, marginTop: 1 }}>Intelligence · Signals · Systems</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: 6,
+              background: 'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',
+              border: '1px solid rgba(91,155,213,0.12)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 9, color: C.blue, fontWeight: 800,
+            }}>A</div>
+            <span style={{ fontSize: 9, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T2, marginTop: 3 }}>EdgeIQ</div>
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
           <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 6, background: 'rgba(96,165,250,0.12)', color: C.blue }}>YTD</span>
           <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 6, background: 'rgba(107,171,223,0.12)', color: C.blue }}>{totalMi.toFixed(0)} mi</span>
         </div>
       </div>
 
-      {/* Health Systems */}
-      <div style={{ ...card, borderRadius: 12, padding: '10px 8px', marginBottom: 8 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: T1 }}>⬡ Health Systems</span>
-          <div style={{ display: 'flex', gap: 6, fontSize: 8, color: T3 }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />{focusCount}
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171' }} />{defCount}
-            </span>
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
-          {report.map(sys => <MobileSystemTile key={sys.id} sys={sys} />)}
+      {/* ── HEALTH SYSTEMS ── */}
+      <div style={sectionHeader}>Health Systems
+        <div style={{ display: 'flex', gap: 6, fontSize: 8, color: T3, marginLeft: 'auto' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />{focusCount}
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171' }} />{defCount}
+          </span>
         </div>
       </div>
+      <div style={card}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
+          {report.map(sys => <MobileSystemTile key={sys.id} sys={sys} isActive={expandedSystem === sys.id} onTap={handleTileTap} />)}
+        </div>
+        {expandedSystem && <SystemDetailPanel systemId={expandedSystem} data={data} comment={report.find(s => s.id === expandedSystem)?.comment} />}
+      </div>
 
-      {/* Cockpit — signal gauges */}
-      <div style={{ ...card, borderRadius: 12, padding: '10px 8px', marginBottom: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: T1, marginBottom: 8 }}>◈ Signal Cockpit</div>
+      {/* ── SIGNAL COCKPIT ── */}
+      <div style={sectionHeader}>Signal Cockpit <div style={shLine} /></div>
+      <div style={card}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
           {cockpitItems.map((item, i) => {
             const goalVal = parseFloat(item.goal) || 0;
@@ -1518,15 +2268,17 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
             const pct = goalVal > 0 ? Math.min(val / goalVal, 1) : 0;
             return (
               <div key={i} style={{
-                background: CARD_BG, borderRadius: 8, padding: '8px 6px', textAlign: 'center',
-                border: `0.5px solid ${BORDER}`,
+                position: 'relative', overflow: 'hidden',
+                background: CARD_BG, borderRadius: 12, padding: '12px 8px 10px', textAlign: 'center',
+                border: `1px solid ${BORDER}`,
               }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: item.color, lineHeight: 1 }}>{item.value}</div>
-                <div style={{ fontSize: 7, color: T3, marginTop: 2 }}>{item.unit}</div>
-                <div style={{ fontSize: 8, fontWeight: 600, color: T2, marginTop: 3 }}>{item.label}</div>
+                <div style={{ position: 'absolute', top: 0, left: 8, right: 8, height: 2, borderRadius: '0 0 2px 2px', background: item.color, opacity: 0.5 }} />
+                <div style={{ fontSize: 22, fontWeight: 800, color: item.color, lineHeight: 1 }}>{item.value}</div>
+                <div style={{ fontSize: 9, color: T4, marginTop: 2 }}>{item.unit}</div>
+                <div style={{ fontSize: 9, fontWeight: 700, color: T2, marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
                 {goalVal > 0 && (
-                  <div style={{ height: 2, background: 'rgba(255,255,255,0.06)', borderRadius: 1, marginTop: 4 }}>
-                    <div style={{ height: 2, background: item.color, borderRadius: 1, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
+                  <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 6 }}>
+                    <div style={{ height: 3, background: item.color, borderRadius: 2, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
                   </div>
                 )}
               </div>
@@ -1535,22 +2287,22 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
         </div>
       </div>
 
-      {/* Annual progress */}
-      <div style={{ ...card, borderRadius: 12, padding: '10px 8px' }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: T1, marginBottom: 8 }}>◈ Annual Progress</div>
+      {/* ── ANNUAL PROGRESS ── */}
+      <div style={sectionHeader}>Annual Progress <div style={shLine} /></div>
+      <div style={card}>
         {[
           { label: 'Run distance', actual: totalMi.toFixed(0), target: G.annualRunDistanceTarget || 800, unit: 'mi', color: C.blue },
           { label: 'Workouts', actual: totalSessions, target: G.annualWorkoutsTarget || 200, unit: '', color: C.purple },
         ].map((p, i) => {
           const pct = Math.min(parseFloat(p.actual) / parseFloat(p.target), 1);
           return (
-            <div key={i} style={{ marginBottom: 6 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: T2, marginBottom: 3 }}>
-                <span>{p.label}</span>
-                <span>{p.actual} / {p.target} {p.unit} <span style={{ color: T4 }}>({Math.round(pct * 100)}%)</span></span>
+            <div key={i} style={{ marginBottom: i === 0 ? 10 : 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: T2, marginBottom: 4 }}>
+                <span style={{ fontWeight: 600 }}>{p.label}</span>
+                <span style={{ fontWeight: 600 }}>{p.actual} / {p.target} {p.unit} <span style={{ color: T4, fontWeight: 500 }}>({Math.round(pct * 100)}%)</span></span>
               </div>
-              <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
-                <div style={{ height: 3, background: p.color, borderRadius: 2, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
+              <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
+                <div style={{ height: 5, background: p.color, borderRadius: 3, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
               </div>
             </div>
           );

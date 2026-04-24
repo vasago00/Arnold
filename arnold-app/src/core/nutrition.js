@@ -10,6 +10,10 @@
 
 import { storage } from './storage.js';
 
+// Local date helper — avoids UTC rollover bug with toISOString()
+const localDate = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 export const MEAL_CATEGORIES = [
@@ -50,7 +54,7 @@ export function createEntry(opts) {
   return {
     id: genId(),
     name: opts.name || 'Unknown food',
-    date: opts.date || new Date().toISOString().slice(0, 10),
+    date: opts.date || localDate(),
     time: opts.time || new Date().toTimeString().slice(0, 5),
     meal: opts.meal || 'snack',
     source: opts.source || 'manual',
@@ -98,16 +102,38 @@ export function getEntriesForDate(dateStr) {
 
 // ─── Daily Aggregation ──────────────────────────────────────────────────────
 // Sums all entries for a given date into a single macro totals object.
-// Also merges in Cronometer data if available for backward compat.
+//
+// DATA-SOURCE PRECEDENCE (highest wins):
+//   1. Cronometer live pull — creates a `meal: 'full-day'` entry in
+//      `nutritionLog` with id `cronometer-live:${date}`. createdAt is
+//      refreshed on every pull so it always beats older full-day entries.
+//   2. Manual / barcode / photo entries — individual `nutritionLog` rows
+//      for a day. Only summed when no full-day entry exists.
+//   3. `cronometer` collection — legacy CSV imports (Cronometer export →
+//      parser). Fallback only when nutritionLog has zero entries for the day.
+//   4. HC syncNutrition — DISABLED in hc-sync.js (see comment there). Left
+//      out of the precedence chain on purpose; Cronometer live pull is the
+//      single authoritative source.
 
 export function dailyTotals(dateStr) {
   const entries = getEntriesForDate(dateStr);
   const totals = { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, water: 0, entryCount: entries.length };
 
-  entries.forEach(e => {
-    const s = e.servings || 1;
-    MACRO_KEYS.forEach(k => { totals[k] += (e.macros?.[k] || 0) * s; });
-  });
+  // If a full-day summary exists (Cronometer import), use ONLY the most recent
+  // one — it already includes all food for the day. Other entries alongside it
+  // would be stale duplicates (e.g. from a previous import that sync didn't delete).
+  const fullDay = entries.filter(e => e.meal === 'full-day');
+  if (fullDay.length > 0) {
+    // Take the most recently created one (by createdAt timestamp)
+    const fd = fullDay.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
+    const s = fd.servings || 1;
+    MACRO_KEYS.forEach(k => { totals[k] += (fd.macros?.[k] || 0) * s; });
+  } else {
+    entries.forEach(e => {
+      const s = e.servings || 1;
+      MACRO_KEYS.forEach(k => { totals[k] += (e.macros?.[k] || 0) * s; });
+    });
+  }
 
   // Merge Cronometer data for the same date (backward compat)
   try {
@@ -137,7 +163,7 @@ export function weeklyAverages(refDate = new Date()) {
   for (let i = 0; i < 7; i++) {
     const d = new Date(refDate);
     d.setDate(d.getDate() - i);
-    const ds = d.toISOString().slice(0, 10);
+    const ds = localDate(d);
     const t = dailyTotals(ds);
     if (t.calories > 0 || t.protein > 0 || t.entryCount > 0) {
       avgs.daysWithData++;
@@ -148,6 +174,56 @@ export function weeklyAverages(refDate = new Date()) {
     MACRO_KEYS.forEach(k => { avgs[k] = Math.round(avgs[k] / avgs.daysWithData); });
   }
   return avgs;
+}
+
+// ─── Rolling Baseline (Phase 4b — Cronometer partial-day forecast prior) ────
+// Returns a typical-day macro profile drawn from fully-logged recent history.
+// Used as the prior in fuelAdequacy's baseline-blend forecast: mid-day, when
+// live Cronometer totals only cover breakfast, we project the day as
+//   projected_intake = α × (live_intake / fraction_of_day_elapsed)
+//                    + (1-α) × baseline
+// where baseline is this function's output and α grows from dawn → bedtime.
+//
+// Inputs:
+//   refDate       — anchor date (default today). Always excluded from the
+//                   baseline so in-progress data doesn't contaminate the prior.
+//   lookbackDays  — how far back to look (default 14).
+//
+// A day counts as "fully logged" only if its calories are at or above
+// MIN_LOGGED_KCAL — this filters out skip-days (user forgot to log) and
+// empty-morning days (logged breakfast only). 500 kcal is conservative;
+// below that, a day is almost certainly incomplete rather than a true fast.
+// Callers that want to include fasts can pass lookbackDays with a matching
+// minKcal override.
+//
+// Return shape matches weeklyAverages() for interop: macros + daysWithData.
+// daysWithData lets callers judge confidence (e.g., if < 3 days, fall back
+// to a static prior instead of blending).
+
+const MIN_LOGGED_KCAL = 500;
+
+export function nutritionBaseline(refDate = new Date(), lookbackDays = 14, { minKcal = MIN_LOGGED_KCAL } = {}) {
+  const anchor = refDate instanceof Date ? refDate : new Date(refDate);
+  const anchorStr = localDate(anchor);
+  const agg = { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, water: 0, daysWithData: 0 };
+
+  // Walk back day-by-day, skipping the anchor itself so today's partial data
+  // never bleeds into its own prior.
+  for (let i = 1; i <= lookbackDays; i++) {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() - i);
+    const ds = localDate(d);
+    if (ds === anchorStr) continue;
+    const t = dailyTotals(ds);
+    if ((t.calories || 0) < minKcal) continue; // skip partial / empty days
+    agg.daysWithData++;
+    MACRO_KEYS.forEach(k => { agg[k] += (t[k] || 0); });
+  }
+
+  if (agg.daysWithData > 0) {
+    MACRO_KEYS.forEach(k => { agg[k] = Math.round(agg[k] / agg.daysWithData); });
+  }
+  return agg;
 }
 
 // ─── Meal breakdown for a day ───────────────────────────────────────────────

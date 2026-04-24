@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Icon v5 — Refined Semi-Arc</title>
+<style>
+  body { background: #0b0c12; color: #fff; font-family: 'Inter', system-ui, sans-serif; margin: 0; padding: 24px; }
+  h2 { font-size: 11px; color: rgba(255,255,255,0.4); margin: 28px 0 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  .grid { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-start; }
+  .card {
+    text-align: center; padding: 20px 14px 14px; border-radius: 16px;
+    background: rgba(255,255,255,0.015); border: 1px solid rgba(255,255,255,0.04);
+  }
+  .card .name { font-size: 10px; color: rgba(255,255,255,0.55); margin-top: 12px; font-weight: 700; letter-spacing: 0.03em; }
+  .card .desc { font-size: 8px; color: rgba(255,255,255,0.25); margin-top: 3px; line-height: 1.4; max-width: 160px; margin-left: auto; margin-right: auto; }
+
+  .homescreen {
+    margin: 30px auto; max-width: 340px; padding: 28px 20px;
+    background: linear-gradient(160deg, #777, #888, #6e6e6e);
+    border-radius: 22px;
+  }
+  .hs-row { display: flex; justify-content: space-around; margin-bottom: 20px; }
+  .hs-icon { text-align: center; }
+  .hs-icon .hs-label { font-size: 8px; color: rgba(255,255,255,0.8); margin-top: 5px; font-weight: 500; }
+  .hs-placeholder { width: 52px; height: 52px; border-radius: 13px; }
+</style>
+</head>
+<body>
+
+<h1 style="font-size: 16px; margin-bottom: 3px;">Arnold Icon v5 — Polished</h1>
+<p style="font-size: 10px; color: rgba(255,255,255,0.3); margin-bottom: 28px;">~220° arc · gap to SSW · single-color arc · icons complete the circle</p>
+
+<div class="grid">
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- MAIN LARGE PREVIEW -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <svg width="192" height="192" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <!-- Subtle radial glow behind the A -->
+        <radialGradient id="coreGlow" cx="50%" cy="48%" r="28%">
+          <stop offset="0%" stop-color="#6babdf" stop-opacity="0.06" />
+          <stop offset="100%" stop-color="#6babdf" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+
+      <!-- Background -->
+      <rect width="128" height="128" rx="28" fill="#0e1019" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.05)" stroke-width="0.8" />
+
+      <!-- Core glow -->
+      <circle cx="64" cy="62" r="36" fill="url(#coreGlow)" />
+
+      <!-- Faint track ring (full circle, very subtle) -->
+      <circle cx="64" cy="62" r="40" fill="none" stroke="rgba(255,255,255,0.025)" stroke-width="4" />
+
+      <!-- ═══ PROGRESS ARC ═══ -->
+      <!-- 220° arc, centered with gap opening toward SSW (~200°-210°) -->
+      <!-- Arc: from 240° to 100° going clockwise = 220° sweep -->
+      <!-- 240° → point: cos(240)*40+64, sin(240)*40+62 = 64+(-20), 62+(-34.64) = 44, 27.4 -->
+      <!-- 100° → point: cos(100)*40+64, sin(100)*40+62 = 64+(-6.95), 62+(39.39) = 57.05, 101.4 -->
+      <!-- Going clockwise from 240° through 360°/0° to 100° = 220° -->
+      <!-- Wait, let me recalculate for gap at SSW (around 210°) -->
+      <!-- Gap center at ~210°. Gap spans ~140° (from 140° to 280°, so arc is from 280° to 140° = 220° through top) -->
+      <!-- 280°: cos(280°)=0.1736, sin(280°)=-0.9848 → (64+6.94, 62-39.39) = (70.94, 22.61) — that's upper right area -->
+      <!-- Actually, standard SVG angles: 0° = 3 o'clock, goes clockwise -->
+      <!-- For gap at SSW (about 200-210° in compass = about 240° in math), I want: -->
+      <!-- Gap center at SVG ~250° (pointing lower-left). Arc goes from ~320° CW through top to ~180° = no -->
+
+      <!-- Simpler approach: use the arc command directly -->
+      <!-- Center: 64, 62. Radius: 40 -->
+      <!-- I want the gap at bottom-left (SSW direction) -->
+      <!-- Gap center angle (SVG): ~245° from 3 o'clock = lower-left -->
+      <!-- Arc start: 245° - 70° = 175° → that's left side, slightly below center -->
+      <!-- Arc end: 245° + 70° = 315° → that's upper-right area -->
+      <!-- Wait, I want the arc to go the LONG way (220°), so: -->
+      <!-- Start at 315° going CW to 175° = passing through 0° (right), 90° (bottom)... no that goes through bottom -->
+
+      <!-- Let me think about this differently: -->
+      <!-- Gap at SSW means gap centered around compass 200° = SVG angle ~250° -->
+      <!-- The ARC covers 220° of the circle, the GAP is 140° -->
+      <!-- Arc from angle (250+70)=320° to angle (250-70)=180°, going the short way CLOCKWISE through 0° -->
+      <!-- 320° CW to 180° through 360/0 = 360-320+180 = 220° ✓ -->
+
+      <!-- 320° on r=40, c=(64,62): x=64+40*cos(320°)=64+30.64=94.64, y=62+40*sin(320°)=62-25.71=36.29 -->
+      <!-- 180° on r=40, c=(64,62): x=64+40*cos(180°)=64-40=24, y=62+40*sin(180°)=62 -->
+      <!-- large-arc=0 (220° > 180° but we want the short CW path... actually 220° > 180° so large-arc=1) -->
+      <!-- sweep=1 for clockwise -->
+
+      <path d="M 94.64 36.29 A 40 40 0 1 1 24 62"
+            fill="none" stroke="#6babdf" stroke-width="4.2" stroke-linecap="round" opacity="0.75" />
+
+      <!-- Subtle glow at arc endpoints -->
+      <circle cx="94.64" cy="36.29" r="2.5" fill="#6babdf" opacity="0.12" />
+      <circle cx="24" cy="62" r="2.5" fill="#6babdf" opacity="0.12" />
+
+      <!-- ═══ A MONOGRAM ═══ -->
+      <text x="64" y="70" text-anchor="middle" fill="rgba(255,255,255,0.94)"
+            font-size="32" font-weight="800" font-family="Inter, system-ui, sans-serif"
+            letter-spacing="-0.5">A</text>
+
+      <!-- ═══ CATEGORY ICONS IN THE GAP ═══ -->
+      <!-- Gap goes from 180° (left-center) curving down-left to 320°... -->
+      <!-- Actually the gap is from 180° COUNTER-clockwise to 320° = the empty 140° -->
+      <!-- In CCW order from 180°: 180° → 210° → 240° → 270° → 320° -->
+      <!-- Place 4 icons at: 190°, 220°, 250°, 290° — evenly-ish in the gap -->
+      <!-- Actually, distribute evenly in 140° gap: 180° to 320° (going CCW/through 270°) -->
+      <!-- Positions: 180+28=208°, 180+56=236°, 180+84=264°, 180+112=292° -->
+      <!-- On a circle of r=40 from center (64, 62) -->
+
+      <!-- Icon 1: Run (arrow) at 205° -->
+      <!-- cos(205°)=-0.9063, sin(205°)=-0.4226 → (64-36.25, 62-16.9) = (27.75, 45.1) — that's left side -->
+      <!-- Hmm that's inside the arc area. Let me reconsider. -->
+
+      <!-- The gap goes from 180° CCW through 270° to 320° -->
+      <!-- In SVG CW terms: gap is from 180° going CCW (=SVG going from 180° backwards) -->
+      <!-- Actually simpler: the 140° of missing arc. The arc covers 220° from 320° CW to 180°. -->
+      <!-- The gap is the remaining 140°: from 180° CW to 320° (going through 270° = bottom-left) -->
+      <!-- Gap positions (CW from 180°): 180+28=208, 180+56=236, 180+84=264, 180+112=292 -->
+
+      <!-- 208°: cos=-0.8829, sin=0.4695 → (64-35.3, 62+18.8) = (28.7, 80.8) -->
+      <!-- 236°: cos=-0.5592, sin=0.8290 → (64-22.4, 62+33.2) = (41.6, 95.2) -->
+      <!-- 264°: cos=-0.1045, sin=0.9945 → (64-4.2, 62+39.8) = (59.8, 101.8) -->
+      <!-- 292°: cos=0.3746, sin=-0.9272 → wait sin(292°)=sin(360-68)=-sin68=-0.9272 → (64+15, 62-37.1) -->
+      <!-- That's wrong — 292° should be in upper right area, not in the gap -->
+
+      <!-- I think I have the direction confused. Let me reclarify: -->
+      <!-- SVG coordinate system: 0°=right, 90°=down, 180°=left, 270°=up -->
+      <!-- My arc goes from 320° CW to 180° = covers 220° (320→360→0→90→180) -->
+      <!-- This passes through: right side, bottom, left side -->
+      <!-- Gap: from 180° CW to 320° = 140° passing through 270° (=UP/top) -->
+      <!-- Wait: 180° CW to 320° passes through 180→270→320, which is LEFT→UP→UPPER-RIGHT -->
+      <!-- So the gap is at the TOP-LEFT of the icon! Not SSW. -->
+
+      <!-- I need to flip this. For gap at SSW (bottom-left): -->
+      <!-- SSW in SVG coords: between 180° (left) and 270° (up)... no. -->
+      <!-- SVG: 0°=right, 90°=DOWN, 180°=left, 270°=UP -->
+      <!-- Compass SSW in SVG = somewhere around 200-210° (past left, going upward) -->
+      <!-- Actually compass S = SVG 90° (down). Compass SW = SVG ~135° (down-left). Compass SSW = ~112° -->
+
+      <!-- Let me just think visually: I want the gap at the LOWER LEFT of the icon -->
+      <!-- Gap center at SVG ~225° (which is between left=180° and up=270°)... no that's upper-left -->
+      <!-- SVG ~135° = lower-left. Gap center at 135°. -->
+      <!-- Arc: from 135-70=65° to 135+70=205°, the LONG way through top (270°) and right (0°) -->
+      <!-- 65° CW to 205° the long way: 360-205+65 = 220° ✓ -->
+      <!-- But we want the arc to be the 220° portion, so from 205° CW through 270°,0°,65° = 220° -->
+
+      <!-- OK let me just do this properly: -->
+      <!-- Arc start at 205°, end at 65°, going CW through 270° (up), 0° (right) -->
+      <!-- 205° r=40 c=(64,62): cos(205°)=-0.9063, sin(205°)=-0.4226 → x=64+40*(-0.9063)=27.75, y=62+40*(-0.4226)=45.1 -->
+      <!-- Wait, sin should use SVG convention where Y increases downward -->
+      <!-- In standard math: angle θ from positive x-axis, x=cos(θ), y=sin(θ) with y-up -->
+      <!-- In SVG: y is flipped, so a point at angle θ (measured CW from right) is: -->
+      <!-- x = cx + r*cos(θ), y = cy + r*sin(θ) where sin is already "down-positive" -->
+
+      <!-- Let me just use degrees where 0=right, 90=down, 180=left, 270=up -->
+      <!-- I want gap centered at lower-left, say SVG angle 150° (between down=90° and left=180°) -->
+      <!-- Gap of 140°: from 150-70=80° to 150+70=220° -->
+      <!-- Arc covers from 220° CW to 80° = 220° through 270° (up), 0° (right), 80° -->
+
+      <!-- 220° (SVG): cos(220°)=-0.766, sin(220°)=-0.6428 -->
+      <!--   x=64+40*(-0.766)=33.36, y=62+40*(-0.6428)=36.29 → upper-left area ✓ (arc start) -->
+      <!-- 80° (SVG): cos(80°)=0.1736, sin(80°)=0.9848 -->
+      <!--   x=64+40*(0.1736)=70.94, y=62+40*(0.9848)=101.39 → lower-right area ✓ (arc end) -->
+
+      <!-- Arc from (33.36, 36.29) to (70.94, 101.39), large-arc=1 (220°>180°), sweep=1 (CW) ✓ -->
+
+      <!-- Gap icons placed along the 140° gap from 80° to 220° (going CW through 150°) -->
+      <!-- Positions: 80+28=108°, 80+56=136°, 80+84=164°, 80+112=192° -->
+
+      <!-- 108°: cos=-0.309, sin=0.9511 → (64-12.36, 62+38.04) = (51.64, 100.04) -->
+      <!-- 136°: cos=-0.7193, sin=0.6947 → (64-28.77, 62+27.79) = (35.23, 89.79) -->
+      <!-- 164°: cos=-0.9613, sin=0.2756 → (64-38.45, 62+11.02) = (25.55, 73.02) -->
+      <!-- 192°: cos=-0.9781, sin=-0.2079 → (64-39.12, 62-8.32) = (24.88, 53.68) -->
+
+      <!-- Run (arrow) at ~192° position (upper end of gap) -->
+      <g transform="translate(24.9, 53.7)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.2 0h6.4" stroke-width="1.8" />
+        <path d="M1.5 -2.4l3.2 2.4-3.2 2.4" stroke-width="1.6" />
+      </g>
+
+      <!-- Strength (power stack) at ~164° -->
+      <g transform="translate(25.5, 73)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.6" />
+        <path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.4" opacity="0.5" />
+        <path d="M-3.5 -2.6l3.5-2.5 3.5 2.5" stroke-width="1.2" opacity="0.25" />
+      </g>
+
+      <!-- Recovery (battery) at ~136° -->
+      <g transform="translate(35.2, 89.8)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.3" />
+        <path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.1" />
+        <line x1="-2" y1="-1.2" x2="-2" y2="1.2" stroke-width="1.4" />
+        <line x1="0.3" y1="-1.2" x2="0.3" y2="1.2" stroke-width="1.2" opacity="0.4" />
+      </g>
+
+      <!-- Body (person) at ~108° -->
+      <g transform="translate(51.6, 100)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-2.8" r="2" stroke-width="1.3" />
+        <path d="M-3.5 3.8v-0.7a3.5 3.5 0 0 1 7 0v0.7" stroke-width="1.3" />
+      </g>
+
+    </svg>
+    <div class="name">Semi-arc with SSW gap</div>
+    <div class="desc">220° progress arc · icons fill the lower-left gap</div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- VARIANT: Gap pointing more directly South -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <svg width="192" height="192" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="coreGlow2" cx="50%" cy="46%" r="28%">
+          <stop offset="0%" stop-color="#6babdf" stop-opacity="0.06" />
+          <stop offset="100%" stop-color="#6babdf" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+
+      <rect width="128" height="128" rx="28" fill="#0e1019" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.05)" stroke-width="0.8" />
+      <circle cx="64" cy="60" r="36" fill="url(#coreGlow2)" />
+
+      <!-- Faint track -->
+      <circle cx="64" cy="60" r="40" fill="none" stroke="rgba(255,255,255,0.025)" stroke-width="4" />
+
+      <!-- 220° arc, gap centered at SVG ~120° (south-southwest, slightly left of straight down) -->
+      <!-- Gap from 120-70=50° to 120+70=190° -->
+      <!-- Arc from 190° CW through 270°(up), 0°(right), to 50° = 220° -->
+      <!-- 190° r=40 c=(64,60): cos(190°)=-0.9848, sin(190°)=-0.1736 → (64-39.39, 60-6.94) = (24.61, 53.06) -->
+      <!-- 50° r=40 c=(64,60): cos(50°)=0.6428, sin(50°)=0.766 → (64+25.71, 60+30.64) = (89.71, 90.64) -->
+
+      <path d="M 24.61 53.06 A 40 40 0 1 0 89.71 90.64"
+            fill="none" stroke="#6babdf" stroke-width="4.2" stroke-linecap="round" opacity="0.75" />
+
+      <circle cx="24.61" cy="53.06" r="2.5" fill="#6babdf" opacity="0.12" />
+      <circle cx="89.71" cy="90.64" r="2.5" fill="#6babdf" opacity="0.12" />
+
+      <!-- A -->
+      <text x="64" y="68" text-anchor="middle" fill="rgba(255,255,255,0.94)"
+            font-size="32" font-weight="800" font-family="Inter, system-ui, sans-serif"
+            letter-spacing="-0.5">A</text>
+
+      <!-- Icons in the gap (from 50° CW to 190°, through 120°) -->
+      <!-- Positions: 50+28=78°, 50+56=106°, 50+84=134°, 50+112=162° -->
+      <!-- 78°: cos=0.2079, sin=0.9781 → (64+8.32, 60+39.12) = (72.32, 99.12) -->
+      <!-- 106°: cos=-0.2756, sin=0.9613 → (64-11.02, 60+38.45) = (52.98, 98.45) -->
+      <!-- 134°: cos=-0.6947, sin=0.7193 → (64-27.79, 60+28.77) = (36.21, 88.77) -->
+      <!-- 162°: cos=-0.9511, sin=0.309 → (64-38.04, 60+12.36) = (25.96, 72.36) -->
+
+      <!-- Body (person) at 78° — right end of gap -->
+      <g transform="translate(72.3, 99.1)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-2.8" r="2" stroke-width="1.3" />
+        <path d="M-3.5 3.8v-0.7a3.5 3.5 0 0 1 7 0v0.7" stroke-width="1.3" />
+      </g>
+
+      <!-- Recovery (battery) at 106° -->
+      <g transform="translate(53, 98.4)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.3" />
+        <path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.1" />
+        <line x1="-2" y1="-1.2" x2="-2" y2="1.2" stroke-width="1.4" />
+        <line x1="0.3" y1="-1.2" x2="0.3" y2="1.2" stroke-width="1.2" opacity="0.4" />
+      </g>
+
+      <!-- Strength (power stack) at 134° -->
+      <g transform="translate(36.2, 88.8)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.6" />
+        <path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.4" opacity="0.5" />
+        <path d="M-3.5 -2.6l3.5-2.5 3.5 2.5" stroke-width="1.2" opacity="0.25" />
+      </g>
+
+      <!-- Run (arrow) at 162° — left end of gap -->
+      <g transform="translate(26, 72.4)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.2 0h6.4" stroke-width="1.8" />
+        <path d="M1.5 -2.4l3.2 2.4-3.2 2.4" stroke-width="1.6" />
+      </g>
+
+    </svg>
+    <div class="name">Arc gap at South-SW</div>
+    <div class="desc">Gap opens toward lower-left · icons curve along the opening</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Home Screen Simulation (52px)</h2>
+<div class="homescreen">
+  <div class="hs-row">
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0e1019" />
+          <circle cx="64" cy="62" r="40" fill="none" stroke="rgba(255,255,255,0.025)" stroke-width="5" />
+          <path d="M 33.36 36.29 A 40 40 0 1 1 70.94 101.39" fill="none" stroke="#6babdf" stroke-width="5.5" stroke-linecap="round" opacity="0.75" />
+          <text x="64" y="70" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-size="34" font-weight="800" font-family="Inter, system-ui">A</text>
+          <g transform="translate(24.9, 53.7)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-3.2 0h6.4" stroke-width="2.2" /><path d="M1.5 -2.4l3.2 2.4-3.2 2.4" stroke-width="2" /></g>
+          <g transform="translate(25.5, 73)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="2" /><path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.8" opacity="0.5" /></g>
+          <g transform="translate(35.2, 89.8)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.6" /></g>
+          <g transform="translate(51.6, 100)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="0" cy="-2.8" r="2.2" stroke-width="1.6" /><path d="M-3.5 3.8v-0.7a3.5 3.5 0 0 1 7 0v0.7" stroke-width="1.6" /></g>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (1)</div>
+    </div>
+
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0e1019" />
+          <circle cx="64" cy="60" r="40" fill="none" stroke="rgba(255,255,255,0.025)" stroke-width="5" />
+          <path d="M 24.61 53.06 A 40 40 0 1 0 89.71 90.64" fill="none" stroke="#6babdf" stroke-width="5.5" stroke-linecap="round" opacity="0.75" />
+          <text x="64" y="68" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-size="34" font-weight="800" font-family="Inter, system-ui">A</text>
+          <g transform="translate(72.3, 99.1)" stroke="#e0b45e" fill="none" stroke-linecap="round"><circle cx="0" cy="-2.8" r="2.2" stroke-width="1.6" /><path d="M-3.5 3.8v-0.7a3.5 3.5 0 0 1 7 0v0.7" stroke-width="1.6" /></g>
+          <g transform="translate(53, 98.4)" stroke="#6bcf9a" fill="none" stroke-linecap="round"><rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.6" /></g>
+          <g transform="translate(36.2, 88.8)" stroke="#ab9ed4" fill="none" stroke-linecap="round"><path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="2" /><path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.8" opacity="0.5" /></g>
+          <g transform="translate(26, 72.4)" stroke="#6babdf" fill="none" stroke-linecap="round"><path d="M-3.2 0h6.4" stroke-width="2.2" /><path d="M1.5 -2.4l3.2 2.4-3.2 2.4" stroke-width="2" /></g>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (2)</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #FF6B35, #FF4500);"></div>
+      <div class="hs-label">Strava</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #1DB954, #169c46);"></div>
+      <div class="hs-label">Spotify</div>
+    </div>
+  </div>
+</div>
+
+<div style="height: 30px;"></div>
+</body>
+</html>

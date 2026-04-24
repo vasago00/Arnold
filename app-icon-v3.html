@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Icon v3 — Category Ring</title>
+<style>
+  body { background: #0b0c12; color: #fff; font-family: 'Inter', system-ui, sans-serif; margin: 0; padding: 24px; }
+  h2 { font-size: 11px; color: rgba(255,255,255,0.4); margin: 28px 0 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  .grid { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; }
+  .card {
+    text-align: center; padding: 16px 10px 12px; border-radius: 14px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  }
+  .card .name { font-size: 9px; color: rgba(255,255,255,0.5); margin-top: 10px; font-weight: 700; }
+  .card .desc { font-size: 7px; color: rgba(255,255,255,0.25); margin-top: 3px; line-height: 1.4; max-width: 120px; margin-left: auto; margin-right: auto; }
+
+  .homescreen {
+    margin: 30px auto; max-width: 320px; padding: 24px 16px;
+    background: linear-gradient(160deg, #888, #999, #777);
+    border-radius: 20px;
+  }
+  .hs-row { display: flex; justify-content: space-around; margin-bottom: 20px; }
+  .hs-icon { text-align: center; }
+  .hs-icon .hs-label { font-size: 8px; color: rgba(255,255,255,0.8); margin-top: 5px; font-weight: 500; }
+  .hs-placeholder { width: 52px; height: 52px; border-radius: 13px; }
+</style>
+</head>
+<body>
+
+<h1 style="font-size: 16px; margin-bottom: 3px;">Arnold Icon — Category Ring Concept</h1>
+<p style="font-size: 10px; color: rgba(255,255,255,0.3); margin-bottom: 24px;">Four category icons orbit the A, completing the readiness ring</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Option A — Icons on the ring path</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.25); margin:-6px 0 12px;">Each icon sits at a quarter of the arc, colored by category</p>
+<div class="grid">
+
+  <div class="card">
+    <svg width="128" height="128" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="bgA" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#10111a" />
+          <stop offset="100%" stop-color="#0b0c14" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="url(#bgA)" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.08)" stroke-width="1" />
+
+      <!-- Ring track -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="5" />
+
+      <!-- Four colored arc segments -->
+      <!-- Run (blue) — top-left quadrant: 225° to 315° (in standard, -135 to -45) -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#6babdf" stroke-width="5" stroke-opacity="0.7"
+        stroke-dasharray="66 198" stroke-dashoffset="0"
+        transform="rotate(-135 64 64)" stroke-linecap="round" />
+      <!-- Strength (purple) — top-right: -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#ab9ed4" stroke-width="5" stroke-opacity="0.7"
+        stroke-dasharray="66 198" stroke-dashoffset="0"
+        transform="rotate(-45 64 64)" stroke-linecap="round" />
+      <!-- Recovery (green) — bottom-right: -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#6bcf9a" stroke-width="5" stroke-opacity="0.7"
+        stroke-dasharray="66 198" stroke-dashoffset="0"
+        transform="rotate(45 64 64)" stroke-linecap="round" />
+      <!-- Body (amber) — bottom-left: -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#e0b45e" stroke-width="5" stroke-opacity="0.7"
+        stroke-dasharray="66 198" stroke-dashoffset="0"
+        transform="rotate(135 64 64)" stroke-linecap="round" />
+
+      <!-- Category icons positioned on the ring -->
+      <!-- Run (forward arrow) — top center -->
+      <g transform="translate(64, 19)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-4 0h8" stroke-width="2.2" />
+        <path d="M2 -3l4 3-4 3" stroke-width="2" />
+      </g>
+
+      <!-- Strength (power stack) — right center -->
+      <g transform="translate(109, 64)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-5 3l5-3.5 5 3.5" stroke-width="2" />
+        <path d="M-5 0l5-3.5 5 3.5" stroke-width="1.8" opacity="0.5" />
+        <path d="M-5 -3l5-3.5 5 3.5" stroke-width="1.5" opacity="0.25" />
+      </g>
+
+      <!-- Recovery (battery) — bottom center -->
+      <g transform="translate(64, 106)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-7" y="-4" width="12" height="8" rx="1.5" stroke-width="1.6" />
+        <path d="M5 -1.5h1.5a0.8 0.8 0 0 1 0.8 0.8v1.4a0.8 0.8 0 0 1-0.8 0.8H5" stroke-width="1.4" />
+        <line x1="-3" y1="-2" x2="-3" y2="2" stroke-width="1.8" />
+        <line x1="0" y1="-2" x2="0" y2="2" stroke-width="1.6" opacity="0.45" />
+      </g>
+
+      <!-- Body (person) — left center -->
+      <g transform="translate(19, 64)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-4" r="2.5" stroke-width="1.6" />
+        <path d="M-5 6v-1.5a5 5 0 0 1 10 0V6" stroke-width="1.6" />
+      </g>
+
+      <!-- A monogram -->
+      <text x="64" y="72" text-anchor="middle" fill="rgba(255,255,255,0.92)" font-size="30" font-weight="800" font-family="Inter, system-ui">A</text>
+    </svg>
+    <div class="name">A: Cardinal positions</div>
+    <div class="desc">Icons at N/E/S/W on the ring</div>
+  </div>
+
+  <div class="card">
+    <svg width="128" height="128" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="bgB" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#10111a" />
+          <stop offset="100%" stop-color="#0b0c14" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="url(#bgB)" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.08)" stroke-width="1" />
+
+      <!-- Ring track -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="4.5" />
+
+      <!-- Four colored arc segments with gaps for icons -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#6babdf" stroke-width="4.5" stroke-opacity="0.75"
+        stroke-dasharray="52 14 0 198" stroke-dashoffset="14"
+        transform="rotate(-135 64 64)" stroke-linecap="round" />
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#ab9ed4" stroke-width="4.5" stroke-opacity="0.75"
+        stroke-dasharray="52 14 0 198" stroke-dashoffset="14"
+        transform="rotate(-45 64 64)" stroke-linecap="round" />
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#6bcf9a" stroke-width="4.5" stroke-opacity="0.75"
+        stroke-dasharray="52 14 0 198" stroke-dashoffset="14"
+        transform="rotate(45 64 64)" stroke-linecap="round" />
+      <circle cx="64" cy="64" r="42" fill="none" stroke="#e0b45e" stroke-width="4.5" stroke-opacity="0.75"
+        stroke-dasharray="52 14 0 198" stroke-dashoffset="14"
+        transform="rotate(135 64 64)" stroke-linecap="round" />
+
+      <!-- Icons at the diagonal positions (between arcs) -->
+      <!-- Run — top-left (NW) -->
+      <g transform="translate(34, 34) rotate(-45)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-4 0h8" stroke-width="2" />
+        <path d="M2 -2.5l3.5 2.5-3.5 2.5" stroke-width="1.8" />
+      </g>
+
+      <!-- Strength — top-right (NE) -->
+      <g transform="translate(94, 34)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-4 2.5l4-3 4 3" stroke-width="1.8" />
+        <path d="M-4 0l4-3 4 3" stroke-width="1.6" opacity="0.5" />
+        <path d="M-4 -2.5l4-3 4 3" stroke-width="1.4" opacity="0.25" />
+      </g>
+
+      <!-- Recovery — bottom-right (SE) -->
+      <g transform="translate(94, 94)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-6" y="-3.5" width="10" height="7" rx="1.5" stroke-width="1.5" />
+        <path d="M4 -1h1.2a0.7 0.7 0 0 1 0.7 0.7v0.6a0.7 0.7 0 0 1-0.7 0.7H4" stroke-width="1.3" />
+        <line x1="-3" y1="-1.5" x2="-3" y2="1.5" stroke-width="1.6" />
+        <line x1="0" y1="-1.5" x2="0" y2="1.5" stroke-width="1.4" opacity="0.4" />
+      </g>
+
+      <!-- Body — bottom-left (SW) -->
+      <g transform="translate(34, 94)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-3.5" r="2.2" stroke-width="1.5" />
+        <path d="M-4.5 5v-1a4.5 4.5 0 0 1 9 0v1" stroke-width="1.5" />
+      </g>
+
+      <!-- A monogram -->
+      <text x="64" y="72" text-anchor="middle" fill="rgba(255,255,255,0.92)" font-size="28" font-weight="800" font-family="Inter, system-ui">A</text>
+    </svg>
+    <div class="name">B: Diagonal positions</div>
+    <div class="desc">Icons at NW/NE/SE/SW corners between arcs</div>
+  </div>
+
+  <div class="card">
+    <svg width="128" height="128" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="bgC" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#10111a" />
+          <stop offset="100%" stop-color="#0b0c14" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="url(#bgC)" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.08)" stroke-width="1" />
+
+      <!-- Outer ring — thinner, elegant -->
+      <circle cx="64" cy="64" r="46" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="3" />
+
+      <!-- Four arc segments on outer ring -->
+      <circle cx="64" cy="64" r="46" fill="none" stroke="#6babdf" stroke-width="3" stroke-opacity="0.6"
+        stroke-dasharray="60 229" stroke-dashoffset="15"
+        transform="rotate(-135 64 64)" stroke-linecap="round" />
+      <circle cx="64" cy="64" r="46" fill="none" stroke="#ab9ed4" stroke-width="3" stroke-opacity="0.6"
+        stroke-dasharray="60 229" stroke-dashoffset="15"
+        transform="rotate(-45 64 64)" stroke-linecap="round" />
+      <circle cx="64" cy="64" r="46" fill="none" stroke="#6bcf9a" stroke-width="3" stroke-opacity="0.6"
+        stroke-dasharray="60 229" stroke-dashoffset="15"
+        transform="rotate(45 64 64)" stroke-linecap="round" />
+      <circle cx="64" cy="64" r="46" fill="none" stroke="#e0b45e" stroke-width="3" stroke-opacity="0.6"
+        stroke-dasharray="60 229" stroke-dashoffset="15"
+        transform="rotate(135 64 64)" stroke-linecap="round" />
+
+      <!-- Inner subtle ring -->
+      <circle cx="64" cy="64" r="32" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1" />
+
+      <!-- Icons floating between rings -->
+      <!-- Run — top -->
+      <g transform="translate(64, 16)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+        <path d="M-3.5 0h7" stroke-width="1.8" />
+        <path d="M1.5 -2.5l3 2.5-3 2.5" stroke-width="1.6" />
+      </g>
+      <!-- Strength — right -->
+      <g transform="translate(112, 64)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+        <path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.6" />
+        <path d="M-3.5 -0.5l3.5-2.5 3.5 2.5" stroke-width="1.4" opacity="0.55" />
+        <path d="M-3.5 -3l3.5-2.5 3.5 2.5" stroke-width="1.2" opacity="0.25" />
+      </g>
+      <!-- Recovery — bottom -->
+      <g transform="translate(64, 112)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+        <rect x="-5.5" y="-3" width="9" height="6" rx="1.2" stroke-width="1.4" />
+        <path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.2" />
+        <line x1="-2.5" y1="-1.2" x2="-2.5" y2="1.2" stroke-width="1.5" />
+        <line x1="0" y1="-1.2" x2="0" y2="1.2" stroke-width="1.3" opacity="0.4" />
+      </g>
+      <!-- Body — left -->
+      <g transform="translate(16, 64)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+        <circle cx="0" cy="-3" r="2" stroke-width="1.4" />
+        <path d="M-4 4.5v-1a4 4 0 0 1 8 0v1" stroke-width="1.4" />
+      </g>
+
+      <!-- A monogram -->
+      <text x="64" y="73" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="32" font-weight="800" font-family="Inter, system-ui">A</text>
+    </svg>
+    <div class="name">C: Orbital</div>
+    <div class="desc">Icons orbit outside a thin colored ring</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Home Screen Simulation</h2>
+<div class="homescreen">
+  <div class="hs-row">
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0d0e17" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="5" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#6babdf" stroke-width="5" stroke-opacity="0.7" stroke-dasharray="66 198" stroke-dashoffset="0" transform="rotate(-135 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#ab9ed4" stroke-width="5" stroke-opacity="0.7" stroke-dasharray="66 198" stroke-dashoffset="0" transform="rotate(-45 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#6bcf9a" stroke-width="5" stroke-opacity="0.7" stroke-dasharray="66 198" stroke-dashoffset="0" transform="rotate(45 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#e0b45e" stroke-width="5" stroke-opacity="0.7" stroke-dasharray="66 198" stroke-dashoffset="0" transform="rotate(135 64 64)" stroke-linecap="round" />
+          <g transform="translate(64, 19)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-4 0h8" stroke-width="2.2" /><path d="M2 -3l4 3-4 3" stroke-width="2" /></g>
+          <g transform="translate(109, 64)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-5 3l5-3.5 5 3.5" stroke-width="2" /><path d="M-5 0l5-3.5 5 3.5" stroke-width="1.8" opacity="0.5" /><path d="M-5 -3l5-3.5 5 3.5" stroke-width="1.5" opacity="0.25" /></g>
+          <g transform="translate(64, 106)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="-7" y="-4" width="12" height="8" rx="1.5" stroke-width="1.6" /><path d="M5 -1.5h1.5a0.8 0.8 0 0 1 0.8 0.8v1.4a0.8 0.8 0 0 1-0.8 0.8H5" stroke-width="1.4" /><line x1="-3" y1="-2" x2="-3" y2="2" stroke-width="1.8" /><line x1="0" y1="-2" x2="0" y2="2" stroke-width="1.6" opacity="0.45" /></g>
+          <g transform="translate(19, 64)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="0" cy="-4" r="2.5" stroke-width="1.6" /><path d="M-5 6v-1.5a5 5 0 0 1 10 0V6" stroke-width="1.6" /></g>
+          <text x="64" y="72" text-anchor="middle" fill="rgba(255,255,255,0.92)" font-size="30" font-weight="800" font-family="Inter, system-ui">A</text>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (A)</div>
+    </div>
+
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0d0e17" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="4.5" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#6babdf" stroke-width="4.5" stroke-opacity="0.75" stroke-dasharray="52 14 0 198" stroke-dashoffset="14" transform="rotate(-135 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#ab9ed4" stroke-width="4.5" stroke-opacity="0.75" stroke-dasharray="52 14 0 198" stroke-dashoffset="14" transform="rotate(-45 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#6bcf9a" stroke-width="4.5" stroke-opacity="0.75" stroke-dasharray="52 14 0 198" stroke-dashoffset="14" transform="rotate(45 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="#e0b45e" stroke-width="4.5" stroke-opacity="0.75" stroke-dasharray="52 14 0 198" stroke-dashoffset="14" transform="rotate(135 64 64)" stroke-linecap="round" />
+          <g transform="translate(34, 34) rotate(-45)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-4 0h8" stroke-width="2" /><path d="M2 -2.5l3.5 2.5-3.5 2.5" stroke-width="1.8" /></g>
+          <g transform="translate(94, 34)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-4 2.5l4-3 4 3" stroke-width="1.8" /><path d="M-4 0l4-3 4 3" stroke-width="1.6" opacity="0.5" /><path d="M-4 -2.5l4-3 4 3" stroke-width="1.4" opacity="0.25" /></g>
+          <g transform="translate(94, 94)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="-6" y="-3.5" width="10" height="7" rx="1.5" stroke-width="1.5" /><path d="M4 -1h1.2a0.7 0.7 0 0 1 0.7 0.7v0.6a0.7 0.7 0 0 1-0.7 0.7H4" stroke-width="1.3" /><line x1="-3" y1="-1.5" x2="-3" y2="1.5" stroke-width="1.6" /><line x1="0" y1="-1.5" x2="0" y2="1.5" stroke-width="1.4" opacity="0.4" /></g>
+          <g transform="translate(34, 94)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="0" cy="-3.5" r="2.2" stroke-width="1.5" /><path d="M-4.5 5v-1a4.5 4.5 0 0 1 9 0v1" stroke-width="1.5" /></g>
+          <text x="64" y="72" text-anchor="middle" fill="rgba(255,255,255,0.92)" font-size="28" font-weight="800" font-family="Inter, system-ui">A</text>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (B)</div>
+    </div>
+
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0d0e17" />
+          <circle cx="64" cy="64" r="46" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="3" />
+          <circle cx="64" cy="64" r="46" fill="none" stroke="#6babdf" stroke-width="3" stroke-opacity="0.6" stroke-dasharray="60 229" stroke-dashoffset="15" transform="rotate(-135 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="46" fill="none" stroke="#ab9ed4" stroke-width="3" stroke-opacity="0.6" stroke-dasharray="60 229" stroke-dashoffset="15" transform="rotate(-45 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="46" fill="none" stroke="#6bcf9a" stroke-width="3" stroke-opacity="0.6" stroke-dasharray="60 229" stroke-dashoffset="15" transform="rotate(45 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="46" fill="none" stroke="#e0b45e" stroke-width="3" stroke-opacity="0.6" stroke-dasharray="60 229" stroke-dashoffset="15" transform="rotate(135 64 64)" stroke-linecap="round" />
+          <circle cx="64" cy="64" r="32" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1" />
+          <g transform="translate(64, 16)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"><path d="M-3.5 0h7" stroke-width="1.8" /><path d="M1.5 -2.5l3 2.5-3 2.5" stroke-width="1.6" /></g>
+          <g transform="translate(112, 64)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"><path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.6" /><path d="M-3.5 -0.5l3.5-2.5 3.5 2.5" stroke-width="1.4" opacity="0.55" /><path d="M-3.5 -3l3.5-2.5 3.5 2.5" stroke-width="1.2" opacity="0.25" /></g>
+          <g transform="translate(64, 112)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"><rect x="-5.5" y="-3" width="9" height="6" rx="1.2" stroke-width="1.4" /><path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.2" /><line x1="-2.5" y1="-1.2" x2="-2.5" y2="1.2" stroke-width="1.5" /><line x1="0" y1="-1.2" x2="0" y2="1.2" stroke-width="1.3" opacity="0.4" /></g>
+          <g transform="translate(16, 64)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"><circle cx="0" cy="-3" r="2" stroke-width="1.4" /><path d="M-4 4.5v-1a4 4 0 0 1 8 0v1" stroke-width="1.4" /></g>
+          <text x="64" y="73" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="32" font-weight="800" font-family="Inter, system-ui">A</text>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (C)</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #FF6B35, #FF4500);"></div>
+      <div class="hs-label">Strava</div>
+    </div>
+  </div>
+</div>
+
+<div style="height: 30px;"></div>
+</body>
+</html>

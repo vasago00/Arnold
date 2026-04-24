@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Sync</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:30px 20px;text-align:center;}
+  h1{color:#00e676;margin-bottom:6px;font-size:22px;}
+  .sub{color:#888;margin-bottom:24px;font-size:13px;}
+  button{background:#00e676;color:#000;border:none;padding:14px 32px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;margin:10px 6px;width:90%;max-width:320px;}
+  button:active{transform:scale(0.97);}
+  button.pull{background:#2196f3;color:#fff;}
+  .status{margin-top:16px;padding:14px;border-radius:8px;font-size:14px;max-width:400px;margin-left:auto;margin-right:auto;}
+  .status.ok{background:#1b3a1b;color:#00e676;}
+  .status.err{background:#3a1b1b;color:#f44336;}
+  .status.info{background:#1a1a2e;color:#90caf9;}
+  .key-count{font-size:40px;font-weight:700;color:#00e676;margin:16px 0 4px;}
+  .key-label{color:#888;font-size:12px;margin-bottom:20px;}
+  .divider{border-top:1px solid #222;margin:24px 0;}
+</style>
+</head>
+<body>
+
+<h1>Arnold Sync</h1>
+<p class="sub" id="origin"></p>
+
+<div class="key-count" id="count">—</div>
+<div class="key-label" id="size">Scanning...</div>
+
+<div id="actions"></div>
+<div id="status"></div>
+
+<script>
+(function(){
+  const origin = window.location.origin;
+  document.getElementById('origin').textContent = origin;
+
+  // Scan local arnold keys
+  const arnoldKeys = [];
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(key && key.startsWith('arnold:')){
+      arnoldKeys.push({ key, value: localStorage.getItem(key) });
+    }
+  }
+  const totalBytes = arnoldKeys.reduce((s,k) => s + k.value.length, 0);
+  const sizeStr = totalBytes > 1024 ? (totalBytes/1024).toFixed(1)+' KB' : totalBytes+' bytes';
+
+  document.getElementById('count').textContent = arnoldKeys.length;
+  document.getElementById('size').textContent = `${sizeStr} of Arnold data on this device`;
+
+  const actions = document.getElementById('actions');
+  const statusEl = document.getElementById('status');
+
+  if(arnoldKeys.length > 0){
+    // This device has data — offer to PUSH it
+    const pushBtn = document.createElement('button');
+    pushBtn.textContent = '📤 Copy data to clipboard';
+    pushBtn.onclick = async function(){
+      const backup = {};
+      arnoldKeys.forEach(k => { backup[k.key] = k.value; });
+      const json = JSON.stringify(backup);
+      // Store in a global so the pull page can use postMessage
+      window.__arnoldBackup = json;
+      try {
+        await navigator.clipboard.writeText(json);
+        statusEl.innerHTML = '<div class="status ok">Data copied to clipboard! Now open this page on your phone and tap "Pull from clipboard".</div>';
+      } catch(e) {
+        // Fallback: create a download link
+        const blob = new Blob([json], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        statusEl.innerHTML = '<div class="status info">Clipboard not available. <a href="'+url+'" download="arnold-sync.json" style="color:#00e676;font-weight:600;">Download backup file</a> instead.</div>';
+      }
+    };
+    actions.appendChild(pushBtn);
+  }
+
+  // Always offer PULL (paste/import)
+  const divider = document.createElement('div');
+  divider.className = 'divider';
+  actions.appendChild(divider);
+
+  const pullBtn = document.createElement('button');
+  pullBtn.className = 'pull';
+  pullBtn.textContent = '📥 Pull data from clipboard';
+  pullBtn.onclick = async function(){
+    try {
+      const text = await navigator.clipboard.readText();
+      const data = JSON.parse(text);
+      const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
+      if(!keys.length) throw new Error('No arnold:* keys found in clipboard');
+      keys.forEach(k => localStorage.setItem(k, data[k]));
+      statusEl.innerHTML = `<div class="status ok">✅ Restored ${keys.length} keys! Reload Arnold to see your data.</div>`;
+    } catch(e) {
+      statusEl.innerHTML = `<div class="status err">Could not read clipboard: ${e.message}<br><br>Try the manual method below.</div>`;
+      // Show textarea fallback
+      if(!document.getElementById('manual-area')){
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-top:16px;text-align:left;max-width:400px;margin-left:auto;margin-right:auto;';
+        wrap.innerHTML = `
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">Paste the backup JSON here:</div>
+          <textarea id="manual-area" style="width:100%;height:100px;background:#111;color:#eee;border:1px solid #333;border-radius:6px;padding:8px;font-size:12px;font-family:monospace;" placeholder="Paste JSON here..."></textarea>
+          <button onclick="(function(){try{var d=JSON.parse(document.getElementById('manual-area').value);var k=Object.keys(d).filter(function(x){return x.startsWith('arnold:')});k.forEach(function(x){localStorage.setItem(x,d[x])});document.getElementById('status').innerHTML='<div class=\\'status ok\\'>✅ Restored '+k.length+' keys! Reload Arnold.</div>';}catch(e){document.getElementById('status').innerHTML='<div class=\\'status err\\'>Error: '+e.message+'</div>';}})()" style="margin-top:8px;width:100%;background:#2196f3;color:#fff;">Import pasted data</button>
+        `;
+        actions.appendChild(wrap);
+      }
+    }
+  };
+  actions.appendChild(pullBtn);
+
+})();
+</script>
+</body>
+</html>

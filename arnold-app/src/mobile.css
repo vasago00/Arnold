@@ -10,13 +10,14 @@
 @media (max-width: 600px) {
 
   /* ═══════════════════════════════════════════════════════════════════════════
-     MOBILE HOME — when smart home screen is active, hide desktop shell
+     MOBILE — hide desktop header & nav on ALL tabs (each tab has its own
+     compact header matching the Start/EdgeIQ style)
      ═══════════════════════════════════════════════════════════════════════════ */
-  .arnold-mobile-active .arnold-hdr,
-  .arnold-mobile-active .arnold-nav {
+  .arnold-hdr,
+  .arnold-nav {
     display: none !important;
   }
-  .arnold-mobile-active .arnold-main {
+  .arnold-main {
     padding: 0 !important;
   }
 
@@ -46,31 +47,10 @@
     transform: scale(0.88);
   }
 
-  /* ═══════════════════════════════════════════════════════════════════════════
-     DRILL-DOWN HEADER — compact, glassmorphic
-     ═══════════════════════════════════════════════════════════════════════════ */
-  .arnold-hdr {
-    flex-direction: row !important;
-    height: auto !important;
-    padding: 10px 14px !important; /* back button is now bottom-right */
-    gap: 8px !important;
-    align-items: center !important;
-    background: rgba(15, 16, 22, 0.85) !important;
-    backdrop-filter: blur(20px) !important;
-    -webkit-backdrop-filter: blur(20px) !important;
-    border-bottom: 1px solid rgba(255,255,255,0.06) !important;
-    position: sticky !important;
-    top: 0 !important;
-    z-index: 50 !important;
-  }
+  /* Navigation already hidden above — no additional selectors needed.
+     Desktop header (.arnold-hdr) and nav (.arnold-nav) are fully replaced
+     by per-tab compact headers on mobile. */
   .arnold-hdr-right {
-    display: none !important; /* hide date/prepared on drill-down */
-  }
-
-  /* ═══════════════════════════════════════════════════════════════════════════
-     NAVIGATION — hidden in drill-down (back button replaces it)
-     ═══════════════════════════════════════════════════════════════════════════ */
-  .arnold-nav {
     display: none !important;
   }
 

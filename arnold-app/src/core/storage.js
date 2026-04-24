@@ -38,6 +38,7 @@ const ENCRYPTED_PREFIX = 'enc:'; // marks ciphertext values in localStorage
 // Keys that require encryption (HIGH + CRITICAL from security audit)
 const ENCRYPTED_COLLECTIONS = new Set([
   'hrv', 'sleep', 'weight', 'dailyLogs', 'profile',  // HIGH
+  'cronometerAuth',                                   // CRITICAL — stores password
 ]);
 // Backup slots are handled separately (they use raw localStorage keys)
 const ENCRYPTED_RAW_KEYS = new Set([
@@ -219,6 +220,9 @@ export const KEYS = {
   sleep:         'arnold:garmin-sleep',
   weight:        'arnold:garmin-weight',
   cronometer:    'arnold:cronometer',
+  cronometerAuth: 'arnold:cronometer-auth',    // { user, pass } — encrypted at rest, syncs via cloud-sync blob
+  cronometerLive: 'arnold:cronometer-live',    // worker response cache: { date → { totals, rows, fetchedAt } }
+  hcSyncMeta:    'arnold:hc-sync-meta',        // Phase 4a: { dataType → ISO timestamp } last successful HC sync per stream, syncs to all paired devices
 
   // User-owned
   workouts:      'arnold:workouts',
@@ -234,6 +238,9 @@ export const KEYS = {
   supplementsCatalog:  'arnold:supplements-catalog',   // Phase 1: was unprefixed 'supplements'
   supplementsStack:    'arnold:supplements-stack',      // Phase 1: was unprefixed 'supplementStack'
   supplementsLog:      'arnold:supplements-log',        // Phase 1: was unprefixed 'supplementLog'
+
+  // Training
+  strengthTemplates: 'arnold:strength-templates',
 
   // System
   importHistory: 'arnold:import-history',
@@ -283,6 +290,35 @@ function rawGet(fullKey) {
   } catch { return null; }
 }
 
+// ─── OPFS mirror for Tier C (critical user config) ───────────────────────────
+// Loaded lazily and attached at boot by main.jsx so this module stays cyclic-
+// free. Every Tier C write fans out to OPFS asynchronously; if the hook isn't
+// installed yet, the write is queued and flushed when attachOpfs runs.
+let _opfsWriter = null;
+let _opfsTierChecker = null;
+const _opfsQueue = [];
+
+export function attachOpfsMirror(writer, tierChecker) {
+  _opfsWriter = writer;
+  _opfsTierChecker = tierChecker;
+  // Flush anything queued before boot completed
+  while (_opfsQueue.length) {
+    const [k, v] = _opfsQueue.shift();
+    try { _opfsWriter(k, v); } catch {}
+  }
+}
+function mirrorToOpfs(fullKey, data) {
+  if (!_opfsTierChecker || !_opfsWriter) {
+    _opfsQueue.push([fullKey, data]);
+    return;
+  }
+  try {
+    if (_opfsTierChecker(fullKey) === 'C') {
+      _opfsWriter(fullKey, data);
+    }
+  } catch {}
+}
+
 function rawSet(fullKey, data) {
   // Encrypted keys: update cache immediately, flush encrypted async
   if (shouldEncryptFullKey(fullKey)) {
@@ -290,14 +326,21 @@ function rawSet(fullKey, data) {
     encryptAndFlush(fullKey, data);
     // Also update engine if present
     if (_engine?.dbSet) { try { _engine.dbSet(fullKey, data); } catch {} }
+    mirrorToOpfs(fullKey, data);
     emitStorageChange(fullKey);
     return true;
   }
   if (_engine?.dbSet) {
-    try { _engine.dbSet(fullKey, data); emitStorageChange(fullKey); return true; } catch {}
+    try {
+      _engine.dbSet(fullKey, data);
+      mirrorToOpfs(fullKey, data);
+      emitStorageChange(fullKey);
+      return true;
+    } catch {}
   }
   try {
     localStorage.setItem(fullKey, JSON.stringify(data));
+    mirrorToOpfs(fullKey, data);
     emitStorageChange(fullKey);
     return true;
   } catch (e) {

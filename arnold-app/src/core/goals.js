@@ -15,6 +15,7 @@ export const GOAL_DEFS = [
   { id: 'zone2Pct',                group: 'Run', label: 'Zone 2 training',     unit: '%',   type: 'number', default: 80 },
   { id: 'targetRacePace',          group: 'Run', label: 'Target marathon pace',unit: 'min/mi', type: 'string', default: '9:30', placeholder: 'mm:ss' },
   { id: 'targetAvgRunHR',          group: 'Run', label: 'Target avg run HR',   unit: 'bpm', type: 'number', default: 145 },
+  { id: 'functionalThresholdPace', group: 'Run', label: 'Threshold pace (FTP)',unit: 'min/mi', type: 'string', default: '8:30', placeholder: 'mm:ss' },
   { id: 'annualRunDistanceTarget', group: 'Run', label: 'Annual run distance', unit: 'mi',  type: 'number', default: 800 },
 
   // ─── Strength ─────────────────────────────────────────────────────────────
@@ -44,6 +45,8 @@ export const GOAL_DEFS = [
   { id: 'dailyProteinTarget',      group: 'Nutrition', label: 'Daily protein',      unit: 'g',   type: 'number', default: 150, derived: true },
   { id: 'dailyCarbTarget',         group: 'Nutrition', label: 'Daily carbs',        unit: 'g',   type: 'number', default: 180, derived: true },
   { id: 'dailyFatTarget',          group: 'Nutrition', label: 'Daily fat',          unit: 'g',   type: 'number', default: 65,  derived: true },
+  { id: 'dailyFiberTarget',        group: 'Nutrition', label: 'Daily fiber',        unit: 'g',   type: 'number', default: 35  },
+  { id: 'dailyWaterTarget',        group: 'Nutrition', label: 'Daily water',        unit: 'L',   type: 'number', default: 3   },
 
   // ─── Recovery ────────────────────────────────────────────────────────────
   { id: 'targetSleepHours',        group: 'Recovery', label: 'Target sleep',        unit: 'hrs', type: 'number', default: 7.5 },

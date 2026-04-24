@@ -318,6 +318,87 @@ async function syncHeartRate() {
   return { synced: updated };
 }
 
+// ── Sync: Daily Energy (Phase 4a — TDEE Tier 1 input) ───────────────────────
+// Reads daily-aggregate Steps, Active Calories, and Total Calories from HC
+// and merges them into dailyLogs[date]. The three HC streams are fetched in
+// parallel, indexed by date, and unioned — a date lands in dailyLogs only
+// if it has at least some movement signal (steps > 0 OR totalCalories > 0),
+// so Garmin-hasn't-synced-yet days don't pollute the log with zero rows.
+//
+// CRITICAL merge behavior: we merge into any existing dailyLogs[date] row
+// (which may hold fitActivities[] from FIT uploads, or rpe/notes from the
+// Daily Log UI). We ONLY set the three new fields plus a wellnessSource
+// marker — everything else on the existing row is preserved untouched.
+//
+// Downstream: tdee() Tier 1 reads dailyLogs[date].totalCalories when set
+// and skips the per-activity burn summation to avoid double-counting.
+
+async function syncDailyEnergy() {
+  const lastSync = hcBridge.getLastSyncTime('dailyEnergy');
+  // First run: pull 14 days so DCY has a reasonable baseline immediately.
+  // Subsequent runs overlap by a day to catch late-arriving data.
+  const startDate = lastSync ? isoDate(lastSync) : daysAgo(14);
+  const endDate = isoDate(new Date());
+
+  const [stepsRows, activeKcalRows, totalKcalRows] = await Promise.all([
+    hcBridge.readSteps(startDate, endDate),
+    hcBridge.readActiveCaloriesBurned(startDate, endDate),
+    hcBridge.readTotalCaloriesBurned(startDate, endDate),
+  ]);
+
+  // Index each stream by date for O(1) merge.
+  const stepsByDate  = new Map(stepsRows.map(r => [r.date, r.steps]));
+  const activeByDate = new Map(activeKcalRows.map(r => [r.date, r.kcal]));
+  const totalByDate  = new Map(totalKcalRows.map(r => [r.date, r.kcal]));
+
+  // Union: every date that had ANY movement signal in this window.
+  const allDates = new Set([
+    ...stepsByDate.keys(),
+    ...activeByDate.keys(),
+    ...totalByDate.keys(),
+  ]);
+  if (!allDates.size) {
+    hcBridge.setLastSyncTime('dailyEnergy', nowISO());
+    return { synced: 0 };
+  }
+
+  // Load current dailyLogs and index by date so we can merge, not replace.
+  const existing = storage.get('dailyLogs') || [];
+  const byDate = new Map(existing.map(e => [e.date, e]));
+
+  let updated = 0;
+  for (const date of allDates) {
+    const steps = Math.max(0, Math.round(stepsByDate.get(date) || 0));
+    const activeCalories = Math.max(0, Math.round(activeByDate.get(date) || 0));
+    const totalCalories = Math.max(0, Math.round(totalByDate.get(date) || 0));
+
+    // Guard: don't write a row for a day HC has no real data for.
+    // Small non-zero noise (< 100 steps, no cal totals) also gets skipped.
+    if (steps < 100 && totalCalories === 0) continue;
+
+    const current = byDate.get(date) || { date };
+    byDate.set(date, {
+      ...current,                         // preserve fitActivities, rpe, notes, etc.
+      date,                               // canonical date key (in case row was undefined)
+      steps,
+      activeCalories,
+      totalCalories,
+      wellnessSource: 'health_connect',
+      wellnessUpdatedAt: new Date().toISOString(),
+    });
+    updated++;
+  }
+
+  if (updated > 0) {
+    const merged = Array.from(byDate.values())
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    storage.set('dailyLogs', merged);
+  }
+
+  hcBridge.setLastSyncTime('dailyEnergy', nowISO());
+  return { synced: updated };
+}
+
 // ── Sync: Nutrition (from Cronometer via HC) ────────────────────────────────
 
 async function syncNutrition() {
@@ -508,20 +589,34 @@ export async function syncAll() {
       return { native: true, permissionDenied: true, denied: perms.denied };
     }
 
-    // Run all syncs in parallel where safe
-    const [exercise, sleep, weight, heartRate, nutrition] = await Promise.allSettled([
-      syncExercise(),
+    // Run all syncs in parallel where safe.
+    //
+    // DISABLED STREAMS
+    //   exercise  — HC exercise data caused ghost mileage vs FIT uploads; FIT
+    //               files via Cloud Sync are the authoritative source.
+    //   nutrition — Cronometer live pull (Phase 3) is the authoritative source
+    //               and writes a full-day entry to nutritionLog. HC's
+    //               syncNutrition replays the same data (Cronometer app →
+    //               HC → here) but also overwrites historical CSV imports in
+    //               the `cronometer` collection, which we don't want. Keep
+    //               the function in place for possible future re-enable, but
+    //               don't run it as part of syncAll().
+    //
+    // dailyEnergy (Phase 4a) is safe to parallelize — it writes to a disjoint
+    // set of dailyLogs fields and never touches the activities collection.
+    const [sleep, weight, heartRate, dailyEnergy] = await Promise.allSettled([
       syncSleep(),
       syncWeight(),
       syncHeartRate(),
-      syncNutrition(),
+      syncDailyEnergy(),
     ]);
 
-    results.exercise = exercise.status === 'fulfilled' ? exercise.value : { error: exercise.reason?.message };
+    results.exercise = { synced: 0, disabled: true };
+    results.nutrition = { synced: 0, disabled: true, reason: 'Cronometer live pull is authoritative' };
     results.sleep = sleep.status === 'fulfilled' ? sleep.value : { error: sleep.reason?.message };
     results.weight = weight.status === 'fulfilled' ? weight.value : { error: weight.reason?.message };
     results.heartRate = heartRate.status === 'fulfilled' ? heartRate.value : { error: heartRate.reason?.message };
-    results.nutrition = nutrition.status === 'fulfilled' ? nutrition.value : { error: nutrition.reason?.message };
+    results.dailyEnergy = dailyEnergy.status === 'fulfilled' ? dailyEnergy.value : { error: dailyEnergy.reason?.message };
 
     const totalSynced = Object.values(results).reduce((s, r) => s + (r?.synced || 0), 0);
     results.totalSynced = totalSynced;
@@ -552,6 +647,7 @@ export function getSyncStatus() {
       weight: hcBridge.getLastSyncTime('weight'),
       heartRate: hcBridge.getLastSyncTime('heartRate'),
       nutrition: hcBridge.getLastSyncTime('nutrition'),
+      dailyEnergy: hcBridge.getLastSyncTime('dailyEnergy'),
     },
   };
 }

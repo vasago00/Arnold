@@ -3,13 +3,16 @@
 
 import { useState, useRef } from 'react';
 import {
-  exportBackup, importBackup, createBackup,
+  exportBackup, importBackup, importBackupFromText, createBackup,
   listBackups, restoreFromSlot, getBackupMeta,
 } from '../core/backup.js';
 
 export function BackupPanel({ showToast }) {
   const [backups, setBackups] = useState(() => listBackups());
   const [meta, setMeta] = useState(() => getBackupMeta());
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [exporting, setExporting] = useState(false);
   const fileRef = useRef(null);
 
   const refresh = () => {
@@ -17,9 +20,38 @@ export function BackupPanel({ showToast }) {
     setMeta(getBackupMeta());
   };
 
-  const handleExport = () => {
-    const count = exportBackup();
-    showToast?.(`Exported ${count} keys`);
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const r = await exportBackup();
+      if (r.method === 'native-share') {
+        showToast?.(`Shared ${r.keyCount} keys — pick a target`);
+      } else {
+        showToast?.(`Exported ${r.keyCount} keys to Downloads`);
+      }
+    } catch (e) {
+      showToast?.(`Export failed: ${e.message || e}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handlePasteImport = () => {
+    const txt = pasteText.trim();
+    if (!txt) {
+      showToast?.('Paste the backup JSON first');
+      return;
+    }
+    try {
+      const result = importBackupFromText(txt);
+      showToast?.(`Restored ${result.restored} keys from pasted text`);
+      setPasteText('');
+      setPasteOpen(false);
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+      showToast?.(`Paste-import failed: ${err.message}`);
+    }
   };
 
   const handleImport = async (e) => {
@@ -102,17 +134,46 @@ export function BackupPanel({ showToast }) {
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        <button onClick={handleExport} style={{ ...btnStyle, background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>
-          ↓ Export backup
+        <button onClick={handleExport} disabled={exporting} style={{ ...btnStyle, background: 'rgba(74,222,128,0.15)', color: '#4ade80', opacity: exporting ? 0.6 : 1 }}>
+          {exporting ? '… Exporting' : '↓ Export backup'}
         </button>
         <label style={{ ...btnStyle, background: 'rgba(96,165,250,0.15)', color: '#60a5fa', display: 'inline-flex', alignItems: 'center' }}>
           ↑ Import backup
           <input ref={fileRef} type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
         </label>
+        <button onClick={() => setPasteOpen(v => !v)} style={{ ...btnStyle, background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+          {pasteOpen ? '× Hide paste' : '⎘ Paste backup'}
+        </button>
         <button onClick={handleManualBackup} style={{ ...btnStyle, background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>
           ⟳ Backup now
         </button>
       </div>
+
+      {/* Paste-JSON fallback: handy when file transfer between devices isn't
+          available. Accepts either a full export wrapper or a raw { 'arnold:*': ... }
+          object. */}
+      {pasteOpen && (
+        <div style={{ marginBottom: 12, padding: 10, borderRadius: 8, background: 'rgba(251,191,36,0.06)', border: '0.5px solid rgba(251,191,36,0.2)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6 }}>
+            Paste the contents of an Arnold backup JSON below and click Import.
+          </div>
+          <textarea
+            value={pasteText}
+            onChange={e => setPasteText(e.target.value)}
+            placeholder='{"exportedAt":"…","data":{"arnold:profile":"…"}}'
+            spellCheck={false}
+            style={{ width: '100%', minHeight: 120, fontFamily: 'monospace', fontSize: 10, padding: 8, borderRadius: 6, background: '#0b0d12', color: '#e6e8ec', border: '0.5px solid rgba(255,255,255,0.08)', resize: 'vertical' }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={handlePasteImport} style={{ ...btnStyle, background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>
+              ✓ Import pasted JSON
+            </button>
+            <button onClick={() => { setPasteText(''); }} style={{ ...btnStyle, background: 'rgba(255,255,255,0.08)', color: 'var(--text-muted)' }}>
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Backup history */}
       {backups.length > 0 && (

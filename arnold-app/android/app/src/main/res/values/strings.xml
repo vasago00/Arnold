@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Arnold</string>
+    <string name="title_activity_main">Arnold</string>
+    <string name="package_name">com.arnold.health</string>
+    <string name="custom_url_scheme">com.arnold.health</string>
+</resources>

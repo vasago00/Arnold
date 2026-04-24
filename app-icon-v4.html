@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arnold Icon v4 — Semi Arc + Icon Row</title>
+<style>
+  body { background: #0b0c12; color: #fff; font-family: 'Inter', system-ui, sans-serif; margin: 0; padding: 24px; }
+  h2 { font-size: 11px; color: rgba(255,255,255,0.4); margin: 28px 0 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  .grid { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 20px; }
+  .card {
+    text-align: center; padding: 16px 10px 12px; border-radius: 14px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  }
+  .card .name { font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 10px; font-weight: 700; }
+  .card .desc { font-size: 8px; color: rgba(255,255,255,0.3); margin-top: 3px; line-height: 1.4; max-width: 160px; margin-left: auto; margin-right: auto; }
+
+  .homescreen {
+    margin: 30px auto; max-width: 340px; padding: 24px 16px;
+    background: linear-gradient(160deg, #888, #999, #777);
+    border-radius: 20px;
+  }
+  .hs-row { display: flex; justify-content: space-around; margin-bottom: 20px; }
+  .hs-icon { text-align: center; }
+  .hs-icon .hs-label { font-size: 8px; color: rgba(255,255,255,0.8); margin-top: 5px; font-weight: 500; }
+  .hs-placeholder { width: 52px; height: 52px; border-radius: 13px; }
+</style>
+</head>
+<body>
+
+<h1 style="font-size: 16px; margin-bottom: 3px;">Arnold Icon v4 — "You do the work, we help you get there"</h1>
+<p style="font-size: 10px; color: rgba(255,255,255,0.35); margin-bottom: 24px;">Semi-arc = your progress &nbsp;·&nbsp; Icons in the gap = the pillars that get you there</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Option A — Gradient arc, icons in a horizontal row below</h2>
+<p style="font-size:9px; color:rgba(255,255,255,0.25); margin:-6px 0 12px;">The progress arc sweeps ~240° around the A. Four category icons sit in the bottom gap, evenly spaced.</p>
+<div class="grid">
+
+  <div class="card">
+    <svg width="148" height="148" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="arcGrad1" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#6babdf" />
+          <stop offset="33%" stop-color="#ab9ed4" />
+          <stop offset="66%" stop-color="#6bcf9a" />
+          <stop offset="100%" stop-color="#e0b45e" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="#0d0e17" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.06)" stroke-width="1" />
+
+      <!-- Track ring (faint) -->
+      <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="5" />
+
+      <!-- Progress arc: 240° sweep, gap at bottom center -->
+      <!-- Arc from 150° to 30° (going clockwise through top) = 240° -->
+      <path d="M 27.6 85 A 42 42 0 1 1 100.4 85"
+            fill="none" stroke="url(#arcGrad1)" stroke-width="5" stroke-linecap="round" />
+
+      <!-- Subtle glow on arc ends -->
+      <circle cx="27.6" cy="85" r="3.5" fill="#6babdf" opacity="0.2" />
+      <circle cx="100.4" cy="85" r="3.5" fill="#e0b45e" opacity="0.2" />
+
+      <!-- A monogram -->
+      <text x="64" y="68" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="32" font-weight="800" font-family="Inter, system-ui">A</text>
+
+      <!-- Four category icons in the gap — horizontal row -->
+      <!-- Run (forward arrow) — blue -->
+      <g transform="translate(36, 100)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3 0h6" stroke-width="2" />
+        <path d="M1.5 -2.2l3 2.2-3 2.2" stroke-width="1.8" />
+      </g>
+
+      <!-- Strength (power stack) — purple -->
+      <g transform="translate(52, 100)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.7" />
+        <path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.5" opacity="0.5" />
+        <path d="M-3.5 -2.6l3.5-2.5 3.5 2.5" stroke-width="1.3" opacity="0.25" />
+      </g>
+
+      <!-- Recovery (battery) — green -->
+      <g transform="translate(76, 100)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.4" />
+        <path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.2" />
+        <line x1="-2" y1="-1.2" x2="-2" y2="1.2" stroke-width="1.5" />
+        <line x1="0.3" y1="-1.2" x2="0.3" y2="1.2" stroke-width="1.3" opacity="0.4" />
+      </g>
+
+      <!-- Body (person) — amber -->
+      <g transform="translate(92, 100)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-2.8" r="2" stroke-width="1.4" />
+        <path d="M-3.8 4v-0.8a3.8 3.8 0 0 1 7.6 0V4" stroke-width="1.4" />
+      </g>
+    </svg>
+    <div class="name">A: Horizontal row in gap</div>
+    <div class="desc">Icons sit side by side in the open space below the arc</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <svg width="148" height="148" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="arcGrad2" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#6babdf" />
+          <stop offset="33%" stop-color="#ab9ed4" />
+          <stop offset="66%" stop-color="#6bcf9a" />
+          <stop offset="100%" stop-color="#e0b45e" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="28" fill="#0d0e17" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.06)" stroke-width="1" />
+
+      <!-- Track ring -->
+      <circle cx="64" cy="60" r="38" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="4.5" />
+
+      <!-- Progress arc: ~260° sweep, gap at bottom -->
+      <path d="M 30.5 78 A 38 38 0 1 1 97.5 78"
+            fill="none" stroke="url(#arcGrad2)" stroke-width="4.5" stroke-linecap="round" />
+
+      <!-- Glow dots at arc ends -->
+      <circle cx="30.5" cy="78" r="3" fill="#6babdf" opacity="0.15" />
+      <circle cx="97.5" cy="78" r="3" fill="#e0b45e" opacity="0.15" />
+
+      <!-- A monogram (slightly raised to make room) -->
+      <text x="64" y="66" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="30" font-weight="800" font-family="Inter, system-ui">A</text>
+
+      <!-- Four icons follow the arc curvature in the gap -->
+      <!-- Positioned along an arc path in the bottom opening -->
+      <!-- Run — left end -->
+      <g transform="translate(34, 92)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3 0h6" stroke-width="2" />
+        <path d="M1.5 -2.2l3 2.2-3 2.2" stroke-width="1.8" />
+      </g>
+
+      <!-- Strength — center-left -->
+      <g transform="translate(50, 100)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.7" />
+        <path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.5" opacity="0.5" />
+        <path d="M-3.5 -2.6l3.5-2.5 3.5 2.5" stroke-width="1.3" opacity="0.25" />
+      </g>
+
+      <!-- Recovery — center-right -->
+      <g transform="translate(78, 100)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.4" />
+        <path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.2" />
+        <line x1="-2" y1="-1.2" x2="-2" y2="1.2" stroke-width="1.5" />
+        <line x1="0.3" y1="-1.2" x2="0.3" y2="1.2" stroke-width="1.3" opacity="0.4" />
+      </g>
+
+      <!-- Body — right end -->
+      <g transform="translate(94, 92)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-2.8" r="2" stroke-width="1.4" />
+        <path d="M-3.8 4v-0.8a3.8 3.8 0 0 1 7.6 0V4" stroke-width="1.4" />
+      </g>
+    </svg>
+    <div class="name">B: Arc-following row</div>
+    <div class="desc">Icons curve with the gap shape — outer icons higher, inner ones lower</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <svg width="148" height="148" viewBox="0 0 128 128">
+      <defs>
+        <!-- Four-color arc using individual segments -->
+      </defs>
+      <rect width="128" height="128" rx="28" fill="#0d0e17" />
+      <rect width="128" height="128" rx="28" fill="none" stroke="rgba(107,171,223,0.06)" stroke-width="1" />
+
+      <!-- Track ring -->
+      <circle cx="64" cy="60" r="38" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="4.5" />
+
+      <!-- Four colored arc segments (each ~65° of the 260° sweep) -->
+      <!-- Blue (Run) — from ~150° to ~215° -->
+      <path d="M 30.5 78 A 38 38 0 0 1 28.7 51.3"
+            fill="none" stroke="#6babdf" stroke-width="4.5" stroke-linecap="round" opacity="0.8" />
+      <!-- Purple (Strength) — from ~215° to ~280° -->
+      <path d="M 28.7 51.3 A 38 38 0 0 1 57.8 22.5"
+            fill="none" stroke="#ab9ed4" stroke-width="4.5" stroke-linecap="round" opacity="0.8" />
+      <!-- Green (Recovery) — from ~280° to ~345° -->
+      <path d="M 57.8 22.5 A 38 38 0 0 1 96.8 46.8"
+            fill="none" stroke="#6bcf9a" stroke-width="4.5" stroke-linecap="round" opacity="0.8" />
+      <!-- Amber (Body) — from ~345° to ~30° (390°) -->
+      <path d="M 96.8 46.8 A 38 38 0 0 1 97.5 78"
+            fill="none" stroke="#e0b45e" stroke-width="4.5" stroke-linecap="round" opacity="0.8" />
+
+      <!-- A monogram -->
+      <text x="64" y="66" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="30" font-weight="800" font-family="Inter, system-ui">A</text>
+
+      <!-- Four icons along the gap, matching their arc segment color -->
+      <!-- Each icon sits just below its corresponding arc end -->
+      <g transform="translate(34, 92)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3 0h6" stroke-width="2" />
+        <path d="M1.5 -2.2l3 2.2-3 2.2" stroke-width="1.8" />
+      </g>
+      <g transform="translate(50, 100)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="1.7" />
+        <path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.5" opacity="0.5" />
+        <path d="M-3.5 -2.6l3.5-2.5 3.5 2.5" stroke-width="1.3" opacity="0.25" />
+      </g>
+      <g transform="translate(78, 100)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.4" />
+        <path d="M3.5 -1h1a0.6 0.6 0 0 1 0.6 0.6v0.8a0.6 0.6 0 0 1-0.6 0.6h-1" stroke-width="1.2" />
+        <line x1="-2" y1="-1.2" x2="-2" y2="1.2" stroke-width="1.5" />
+        <line x1="0.3" y1="-1.2" x2="0.3" y2="1.2" stroke-width="1.3" opacity="0.4" />
+      </g>
+      <g transform="translate(94, 92)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="0" cy="-2.8" r="2" stroke-width="1.4" />
+        <path d="M-3.8 4v-0.8a3.8 3.8 0 0 1 7.6 0V4" stroke-width="1.4" />
+      </g>
+    </svg>
+    <div class="name">C: Segmented arc + icons</div>
+    <div class="desc">Each arc segment is a different category color, icons below match their segment</div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2>Home Screen Simulation (52px actual size)</h2>
+<div class="homescreen">
+  <div class="hs-row">
+    <!-- Option A at phone size -->
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0d0e17" />
+          <circle cx="64" cy="64" r="42" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="5" />
+          <path d="M 27.6 85 A 42 42 0 1 1 100.4 85" fill="none" stroke="#6babdf" stroke-width="6" stroke-linecap="round" opacity="0.7" />
+          <!-- Overlay gradient effect with multiple arcs -->
+          <path d="M 52 24 A 42 42 0 0 1 100.4 85" fill="none" stroke="#e0b45e" stroke-width="6" stroke-linecap="round" opacity="0.5" />
+          <path d="M 76 24 A 42 42 0 0 1 100.4 85" fill="none" stroke="#6bcf9a" stroke-width="6" stroke-linecap="round" opacity="0.5" />
+          <path d="M 98 58 A 42 42 0 0 1 100.4 85" fill="none" stroke="#e0b45e" stroke-width="6" stroke-linecap="round" opacity="0.6" />
+          <text x="64" y="68" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="34" font-weight="800" font-family="Inter, system-ui">A</text>
+          <g transform="translate(36, 100)" stroke="#6babdf" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-3 0h6" stroke-width="2.5" /><path d="M1.5 -2.2l3 2.2-3 2.2" stroke-width="2.2" /></g>
+          <g transform="translate(52, 100)" stroke="#ab9ed4" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="2" /><path d="M-3.5 -0.3l3.5-2.5 3.5 2.5" stroke-width="1.8" opacity="0.5" /></g>
+          <g transform="translate(76, 100)" stroke="#6bcf9a" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.8" /></g>
+          <g transform="translate(92, 100)" stroke="#e0b45e" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="0" cy="-2.8" r="2.2" stroke-width="1.8" /><path d="M-3.8 4v-0.8a3.8 3.8 0 0 1 7.6 0V4" stroke-width="1.8" /></g>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (A)</div>
+    </div>
+
+    <!-- Option B at phone size -->
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0d0e17" />
+          <circle cx="64" cy="60" r="38" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="4.5" />
+          <path d="M 30.5 78 A 38 38 0 1 1 97.5 78" fill="none" stroke="#6babdf" stroke-width="5" stroke-linecap="round" opacity="0.7" />
+          <path d="M 50 24 A 38 38 0 0 1 97.5 78" fill="none" stroke="#ab9ed4" stroke-width="5" stroke-linecap="round" opacity="0.5" />
+          <path d="M 75 23 A 38 38 0 0 1 97.5 78" fill="none" stroke="#6bcf9a" stroke-width="5" stroke-linecap="round" opacity="0.5" />
+          <path d="M 95 52 A 38 38 0 0 1 97.5 78" fill="none" stroke="#e0b45e" stroke-width="5" stroke-linecap="round" opacity="0.6" />
+          <text x="64" y="66" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="32" font-weight="800" font-family="Inter, system-ui">A</text>
+          <g transform="translate(34, 92)" stroke="#6babdf" fill="none" stroke-linecap="round"><path d="M-3 0h6" stroke-width="2.5" /><path d="M1.5 -2.2l3 2.2-3 2.2" stroke-width="2.2" /></g>
+          <g transform="translate(50, 100)" stroke="#ab9ed4" fill="none" stroke-linecap="round"><path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="2" /></g>
+          <g transform="translate(78, 100)" stroke="#6bcf9a" fill="none" stroke-linecap="round"><rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.8" /></g>
+          <g transform="translate(94, 92)" stroke="#e0b45e" fill="none" stroke-linecap="round"><circle cx="0" cy="-2.8" r="2.2" stroke-width="1.8" /><path d="M-3.8 4v-0.8a3.8 3.8 0 0 1 7.6 0V4" stroke-width="1.8" /></g>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (B)</div>
+    </div>
+
+    <!-- Option C at phone size -->
+    <div class="hs-icon">
+      <div style="width:52px; height:52px; border-radius:13px; overflow:hidden;">
+        <svg width="52" height="52" viewBox="0 0 128 128">
+          <rect width="128" height="128" rx="28" fill="#0d0e17" />
+          <circle cx="64" cy="60" r="38" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="4.5" />
+          <path d="M 30.5 78 A 38 38 0 0 1 28.7 51.3" fill="none" stroke="#6babdf" stroke-width="5" stroke-linecap="round" opacity="0.8" />
+          <path d="M 28.7 51.3 A 38 38 0 0 1 57.8 22.5" fill="none" stroke="#ab9ed4" stroke-width="5" stroke-linecap="round" opacity="0.8" />
+          <path d="M 57.8 22.5 A 38 38 0 0 1 96.8 46.8" fill="none" stroke="#6bcf9a" stroke-width="5" stroke-linecap="round" opacity="0.8" />
+          <path d="M 96.8 46.8 A 38 38 0 0 1 97.5 78" fill="none" stroke="#e0b45e" stroke-width="5" stroke-linecap="round" opacity="0.8" />
+          <text x="64" y="66" text-anchor="middle" fill="rgba(255,255,255,0.93)" font-size="32" font-weight="800" font-family="Inter, system-ui">A</text>
+          <g transform="translate(34, 92)" stroke="#6babdf" fill="none" stroke-linecap="round"><path d="M-3 0h6" stroke-width="2.5" /><path d="M1.5 -2.2l3 2.2-3 2.2" stroke-width="2.2" /></g>
+          <g transform="translate(50, 100)" stroke="#ab9ed4" fill="none" stroke-linecap="round"><path d="M-3.5 2l3.5-2.5 3.5 2.5" stroke-width="2" /></g>
+          <g transform="translate(78, 100)" stroke="#6bcf9a" fill="none" stroke-linecap="round"><rect x="-5" y="-3" width="8.5" height="6" rx="1.2" stroke-width="1.8" /></g>
+          <g transform="translate(94, 92)" stroke="#e0b45e" fill="none" stroke-linecap="round"><circle cx="0" cy="-2.8" r="2.2" stroke-width="1.8" /><path d="M-3.8 4v-0.8a3.8 3.8 0 0 1 7.6 0V4" stroke-width="1.8" /></g>
+        </svg>
+      </div>
+      <div class="hs-label">Arnold (C)</div>
+    </div>
+
+    <div class="hs-icon">
+      <div class="hs-placeholder" style="background: linear-gradient(135deg, #FF6B35, #FF4500);"></div>
+      <div class="hs-label">Strava</div>
+    </div>
+  </div>
+</div>
+
+<div style="height: 30px;"></div>
+</body>
+</html>

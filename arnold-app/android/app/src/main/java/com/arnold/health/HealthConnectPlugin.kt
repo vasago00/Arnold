@@ -9,11 +9,14 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.*
+import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import kotlinx.coroutines.*
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.Period
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -51,6 +54,9 @@ class HealthConnectPlugin : Plugin() {
         HealthPermission.getWritePermission(HydrationRecord::class),
         HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
         HealthPermission.getReadPermission(DistanceRecord::class),
+        // Phase 4a: daily-wellness Tier 1 inputs for tdee()
+        HealthPermission.getReadPermission(StepsRecord::class),
+        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
     )
 
     @PluginMethod
@@ -323,6 +329,109 @@ class HealthConnectPlugin : Plugin() {
                 client.insertRecords(listOf(record))
                 call.resolve(JSObject().apply { put("success", true) })
             } catch (e: Exception) { call.reject("Failed to write hydration: ${e.message}") }
+        }
+    }
+
+    // ─── Phase 4a: Daily-wellness aggregate readers ─────────────────────────
+    // These three methods back TDEE Tier 1: they return one row per calendar
+    // day in the user's local timezone, so downstream JS can upsert into
+    // dailyLogs without any timezone math. We use aggregateGroupByPeriod
+    // with Period.ofDays(1) rather than summing raw samples — HC does the
+    // rollup server-side and handles overlapping records correctly (e.g.,
+    // Garmin + Samsung Health writing to the same day).
+
+    private fun dayRangeLocal(startDate: String, endDate: String): Pair<LocalDateTime, LocalDateTime> {
+        val start = LocalDate.parse(startDate, DateTimeFormatter.ISO_LOCAL_DATE).atStartOfDay()
+        val end   = LocalDate.parse(endDate,   DateTimeFormatter.ISO_LOCAL_DATE).plusDays(1).atStartOfDay()
+        return Pair(start, end)
+    }
+
+    @PluginMethod
+    fun readSteps(call: PluginCall) {
+        val client = healthConnectClient ?: run { call.resolve(JSObject().put("records", JSArray())); return }
+        val startDate = call.getString("startDate") ?: run { call.reject("startDate required"); return }
+        val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
+        scope.launch {
+            try {
+                val (start, end) = dayRangeLocal(startDate, endDate)
+                val buckets = client.aggregateGroupByPeriod(
+                    AggregateGroupByPeriodRequest(
+                        metrics = setOf(StepsRecord.COUNT_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(start, end),
+                        timeRangeSlicer = Period.ofDays(1),
+                    )
+                )
+                val records = JSArray()
+                for (bucket in buckets) {
+                    val steps = bucket.result[StepsRecord.COUNT_TOTAL] ?: 0L
+                    if (steps <= 0L) continue // skip empty days
+                    val obj = JSObject()
+                    obj.put("date", bucket.startTime.toLocalDate().toString())
+                    obj.put("steps", steps)
+                    records.put(obj)
+                }
+                call.resolve(JSObject().put("records", records))
+            } catch (e: Exception) { call.reject("Failed to read steps: ${e.message}") }
+        }
+    }
+
+    @PluginMethod
+    fun readActiveCaloriesBurned(call: PluginCall) {
+        val client = healthConnectClient ?: run { call.resolve(JSObject().put("records", JSArray())); return }
+        val startDate = call.getString("startDate") ?: run { call.reject("startDate required"); return }
+        val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
+        scope.launch {
+            try {
+                val (start, end) = dayRangeLocal(startDate, endDate)
+                val buckets = client.aggregateGroupByPeriod(
+                    AggregateGroupByPeriodRequest(
+                        metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(start, end),
+                        timeRangeSlicer = Period.ofDays(1),
+                    )
+                )
+                val records = JSArray()
+                for (bucket in buckets) {
+                    val energy = bucket.result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]
+                    val kcal = energy?.inKilocalories ?: 0.0
+                    if (kcal <= 0.0) continue
+                    val obj = JSObject()
+                    obj.put("date", bucket.startTime.toLocalDate().toString())
+                    obj.put("kcal", kcal)
+                    records.put(obj)
+                }
+                call.resolve(JSObject().put("records", records))
+            } catch (e: Exception) { call.reject("Failed to read active calories: ${e.message}") }
+        }
+    }
+
+    @PluginMethod
+    fun readTotalCaloriesBurned(call: PluginCall) {
+        val client = healthConnectClient ?: run { call.resolve(JSObject().put("records", JSArray())); return }
+        val startDate = call.getString("startDate") ?: run { call.reject("startDate required"); return }
+        val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
+        scope.launch {
+            try {
+                val (start, end) = dayRangeLocal(startDate, endDate)
+                val buckets = client.aggregateGroupByPeriod(
+                    AggregateGroupByPeriodRequest(
+                        metrics = setOf(TotalCaloriesBurnedRecord.ENERGY_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(start, end),
+                        timeRangeSlicer = Period.ofDays(1),
+                    )
+                )
+                val records = JSArray()
+                for (bucket in buckets) {
+                    val energy = bucket.result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]
+                    val kcal = energy?.inKilocalories ?: 0.0
+                    if (kcal <= 0.0) continue
+                    val obj = JSObject()
+                    obj.put("date", bucket.startTime.toLocalDate().toString())
+                    obj.put("kcal", kcal)
+                    records.put(obj)
+                }
+                call.resolve(JSObject().put("records", records))
+            } catch (e: Exception) { call.reject("Failed to read total calories: ${e.message}") }
         }
     }
 }
