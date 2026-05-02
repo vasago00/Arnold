@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useStorageVersion } from "./hooks/useStorageVersion.js";
 import { scoreAll, getInsights } from "./core/principles.js";
 import {
   saveWorkout, getWorkouts, findRelevantWorkouts, buildWorkoutMemoryContext,
@@ -18,9 +19,12 @@ import { parseWeightCSV, mergeWeight } from "./core/parsers/weightParser.js";
 import { detectCSVType } from "./core/parsers/detectType.js";
 import { fetchAndParseICS } from "./core/parsers/icsParser.js";
 import { parseFITFile } from "./core/parsers/fitParser.js";
+import { pushFit as pushFitToRelay, startFitPolling, pullFitsNow } from "./core/fit-relay.js";
 import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronometerParser.js";
 import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption } from "./core/storage.js";
-import { primeVitalsCache } from "./core/dcy.js";
+import { primeVitalsCache, dcy as dcyToday } from "./core/dcy.js";
+import { allActivities as _allActs } from "./core/dcyMath.js";
+import { parseLocalDate, startOfDay as _startOfDay, startOfWeekMonday as _startOfWeekMonday } from "./core/dateUtils.js";
 import * as dbEngine from "./core/db.js";
 import { fmtHMS, fmtHM, hydrationFor, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
 import { computeActivityNeeds, trackReplenishment, replenishmentSummary } from "./core/activityNeeds.js";
@@ -28,16 +32,18 @@ import { startPeriodicSync, syncAll, getSyncStatus, onSyncEvent, writeBackNutrit
 import { isNativePlatform } from "./core/hc-bridge.js";
 import { ImportDiagnostics } from "./components/ImportDiagnostics.jsx";
 import { GoalsHub } from "./components/GoalsHub.jsx";
+import { StartTilePicker, StartTilePickerInner } from "./components/StartTilePicker.jsx";
+import { buildTileContext } from "./core/derive/tileMetrics.js";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
-import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar } from "./components/MobileHome.jsx";
+import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar, DcyDetails } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
 import BackupStatusPanel from "./components/BackupStatusPanel.jsx";
-import { startCloudSync } from "./core/cloud-sync.js";
-import { startAutoBackup, snapshotBeforeOp } from "./core/backup.js";
+import { startCloudSync, onCloudSyncEvent } from "./core/cloud-sync.js";
+import { startAutoBackup, snapshotBeforeOp, purgeLegacyLocalStorageBackups } from "./core/backup.js";
 import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as getSupAdherence, getDailyNutrientTotals as getSupTotals } from "./core/supplements.js";
 import { AVATAR_LIBRARY } from "./core/avatars.js";
 import { getGoals } from "./core/goals.js";
@@ -54,6 +60,30 @@ import { FocusCard } from "./components/FocusCard.jsx";
 import { NutritionInput as NutritionInputPanel } from "./components/NutritionInput.jsx";
 import { createEntry as createNutEntry, saveEntry as saveNutEntry, getEntriesForDate as getNutEntries, deleteEntry as deleteNutEntry, dailyTotals as nutDailyTotals } from "./core/nutrition.js";
 import { getSystemsReport } from "./core/healthSystems.js";
+import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
+import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
+import { getTopCoachingPrompts, getPromptsByPillar } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
+import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget } from "./core/energyBalance.js";
+// Health system iconography — Gemini-generated line-art PNGs at 256×256 with
+// dark #0b0d12 background and the system's accent color baked in. Vite
+// resolves these to hashed asset URLs at build time.
+import sysBrainPng      from "./assets/systems/brain.png";
+import sysHeartPng      from "./assets/systems/heart.png";
+import sysBonesPng      from "./assets/systems/bones.png";
+import sysGutPng        from "./assets/systems/gut.png";
+import sysImmunePng     from "./assets/systems/immune.png";
+import sysEnergyPng     from "./assets/systems/energy.png";
+import sysLongevityPng  from "./assets/systems/longevity.png";
+import sysSleepPng      from "./assets/systems/sleep.png";
+import sysMetabolismPng from "./assets/systems/metabolism.png";
+import sysEndurancePng  from "./assets/systems/endurance.png";
+import sysHormonesPng   from "./assets/systems/hormones.png";
+const SYSTEM_PNGS_DESKTOP = {
+  brain: sysBrainPng, heart: sysHeartPng, bones: sysBonesPng, gut: sysGutPng,
+  immune: sysImmunePng, energy: sysEnergyPng, longevity: sysLongevityPng,
+  sleep: sysSleepPng, metabolism: sysMetabolismPng, endurance: sysEndurancePng,
+  hormones: sysHormonesPng,
+};
 import { DataSync } from "./components/DataSync.jsx";
 import { ArcDialSVG } from "./components/ArcDialSVG.jsx";
 import {
@@ -78,91 +108,148 @@ function getLogFitActivities(log) {
   return [];
 }
 
+// Desktop's unified-activity reader now delegates to the single source of
+// truth in core/dcyMath.js. Earlier this file held its own parallel merge
+// implementation; consolidated 2026-04 into allActivities() so all four
+// historical call sites (this, useMobileData, MobileEdgeIQ,
+// SystemDetailPanel) read the same view.
 function getUnifiedActivities() {
-  const csvActs = (storage.get('activities') || [])
-    .filter(a => a.source !== 'health_connect'); // exclude HC ghost data
-  const dailyLogs = storage.get('dailyLogs') || [];
-
-  // Normalize activity type to a canonical category for dedup
-  const canon = (s) => {
-    if (!s) return 'workout';
-    const l = s.toLowerCase();
-    if (/run/i.test(l)) return 'run';
-    if (/strength|weight|gym/i.test(l)) return 'strength';
-    if (/hyrox|circuit/i.test(l)) return 'hyrox';
-    if (/walk/i.test(l)) return 'walk';
-    if (/cycle|bike|cycling/i.test(l)) return 'cycling';
-    if (/swim/i.test(l)) return 'swim';
-    return l;
-  };
-
-  // Track which (date, canonType) pairs CSV already covers so we don't double-count a
-  // FIT upload that also appears in a later Garmin CSV export. This check is per-type
-  // (not per-activity), so two runs on the same day in the CSV both survive below —
-  // they're keyed distinctly in `byKey` by title/start-time.
-  const csvByDateType = new Set();
-  for (const a of csvActs) {
-    csvByDateType.add(`${a.date}|${canon(a.activityType || a.title)}`);
-  }
-
-  // CSV activities: key by date|title|time so same-day same-title activities coexist
-  const csvKey = a => `${a.date}|${a.title || a.activityType || ''}|${a.time || ''}`;
-  const byKey = new Map(csvActs.map(a => [csvKey(a), a]));
-
-  // Counter suffix keeps multiple FIT activities of the same type on the same day distinct
-  const fitCountByDateType = new Map();
-
-  for (const log of dailyLogs) {
-    if (!log?.date) continue;
-    const fits = getLogFitActivities(log);
-    for (const fd of fits) {
-      if (!fd) continue;
-      const type = fd.activityType || fd.type || 'workout';
-      // Skip if CSV already covers this canonical type for the day (avoid FIT+CSV dupe).
-      if (csvByDateType.has(`${log.date}|${canon(type)}`)) continue;
-      const dtKey = `${log.date}|${type}`;
-      const n = fitCountByDateType.get(dtKey) || 0;
-      fitCountByDateType.set(dtKey, n + 1);
-      // Disambiguate multiple same-type FIT uploads on the same day with a startTime/index suffix
-      const uniqueKey = `${dtKey}|${fd.startTime || fd.time || n}`;
-      if (byKey.has(uniqueKey)) continue;
-      byKey.set(uniqueKey, {
-        date: log.date,
-        activityType: type,
-        distanceMi: fd.distanceMi || null,
-        distanceKm: fd.distanceKm || null,
-        durationSecs: fd.durationMins ? fd.durationMins * 60 : (fd.durationSecs || null),
-        durationFormatted: fd.duration || null,
-        avgPaceRaw: fd.avgPacePerMi || fd.avgPaceRaw || null,
-        avgHR: fd.avgHR || null,
-        maxHR: fd.maxHR || null,
-        calories: fd.calories || null,
-        startTime: fd.startTime || fd.time || null,
-        source: 'fit-daily',
-      });
-    }
-  }
-  return [...byKey.values()].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  return _allActs();
 }
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 const SK = "vitals-v4";
 const DD = { profile:{name:"",goal:"",age:"",height:""}, logs:[], aiInsights:[], labSnapshots:[], clinicalTests:[] };
-async function loadData(){ try{ const r=await window.storage.get(SK); const data=r?JSON.parse(r.value):DD; primeVitalsCache(data); return data; }catch{ return DD; }}
-async function saveData(d){ try{ primeVitalsCache(d); await window.storage.set(SK,JSON.stringify(d)); }catch{} }
+async function loadData(){
+  // Two-tier read:
+  //   Tier 1: vitals-v4 blob via window.storage — Capacitor-only API. On web
+  //           this is undefined and the read MUST NOT throw out of the function
+  //           or we lose Tier 2 entirely (was the cause of labs vanishing on
+  //           every web reload — outer catch returned DD).
+  //   Tier 2: storage layer (IDB) — cross-device source of truth for labs,
+  //           clinical tests, and everything cloud-sync touches.
+  // Final data = Tier 1 ∪ Tier 2, with Tier 2 winning where collections overlap
+  // (because cloud-sync always writes to Tier 2, not Tier 1).
+  let data = {...DD};
+  // ── Tier 1: vitals-v4 (Capacitor only, optional) ──
+  try {
+    if (typeof window !== 'undefined' && window.storage && typeof window.storage.get === 'function') {
+      const r = await window.storage.get(SK);
+      if (r && r.value) {
+        try { data = JSON.parse(r.value); } catch { /* keep DD */ }
+      }
+    }
+  } catch (e) {
+    console.warn('[loadData] vitals-v4 read failed (non-fatal):', e?.message || e);
+  }
+  // ── Tier 2: storage layer (always available — IDB cache) ──
+  try {
+    const sLabs = storage.get('labSnapshots');
+    if (Array.isArray(sLabs) && sLabs.length) {
+      const m = {};
+      (data.labSnapshots || []).forEach(s => { if (s?.date) m[s.date] = s; });
+      sLabs.forEach(s => {
+        if (!s?.date) return;
+        if (!m[s.date]) m[s.date] = s;
+        else m[s.date] = { ...m[s.date], ...s, markers: { ...(m[s.date].markers || {}), ...(s.markers || {}) } };
+      });
+      data.labSnapshots = Object.values(m).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    } else if (!Array.isArray(data.labSnapshots)) {
+      data.labSnapshots = [];
+    }
+    const sTests = storage.get('clinicalTests');
+    if (Array.isArray(sTests) && sTests.length) {
+      const m = {};
+      (data.clinicalTests || []).forEach(t => { const k = `${t?.date}|${t?.type}`; if (t?.date && t?.type) m[k] = t; });
+      sTests.forEach(t => {
+        const k = `${t?.date}|${t?.type}`;
+        if (!t?.date || !t?.type) return;
+        if (!m[k]) m[k] = t;
+        else m[k] = { ...m[k], ...t, metrics: { ...(m[k].metrics || {}), ...(t.metrics || {}) } };
+      });
+      data.clinicalTests = Object.values(m).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    } else if (!Array.isArray(data.clinicalTests)) {
+      data.clinicalTests = [];
+    }
+  } catch (e) {
+    console.warn('[loadData] storage layer read failed:', e?.message || e);
+  }
+  try { primeVitalsCache(data); } catch {}
+  return data;
+}
+async function saveData(d){
+  // Tier 1 write — Capacitor only. On web this is a no-op; persistence happens
+  // through the storage layer mirror in persist() at line ~700.
+  try {
+    if (typeof window !== 'undefined' && window.storage && typeof window.storage.set === 'function') {
+      primeVitalsCache(d);
+      await window.storage.set(SK, JSON.stringify(d));
+    } else {
+      primeVitalsCache(d);
+    }
+  } catch (e) {
+    console.warn('[saveData] vitals-v4 write failed (non-fatal):', e?.message || e);
+  }
+}
 
 // ─── AI ───────────────────────────────────────────────────────────────────────
-const AI_KEY=()=>import.meta.env.VITE_ANTHROPIC_API_KEY||"";
-const AI_HDR=()=>({"Content-Type":"application/json","x-api-key":AI_KEY(),"anthropic-version":"2023-06-01","anthropic-dangerous-allow-browser":"true"});
+// Routed through the Cloud Sync Worker's /ai/messages endpoint:
+//   - No CORS (Worker is server-side relative to api.anthropic.com)
+//   - No API key in the bundle (ANTHROPIC_API_KEY is a Worker secret)
+//   - Rate limiting (60 calls/hour per token, see worker.js handleAIMessages)
+// Direct-browser path kept as a fallback for when the Worker is unconfigured.
+const AI_WORKER_ENDPOINT = () => (localStorage.getItem('arnold:cloud-sync:endpoint') || '').replace(/\/$/, '');
+const AI_WORKER_TOKEN    = () => localStorage.getItem('arnold:cloud-sync:token') || '';
+const AI_KEY = () => import.meta.env.VITE_ANTHROPIC_API_KEY || ''; // legacy / fallback only
 
-async function ai(system,user,max=1200){
-  if(!AI_KEY())return"API key not configured — add VITE_ANTHROPIC_API_KEY to arnold-app/.env";
-  const r=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:AI_HDR(),
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:max,system,messages:[{role:"user",content:user}]}),
+async function ai(system, user, max = 1200) {
+  // Preferred path: Worker proxy
+  const ep = AI_WORKER_ENDPOINT();
+  const tok = AI_WORKER_TOKEN();
+  if (ep && tok) {
+    try {
+      const r = await fetch(`${ep}/ai/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'authorization': `Bearer ${tok}`,
+        },
+        body: JSON.stringify({ system, user, max, model: 'claude-sonnet-4-5-20250929' }),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        // 503 ai_not_configured → fall through to direct-browser path
+        if (e?.error === 'ai_not_configured') {
+          /* fall through */
+        } else {
+          return `API error ${r.status}: ${e.error?.message || e?.detail || e?.error || 'Unknown error'}`;
+        }
+      } else {
+        const d = await r.json();
+        return d.content?.[0]?.text || 'No response.';
+      }
+    } catch (err) {
+      console.warn('[ai] Worker proxy failed, trying direct:', err?.message || err);
+      /* fall through to direct */
+    }
+  }
+  // Fallback: direct browser → Anthropic. Requires VITE_ANTHROPIC_API_KEY in
+  // the bundle and a browser-allowed key. Subject to CORS issues post-2024.
+  if (!AI_KEY()) return 'AI not configured — set ANTHROPIC_API_KEY on the Worker via `wrangler secret put`, or add VITE_ANTHROPIC_API_KEY to .env';
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': AI_KEY(),
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'anthropic-dangerous-allow-browser': 'true',
+    },
+    body: JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: max, system, messages: [{ role: 'user', content: user }] }),
   });
-  if(!r.ok){const e=await r.json().catch(()=>({}));return`API error ${r.status}: ${e.error?.message||"Unknown error"}`;}
-  const d=await r.json(); return d.content?.[0]?.text||"No response.";
+  if (!r.ok) { const e = await r.json().catch(() => ({})); return `API error ${r.status}: ${e.error?.message || 'Unknown error'}`; }
+  const d = await r.json();
+  return d.content?.[0]?.text || 'No response.';
 }
 
 async function aiStream(system,user,max=1800,onChunk){
@@ -382,7 +469,8 @@ function calcPace(duration,distance){
 }
 function daysUntil(dateStr){
   const now=new Date();now.setHours(0,0,0,0);
-  const target=new Date(dateStr);target.setHours(0,0,0,0);
+  const target=parseLocalDate(dateStr);if(!target)return 0;
+  target.setHours(0,0,0,0);
   return Math.round((target-now)/(1000*60*60*24));
 }
 function raceTypeBadge(distKm){
@@ -394,7 +482,7 @@ function raceTypeBadge(distKm){
 const TABS=[
   {id:"training", label:"EdgeIQ",icon:"◈"},
   {id:"daily",    label:"Daily",  icon:"⊕"},
-  {id:"weekly",   label:"Weekly", icon:"◈"},
+  {id:"weekly",   label:"Trend",  icon:"◈"},
   {id:"labs",     label:"Labs",   icon:"⬡"},
   {id:"clinical", label:"Body",   icon:"◉"},
   {id:"races",    label:"Races",  icon:"⚑"},
@@ -459,16 +547,23 @@ export default function App(){
 
   // ── Swipe navigation for drill-down tabs ──
   const SWIPE_ORDER=['start','edgeiq','play','fuel','core','labs'];
+  // Single swipe handler for ALL mobile screens (Start, EdgeIQ, Play, Fuel,
+  // Core, Labs). Earlier the gate `!mobileHomeActive` disabled it on Start &
+  // EdgeIQ, leaving those screens with no working swipe — and MobileHome.jsx
+  // had its own duplicate handler which double-fired on Start. Now there's
+  // only one handler in the whole tree, attached to <main>.
   const mobileSwipe=useSwipeNav({
     onSwipeLeft:()=>{
-      if(!isMobileApp||mobileHomeActive)return;
+      if(!isMobileApp)return;
       const idx=SWIPE_ORDER.indexOf(mobileActiveId);
+      if(idx<0)return;
       const next=SWIPE_ORDER[Math.min(idx+1,SWIPE_ORDER.length-1)];
       if(next&&next!==mobileActiveId)handleMobileNav(NAV_ITEMS.find(n=>n.id===next));
     },
     onSwipeRight:()=>{
-      if(!isMobileApp||mobileHomeActive)return;
+      if(!isMobileApp)return;
       const idx=SWIPE_ORDER.indexOf(mobileActiveId);
+      if(idx<0)return;
       const prev=SWIPE_ORDER[Math.max(idx-1,0)];
       if(prev&&prev!==mobileActiveId)handleMobileNav(NAV_ITEMS.find(n=>n.id===prev));
     },
@@ -483,10 +578,31 @@ export default function App(){
     migrateSupplementKeys();
     // Encryption at rest: decrypt sensitive keys into memory cache, re-encrypt with session key
     initEncryption().catch(e=>console.warn('Encryption init failed, using plaintext fallback',e));
-    // Phase 7: hydrate IndexedDB engine, then attach so all storage calls route through it
-    dbEngine.hydrateDB().then(()=>{attachEngine(dbEngine);}).catch(e=>console.warn('IDB hydration failed, using localStorage',e));
-    loadData().then(d=>{
-      const needSeed=!d.labSnapshots?.length&&!d.clinicalTests?.length;
+    // Phase 7: hydrate IndexedDB engine, attach, THEN run loadData so the
+    // storage-layer union in loadData has actual data to read. Previously
+    // loadData fired in parallel with hydrateDB and frequently saw an empty
+    // storage layer.
+    dbEngine.hydrateDB()
+      .then(() => { attachEngine(dbEngine); })
+      .catch(e => console.warn('IDB hydration failed, using localStorage', e))
+      .then(() => {
+        // One-time purge of legacy localStorage backup keys (now in IDB).
+        // Safe & idempotent — no-op if localStorage already clean.
+        try { purgeLegacyLocalStorageBackups(); } catch (e) { console.warn('[boot] backup purge failed:', e); }
+        return loadData();
+      })
+      .then(d=>{
+      // SEED_LABS / SEED_CLINICAL only fire on a TRULY first-run install where
+      // the storage layer is empty AND there's no cloud-sync paired endpoint
+      // queued to deliver real data. Without this guard, an empty pull from
+      // the cloud (or a fresh device about to pull) would auto-seed fake labs
+      // that masked missing real data — exactly what hid the labSnapshots
+      // disappear-and-reappear bug for hours on 2026-04-26.
+      const hasStorageLabs = !!(storage.get('labSnapshots') || []).length;
+      const hasStorageTests = !!(storage.get('clinicalTests') || []).length;
+      const isPaired = !!localStorage.getItem('arnold:cloud-sync:pair-id');
+      const needSeed = !d.labSnapshots?.length && !d.clinicalTests?.length
+                    && !hasStorageLabs && !hasStorageTests && !isPaired;
       if(needSeed){const s={...d,labSnapshots:SEED_LABS,clinicalTests:SEED_CLINICAL};setData(s);saveData(s);}
       else setData(d);
       setLoading(false);
@@ -502,13 +618,441 @@ export default function App(){
           }
         });
       }
+      // Phase 4b: dedicated FIT relay polling (60s cadence). Independent of
+      // cloud-sync's encrypted-blob round-trip, so a passphrase mismatch or
+      // dailyLogs version-lock cannot block FIT propagation. Every device runs
+      // both push (when uploading FITs locally) and pull (poll for remotes).
+      // Idempotent merge into dailyLogs.fitActivities by activity id/filename.
+      startFitPolling(storage,({added,dates})=>{
+        if(added>0){
+          showToast(`Synced ${added} new FIT activit${added===1?'y':'ies'} from cloud`);
+          loadData().then(d2=>setData(d2));
+        }
+      });
+      // ── One-shot migration: null out HC-computed sleep scores ────────────
+      // Pre-2026-04-28 HC sync (`hc-sync.js → syncSleep`) was approximating
+      // Garmin's proprietary sleep score from stage durations. The values
+      // diverged significantly (e.g. HC computed 86 vs Garmin's actual 75).
+      // The parser was patched to write `sleepScore: null` on HC records,
+      // but historic records still carry the bogus number. Wipe it on boot;
+      // user can re-import Garmin Sleep CSV to repopulate with real scores.
+      // Idempotent — runs once (we tag with a flag), then never again.
+      try {
+        const migrationFlag = 'arnold:migration:sleep-score-hc-cleared-2026-04-28';
+        if (!localStorage.getItem(migrationFlag)) {
+          const sleeps = storage.get('sleep') || [];
+          let cleared = 0;
+          const cleaned = sleeps.map(s => {
+            if (s?.source === 'health_connect' && s.sleepScore != null) {
+              cleared++;
+              return { ...s, sleepScore: null };
+            }
+            return s;
+          });
+          if (cleared > 0) {
+            storage.set('sleep', cleaned, { skipValidation: true });
+            console.log(`[migrate] cleared ${cleared} HC-computed sleep scores. Re-import Garmin Sleep CSV for real scores.`);
+          }
+          localStorage.setItem(migrationFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] sleep score cleanup failed:', e); }
+
+      // ── One-time migration: clean implausible BMI values from weight rows ──
+      // Earlier weight imports occasionally had garbage BMI values (the famous
+      // 5306 ghost). The Weekly card already range-guards [10, 60] for display,
+      // but the bad data still lives in storage. Walk weight rows once, set
+      // bmi=null on any row outside [10, 60]. Idempotent flag.
+      try {
+        const bmiFlag = 'arnold:migration:bmi-cleanup-2026-04-30';
+        if (!localStorage.getItem(bmiFlag)) {
+          const weights = storage.get('weight') || [];
+          let cleaned = 0;
+          const fixed = weights.map(w => {
+            if (typeof w?.bmi === 'number' && (w.bmi < 10 || w.bmi > 60)) {
+              cleaned++;
+              return { ...w, bmi: null };
+            }
+            return w;
+          });
+          if (cleaned > 0) {
+            storage.set('weight', fixed, { skipValidation: true });
+            console.log(`[migrate] cleaned ${cleaned} weight rows with implausible BMI`);
+          }
+          localStorage.setItem(bmiFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] BMI cleanup failed:', e); }
+
+      // ── One-time migration: reclassify Strength activities that have run
+      //    distance. The fitParser regression on 2026-04-30 made every
+      //    sport='training' activity default to 'Strength' regardless of
+      //    subSport — so HIIT runs / interval runs imported between the
+      //    regression and the 2026-05-01 fix are sitting in storage with
+      //    activityType='Strength' but distanceMi > 0 (which is structurally
+      //    impossible for resistance training). Walk the activities collection
+      //    once, reclassify any "Strength with distance" record based on
+      //    activity name, isRun flag, or as Run by default. ──
+      try {
+        const hiitFlag = 'arnold:migration:hiit-strength-fix-v2-2026-05-01';
+        if (!localStorage.getItem(hiitFlag)) {
+          const acts = storage.get('activities') || [];
+          let fixed = 0;
+          const repaired = acts.map(a => {
+            const name = (a.activityName || '').toLowerCase();
+            const isHiitName = /\b(hiit|interval|fartlek|cardio|sprint)\b/.test(name);
+            const isRunName  = /\b(run|jog|tempo|speed|track)\b/.test(name);
+
+            // Case A: Strength with running distance → reclassify to Run/HIIT
+            if (a.activityType === 'Strength' && a.distanceMi > 0.1) {
+              fixed++;
+              return {
+                ...a,
+                activityType: isHiitName ? 'HIIT' : 'Run (outdoor)',
+                isStrength: false,
+                isRun: true,
+                isHIIT: isHiitName,
+              };
+            }
+            // Case B: Run with a HIIT-style name → promote to HIIT so it
+            // matches planned HIIT slots in Today's Plan
+            if ((a.activityType === 'Run (outdoor)' || a.activityType === 'Run (treadmill)') && isHiitName) {
+              fixed++;
+              return { ...a, activityType: 'HIIT', isHIIT: true, isRun: true };
+            }
+            return a;
+          });
+          if (fixed > 0) {
+            storage.set('activities', repaired, { skipValidation: true });
+            console.log(`[migrate] reclassified ${fixed} activities (Strength→Run/HIIT, Run→HIIT for fartlek/intervals)`);
+          }
+          localStorage.setItem(hiitFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] HIIT/Run reclassify failed:', e); }
+
+      // ── One-time migration: derive sleepStart/wakeTime from GMT timestamps ──
+      // Phase 4g added these fields to the Garmin worker normalizer + HC sync,
+      // but rows already in storage lack them. Sleep Regularity tile reads
+      // sleepStart, so without this backfill the tile stays blank for all
+      // historical nights. Idempotent — guarded by a flag so it runs once.
+      try {
+        const sleepStartFlag = 'arnold:migration:sleep-start-backfill-2026-04-29';
+        if (!localStorage.getItem(sleepStartFlag)) {
+          const sleepRows = storage.get('sleep') || [];
+          const gmtToHHMM = (gmtTs) => {
+            if (gmtTs == null) return null;
+            const d = new Date(gmtTs);
+            if (!Number.isFinite(d.getTime())) return null;
+            return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+          };
+          let updated = 0;
+          const patched = sleepRows.map(r => {
+            if (!r) return r;
+            // Skip if already has sleepStart (newly-pulled rows)
+            if (r.sleepStart) return r;
+            const start = gmtToHHMM(r.sleepStartTimestampGMT);
+            const wake  = gmtToHHMM(r.sleepEndTimestampGMT);
+            if (!start && !wake) return r;
+            updated++;
+            return { ...r, sleepStart: start || null, wakeTime: wake || null };
+          });
+          if (updated > 0) {
+            storage.set('sleep', patched, { skipValidation: true });
+            console.log(`[migrate] derived sleepStart on ${updated} sleep rows from GMT timestamps`);
+          }
+          localStorage.setItem(sleepStartFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] sleepStart backfill failed:', e); }
+      // ── Build version stamp ──
+      // Bump the suffix every time you change code that affects sync semantics
+      // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
+      // verify desktop and phone are running the SAME bundle by comparing
+      // these stamps in their consoles.
+      console.log('%c[arnold-build] Phase 4l · trend-reorder-annual-dcy-2026-05-01','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+
+      // ── Garmin Wellness backfill (Phase 4c) ──
+      // If the user has configured Garmin credentials + the Cloud Sync Worker,
+      // pull any recent dates where sleepScore is null. The HC migration in
+      // Phase 4b cleared bogus sleep scores — this hook fills them back in
+      // with Garmin's authoritative composite score (the same number Garmin
+      // Connect/the watch shows).
+      //
+      // Idempotent: backfillRecentBlanks only re-pulls dates without a
+      // garmin-worker row. Errors are swallowed so a Garmin outage doesn't
+      // stall app boot — failures surface in the Cloud Sync card UI.
+      // Run once-per-day so we don't hammer the worker on every reload:
+      // a single ISO-day key in localStorage gates re-runs.
+      try {
+        const gFlag = `arnold:garmin-backfill:${new Date().toISOString().slice(0,10)}`;
+        if (!localStorage.getItem(gFlag)) {
+          // Fire-and-forget — don't block boot.
+          import('./core/garmin-client.js').then(({ isGarminConfigured, backfillRecentBlanks, fetchGarminVO2Max }) => {
+            if (!isGarminConfigured()) return;
+            return backfillRecentBlanks({ daysBack: 14 })
+              .then(r => {
+                if (r?.ok) {
+                  const filled = (r.results || []).filter(x => x.ok && x.sleepScore != null).length;
+                  console.log(`[garmin-backfill] attempted=${r.attempted} filled=${filled}`);
+                }
+                // Also pull current watch VO2Max so Start summary stays fresh.
+                return fetchGarminVO2Max();
+              })
+              .then(vo2 => {
+                if (vo2?.ok && vo2?.vo2max) {
+                  console.log('[garmin-vo2max]', vo2.vo2max);
+                }
+                localStorage.setItem(gFlag, '1');
+              })
+              .catch(e => console.warn('[garmin-backfill] failed:', e));
+          });
+        }
+      } catch (e) { console.warn('[garmin-backfill] init failed:', e); }
+
+      // ── Garmin Activity auto-sync (Phase 4d) ──
+      // Same once-per-day pattern as wellness backfill. Pulls the last 14 days
+      // of activities (runs / strength / etc.), dedupes against existing
+      // imports, and parses any new ones via the existing fitParser.
+      // Manual FIT upload remains available as a fallback / one-off path.
+      try {
+        const aFlag = `arnold:garmin-activities-sync:${new Date().toISOString().slice(0,10)}`;
+        if (!localStorage.getItem(aFlag)) {
+          import('./core/garmin-activities-client.js').then(({ syncRecentActivities }) => {
+            return import('./core/garmin-client.js').then(({ isGarminConfigured }) => {
+              if (!isGarminConfigured()) return;
+              return syncRecentActivities({ daysBack: 14, limit: 30 })
+                .then(r => {
+                  if (r?.ok) {
+                    console.log(`[garmin-activities] candidates=${r.candidates} skipped=${r.skipped} new=${r.successful}${r.failed ? ' failed=' + r.failed : ''}`);
+                  }
+                  localStorage.setItem(aFlag, '1');
+                })
+                .catch(e => console.warn('[garmin-activities] sync failed:', e));
+            });
+          });
+        }
+      } catch (e) { console.warn('[garmin-activities] init failed:', e); }
+
+
+      // ── One-time migration: labSnapshots + clinicalTests → storage layer ──
+      // Originally these lived only in the vitals-v4 blob (loadData),
+      // which means they NEVER cloud-synced to paired devices. Lift them
+      // into the storage layer so cloud-sync can carry them. The check
+      // is idempotent: only seed the storage key if it's empty AND the
+      // blob has data, so existing storage state never gets overwritten.
+      try{
+        const sLabs=storage.get('labSnapshots');
+        if((!sLabs||!sLabs.length)&&Array.isArray(d.labSnapshots)&&d.labSnapshots.length){
+          storage.set('labSnapshots',d.labSnapshots,{skipValidation:true});
+          console.log(`[migrate] seeded ${d.labSnapshots.length} lab snapshots to storage layer`);
+        }
+        const sTests=storage.get('clinicalTests');
+        if((!sTests||!sTests.length)&&Array.isArray(d.clinicalTests)&&d.clinicalTests.length){
+          storage.set('clinicalTests',d.clinicalTests,{skipValidation:true});
+          console.log(`[migrate] seeded ${d.clinicalTests.length} clinical tests to storage layer`);
+        }
+      }catch(e){console.warn('[migrate] labs/tests migration failed:',e);}
+      // One-time idempotent cleanup of historical HC-sourced entries in the
+      // activities collection. syncExercise was disabled in Phase 4a but
+      // entries from prior versions persist with `source: 'health_connect'`
+      // and inflate weekly mileage on the desktop view. This loop drops them
+      // and writes back ONLY if anything was removed (no-op on later boots).
+      try{
+        const acts=storage.get('activities')||[];
+        // Filter 1: HC-sourced ghost entries (Phase 4a legacy).
+        // Filter 2: Resort Skiing entries dated 2025-12-XX — these are the
+        // misdated ski sessions caused by the activitiesParser US-format
+        // bug (now fixed). All real Resort Skiing happened in 2026 per
+        // user's verified Garmin export. Any pre-2026 ski rows are stale
+        // imports that should be dropped.
+        const cleaned=acts.filter(a=>{
+          if(!a)return false;
+          if(a.source==='health_connect')return false;
+          const isStaleSki=/ski/i.test(a.activityType||'')&&(a.date||'').startsWith('2025-');
+          if(isStaleSki)return false;
+          return true;
+        });
+        if(cleaned.length!==acts.length){
+          console.log(`[boot-cleanup] purged ${acts.length-cleaned.length} stale activity rows (HC ghosts + misdated ski)`);
+          storage.set('activities',cleaned,{skipValidation:true});
+        }
+      }catch(e){console.warn('[boot-cleanup] activities purge failed:',e);}
+      // ── Temporary diagnostic for the 12.9-mile inflation bug ──
+      // Prints a per-day breakdown of this week's runs from BOTH the
+      // activities collection and dailyLogs.fitActivities[]. Deferred 3s
+      // so the AES-GCM encryption layer is fully initialized — dailyLogs
+      // is encrypted at rest and reads return empty before init.
+      // Also exposes window.diagnoseRuns() so it can be called manually.
+      const runDiagnostic=()=>{
+        try{
+          const localDateStr=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          const now=new Date();
+          const monday=new Date(now);
+          monday.setDate(now.getDate()-(now.getDay()||7)+1);
+          monday.setHours(0,0,0,0);
+          const inWeek=ds=>new Date(ds+'T12:00:00')>=monday;
+          const acts=storage.get('activities')||[];
+          const logs=storage.get('dailyLogs')||[];
+          const csvRuns=acts.filter(a=>isRunAct(a)&&a.date&&inWeek(a.date));
+          const fitRuns=[];
+          for(const l of logs){
+            if(!l?.date||!inWeek(l.date))continue;
+            const fits=Array.isArray(l.fitActivities)&&l.fitActivities.length?l.fitActivities:(l.fitData?[l.fitData]:[]);
+            for(const fd of fits){
+              if(isRunAct(fd))fitRuns.push({date:l.date,...fd});
+            }
+          }
+          console.group('[diag] Weekly run inventory');
+          console.log('Week starts:',localDateStr(monday));
+          console.log(`activities collection size: ${acts.length}`);
+          console.log(`dailyLogs collection size: ${logs.length}`);
+          console.log(`From activities (this week, runs only): ${csvRuns.length}`);
+          console.table(csvRuns.map(a=>({date:a.date,type:a.activityType,miles:a.distanceMi,source:a.source,title:a.title})));
+          console.log(`From dailyLogs.fitActivities (this week, runs only): ${fitRuns.length}`);
+          console.table(fitRuns.map(a=>({date:a.date,type:a.activityType,miles:a.distanceMi,duration:a.durationSecs||a.durationMins,startTime:a.startTime||a.time})));
+          const csvTotal=csvRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
+          const fitTotal=fitRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
+          console.log(`csvRuns total: ${csvTotal.toFixed(2)} mi · fitRuns total: ${fitTotal.toFixed(2)} mi · combined: ${(csvTotal+fitTotal).toFixed(2)} mi`);
+          console.log('Today\'s dailyLogs row:',logs.find(l=>l.date===localDateStr(now))||'(none)');
+          console.groupEnd();
+        }catch(e){console.warn('[diag] weekly run inventory failed:',e);}
+      };
+      // Run after encryption is online (typical init takes ~500ms).
+      setTimeout(runDiagnostic,3000);
+      // Also expose it for manual re-runs after data changes.
+      try{window.diagnoseRuns=runDiagnostic;}catch{}
+
+      // ── Activities-collection auditor ──
+      // Why: user sees 87 YTD workouts but expects 32. Likely culprit is
+      // duplicate rows from re-imported CSVs or lap-split rows. This dumps
+      // the breakdown by year + activityType + dedup-by-(date,type,start)
+      // so we can see exactly what's in there.
+      const auditActivities=()=>{
+        try{
+          const acts=storage.get('activities')||[];
+          const byYear={},byType={},byDateType={};
+          for(const a of acts){
+            const y=(a.date||'').slice(0,4)||'(no date)';
+            byYear[y]=(byYear[y]||0)+1;
+            const t=a.activityType||a.title||'(no type)';
+            byType[t]=(byType[t]||0)+1;
+            const k=`${a.date}|${(a.activityType||a.title||'')}`;
+            byDateType[k]=(byDateType[k]||0)+1;
+          }
+          const dupes=Object.entries(byDateType).filter(([,n])=>n>1).sort((a,b)=>b[1]-a[1]).slice(0,15);
+          // Filter test: simulate what the UI's YTD filter is doing.
+          const yearStart=new Date(new Date().getFullYear(),0,1);
+          const ytdViaDate=acts.filter(a=>a.date&&new Date(a.date)>=yearStart);
+          const ytdViaString=acts.filter(a=>a.date&&(a.date+'').slice(0,4)===String(new Date().getFullYear()));
+          // Sample of 2025 entries — what does new Date(a.date) actually parse to?
+          const sample2025=acts.filter(a=>(a.date||'').startsWith('2025')).slice(0,3).map(a=>({raw:a.date,parsed:new Date(a.date).toString()}));
+          console.group('[audit] activities collection');
+          console.log('Total rows:',acts.length);
+          console.log('By year:',byYear);
+          console.log('By activityType (top 10):',Object.fromEntries(Object.entries(byType).sort((a,b)=>b[1]-a[1]).slice(0,10)));
+          console.log(`Duplicate (date|type) keys: ${dupes.length} groups (showing top 15)`);
+          if(dupes.length){
+            console.table(dupes.map(([k,n])=>({key:k,count:n})));
+            const dupCount=dupes.reduce((s,[,n])=>s+n-1,0);
+            console.log(`Excess rows from duplicates: ~${dupCount}`);
+          }
+          console.log(`YTD count via "new Date(a.date) >= yearStart": ${ytdViaDate.length}`);
+          console.log(`YTD count via string slice "2026": ${ytdViaString.length}`);
+          console.log('yearStart =',yearStart.toString());
+          console.log('Sample 2025 entries — raw date vs parsed:');
+          console.table(sample2025);
+          console.groupEnd();
+        }catch(e){console.warn('[audit] failed:',e);}
+      };
+      setTimeout(auditActivities,3500);
+      try{window.auditActivities=auditActivities;}catch{}
+
+      // Manual wipe helper — used during the parser-bug recovery so you can
+      // clear the activities collection cleanly via the storage layer (which
+      // bumps version + triggers cloud-sync push) rather than localStorage.
+      // Usage: wipeActivities()  → returns count wiped, then re-import CSV.
+      try{
+        window.wipeActivities=()=>{
+          const before=(storage.get('activities')||[]).length;
+          storage.set('activities',[],{skipValidation:true});
+          console.log(`[wipe] cleared ${before} activities. Re-import the CSV next.`);
+          return before;
+        };
+        // Also expose storage itself so future ad-hoc inspection is easy.
+        window.__arnoldStorage=storage;
+        // Expose the unified activity merge so we can diagnose count mismatches
+        // between storage.get('activities') and what the dashboard actually uses.
+        window.__allActs=_allActs;
+        // Manual labs migration — bypasses the auto-condition entirely.
+        // Reads vitals-v4 directly via window.storage and writes to the
+        // storage layer (which triggers cloud-sync push). Use when the
+        // boot-time auto-migration silently no-op'd.
+        window.migrateLabsNow=async()=>{
+          try{
+            // Try every storage path the legacy code uses, in order:
+            //  1. plain localStorage (web default)
+            //  2. window.storage shim (Capacitor native)
+            //  3. data prop already in React state (cached form)
+            let blob=null;
+            let source='';
+            // Path 1: localStorage
+            try{
+              const raw=typeof localStorage!=='undefined'?localStorage.getItem(SK):null;
+              if(raw){blob=JSON.parse(raw);source='localStorage';}
+            }catch{}
+            // Path 2: window.storage (Capacitor)
+            if(!blob&&typeof window.storage?.get==='function'){
+              try{
+                const r=await window.storage.get(SK);
+                if(r&&r.value){blob=JSON.parse(r.value);source='window.storage';}
+              }catch{}
+            }
+            // Path 3: window.Capacitor.Preferences (newer API)
+            if(!blob&&window.Capacitor?.Plugins?.Preferences){
+              try{
+                const r=await window.Capacitor.Plugins.Preferences.get({key:SK});
+                if(r&&r.value){blob=JSON.parse(r.value);source='Capacitor.Preferences';}
+              }catch{}
+            }
+            if(!blob){
+              console.log('[migrate-now] vitals-v4 not found in localStorage, window.storage, or Capacitor.Preferences');
+              console.log('[migrate-now] Tried:',{localStorage:typeof localStorage,windowStorage:typeof window.storage,capacitor:!!window.Capacitor});
+              return null;
+            }
+            const labs=Array.isArray(blob.labSnapshots)?blob.labSnapshots:[];
+            const tests=Array.isArray(blob.clinicalTests)?blob.clinicalTests:[];
+            console.log(`[migrate-now] vitals-v4 found via ${source}: ${labs.length} labSnapshots, ${tests.length} clinicalTests`);
+            if(labs.length)storage.set('labSnapshots',labs,{skipValidation:true});
+            if(tests.length)storage.set('clinicalTests',tests,{skipValidation:true});
+            console.log('[migrate-now] storage layer now has:',{labs:(storage.get('labSnapshots')||[]).length,tests:(storage.get('clinicalTests')||[]).length});
+            return{labs:labs.length,tests:tests.length,source};
+          }catch(e){console.error('[migrate-now] failed:',e);return null;}
+        };
+      }catch{}
       // Cloud sync: E2E-encrypted snapshot sync between desktop & mobile via
       // Cloudflare Worker relay. No-op until the user pairs via CloudSyncPanel.
       startCloudSync().catch(err=>console.warn('[cloud-sync] start failed:',err));
+      // When a pull lands changes from another device, force-refresh React
+      // state so derived views (Today's Plan tile, etc.) read the new data.
+      // applySnapshot() writes via setCloudApplying(true) which deliberately
+      // suppresses storage's change notifier (to avoid push feedback loops),
+      // so without this listener the UI stays stale until a tab switch.
+      onCloudSyncEvent((evt,payload)=>{
+        if(evt==='pull:ok'&&payload?.applied>0){
+          loadData().then(d2=>setData(d2));
+        }
+      });
     });
   },[]);
 
-  const persist=useCallback(async nd=>{setData(nd);await saveData(nd);},[]);
+  const persist=useCallback(async nd=>{
+    setData(nd);
+    await saveData(nd);
+    // Mirror lab/clinical data into the storage layer too so cloud-sync
+    // carries new entries to paired devices. Vitals-v4 stays the legacy
+    // source-of-truth on each device; storage is the cross-device pipe.
+    try{
+      if(Array.isArray(nd?.labSnapshots))storage.set('labSnapshots',nd.labSnapshots,{skipValidation:true});
+      if(Array.isArray(nd?.clinicalTests))storage.set('clinicalTests',nd.clinicalTests,{skipValidation:true});
+    }catch(e){console.warn('[persist] labs/tests mirror failed:',e);}
+  },[]);
   const showToast=msg=>{setToast(msg);setTimeout(()=>setToast(""),2500);};
 
   if(loading)return(<div style={S.splash}><div style={S.si}><div style={S.pr}/><span style={S.sl}>⬡</span></div></div>);
@@ -529,7 +1073,7 @@ export default function App(){
       <nav style={S.nav} className="arnold-nav">
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
       </nav>
-      <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{})}} className="arnold-main" {...(isMobileApp&&!mobileHomeActive?mobileSwipe:{})}>
+      <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{}),...(isMobileApp?{touchAction:'pan-y'}:{})}} className="arnold-main" {...(isMobileApp?mobileSwipe:{})}>
         {/* ── Mobile compact header for drill-down tabs (matches Start/EdgeIQ) ── */}
         {isMobileApp&&!mobileHomeActive&&(()=>{
           const tabLabels={activity:'Play',nutrition_mobile:'Fuel',daily:'Daily Log',labs:'Labs',clinical:'Core',races:'Races',goals:'Goals',supplements:'Stack',settings:'Settings',weekly:'EdgeIQ'};
@@ -560,7 +1104,7 @@ export default function App(){
         {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></div>}
         {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></div>}
         {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
-        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
+        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/><StartTilePickerSection data={data}/></div></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
         {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
       </main>
@@ -576,10 +1120,11 @@ export default function App(){
         <div style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(8px)'}} onClick={()=>setMobileMoreOpen(false)}>
           <div style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(16,18,24,0.98)',borderRadius:'20px 20px 0 0',padding:'20px 16px env(safe-area-inset-bottom, 16px)',animation:'mobileSheetUp 0.25s ease-out'}} onClick={e=>e.stopPropagation()}>
             <div style={{width:36,height:4,borderRadius:2,background:'rgba(255,255,255,0.15)',margin:'0 auto 16px'}}/>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              {[{label:'Goals',tab:'goals'},{label:'Races',tab:'races'},{label:'Stack',tab:'supplements'},{label:'Cloud Sync',tab:'settings'},{label:'Profile',tab:'settings'}].map(m=>(
-                <button key={m.label} onClick={()=>{setMobileMoreOpen(false);if(m.id==='sync'){setMobileInitView('sync');setTab('training');}else{setTab(m.tab);}}} style={{padding:'14px 12px',borderRadius:12,background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0',fontSize:13,fontWeight:500,cursor:'pointer',textAlign:'center'}}>
-                  {m.label}
+            <div style={{display:'grid',gridTemplateColumns:'1fr',gap:8}}>
+              {[{label:'Cloud Sync',desc:'Pair devices, Health Connect, Cronometer',tab:'settings'}].map(m=>(
+                <button key={m.label} onClick={()=>{setMobileMoreOpen(false);setTab(m.tab);}} style={{padding:'16px 14px',borderRadius:14,background:'rgba(107,171,223,0.10)',border:'1px solid rgba(107,171,223,0.25)',color:'#e2e8f0',cursor:'pointer',textAlign:'left',display:'flex',flexDirection:'column',gap:4}}>
+                  <span style={{fontSize:14,fontWeight:600,color:'#6BABDF'}}>{m.label}</span>
+                  <span style={{fontSize:12,color:'rgba(226,232,240,0.6)'}}>{m.desc}</span>
                 </button>
               ))}
             </div>
@@ -600,14 +1145,126 @@ function ClinicalModule({data,persist,showToast}){
   const [aiRun,setAiRun]=useState(false);
 
   const tests=data.clinicalTests||[];
-  const latest=tests.reduce((acc,t)=>{
-    if(!acc[t.type]||t.date>acc[t.type].date)acc[t.type]=t;
+  // All tests, grouped by type and sorted newest-first per group, so we can
+  // (a) pick the latest of each type for the Overview cards, AND
+  // (b) let the user navigate between historical scans inside each tab.
+  const byType=tests.reduce((acc,t)=>{
+    if(!t?.type) return acc;
+    (acc[t.type]=acc[t.type]||[]).push(t);
     return acc;
   },{});
+  Object.values(byType).forEach(arr=>arr.sort((a,b)=>(b.date||'').localeCompare(a.date||'')));
 
-  const dexa=latest["dexa"];
-  const vo2=latest["vo2max"];
-  const rmr=latest["rmr"];
+  const latest=Object.fromEntries(Object.entries(byType).map(([k,arr])=>[k,arr[0]]));
+
+  // Per-tab selected scan date — defaults to the latest. User can flip via
+  // the scan-picker chips at the top of each tab.
+  const [dexaDate, setDexaDate]   = useState(latest.dexa?.date    || null);
+  const [vo2Date,  setVo2Date]    = useState(latest.vo2max?.date  || null);
+  const [rmrDate,  setRmrDate]    = useState(latest.rmr?.date     || null);
+
+  const dexa=(byType.dexa  ||[]).find(t=>t.date===dexaDate) || latest.dexa;
+  const vo2 =(byType.vo2max||[]).find(t=>t.date===vo2Date)  || latest.vo2max;
+  const rmr =(byType.rmr   ||[]).find(t=>t.date===rmrDate)  || latest.rmr;
+
+  // Garmin watch VO2Max — falls back into the VO2 tab when no recent lab test
+  // exists. Pulled from activities collection (latest non-null vO2MaxValue).
+  const garminVO2 = (() => {
+    try {
+      const acts = data.activities || [];
+      const sorted = [...acts].sort((a,b) => (b.date||'').localeCompare(a.date||''));
+      for (const a of sorted) {
+        const v = a.vO2MaxValue ?? a.vo2Max ?? a.vO2Max;
+        if (typeof v === 'number' && v > 0) return { value: Math.round(v * 10) / 10, date: a.date };
+      }
+    } catch {}
+    return null;
+  })();
+
+  // Helper: format a metric value with optional unit and missing-fallback.
+  const fmt = (v, unit = '', missing = '—') => {
+    if (v == null || v === '') return missing;
+    return unit ? `${v}${unit ? ' ' + unit : ''}` : String(v);
+  };
+  // Helper: render the historical-scan picker chip strip at the top of a tab.
+  const ScanPicker = ({ scans, selectedDate, onSelect, accentColor }) => {
+    if (!scans || scans.length <= 1) return null;
+    return (
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+        {scans.map(s => (
+          <button key={s.date} onClick={() => onSelect(s.date)} style={{
+            fontSize:'clamp(10px,0.3vw + 9px,11px)',
+            padding:'4px 10px',
+            borderRadius:12,
+            border:`0.5px solid ${selectedDate===s.date?accentColor:'rgba(255,255,255,0.1)'}`,
+            background: selectedDate===s.date ? `${accentColor}25` : 'transparent',
+            color: selectedDate===s.date ? accentColor : C.m,
+            cursor:'pointer',
+            letterSpacing:'0.04em',
+          }}>
+            {s.date}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  // ── Garmin scale priority helpers (Phase 4g) ──
+  // For metrics the daily Garmin scale measures (weight, body fat %, skeletal
+  // muscle mass, BMI), prefer the most recent reading (within 7 days) over
+  // the year-old lab anchor. Lab values are still kept and visible inside the
+  // DEXA tab — they're just not the headline number for things that change
+  // weekly. Returns { value, sourceLabel, sourceColor } per metric.
+  const SCALE_FRESH_DAYS = 7;
+  const scaleRows = useMemo(() => {
+    const all = [...(data?.weight || [])]
+      .filter(w => w?.date)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return all;
+  }, [data?.weight]);
+  const todayMs = Date.now();
+  const isFresh = (dateStr) => {
+    if (!dateStr) return false;
+    const t = new Date(dateStr + 'T12:00:00').getTime();
+    return Number.isFinite(t) && (todayMs - t) <= SCALE_FRESH_DAYS * 86400 * 1000;
+  };
+  // For each scale-able field, find the most recent row with a value.
+  const latestScaleField = (key) => {
+    for (const r of scaleRows) {
+      if (r?.[key] != null && Number.isFinite(Number(r[key]))) {
+        return { value: Number(r[key]), date: r.date };
+      }
+    }
+    return null;
+  };
+  // hybrid(scaleField, labValue, labDate, fmt) — picks scale if fresh, else lab.
+  // Returns { value, sub } shaped for the Overview cards.
+  const hybrid = (scaleKey, labValue, labDate, opts = {}) => {
+    const scale = latestScaleField(scaleKey);
+    if (scale != null && isFresh(scale.date)) {
+      return {
+        value: opts.transform ? opts.transform(scale.value) : scale.value,
+        sub: `📊 Scale · ${scale.date}`,
+        source: 'scale',
+      };
+    }
+    if (labValue != null) {
+      return {
+        value: opts.transform ? opts.transform(labValue) : labValue,
+        sub: labDate ? `🔬 Lab · ${labDate}` : '—',
+        source: 'lab',
+      };
+    }
+    if (scale != null) {
+      // Stale scale data is still better than nothing — flag the date
+      return {
+        value: opts.transform ? opts.transform(scale.value) : scale.value,
+        sub: `📊 Scale · ${scale.date} (stale)`,
+        source: 'scale-stale',
+      };
+    }
+    return { value: null, sub: '—', source: null };
+  };
 
   const runAI=async()=>{
     setAiRun(true);setAiText("");
@@ -623,27 +1280,211 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
     setAiText(txt);setAiRun(false);
   };
 
+  // ── Clinical PDF upload state (Phase 4f) ──
+  // User drags or picks a DEXA / VO2 / RMR PDF → parseClinicalPDF runs →
+  // we show a preview modal where they can verify + edit values before save.
+  const [pdfPreview, setPdfPreview] = useState(null); // { type, date, metrics, filename }
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfErr, setPdfErr] = useState(null);
+  const pdfInputRef = useRef();
+
+  async function handleClinicalPdfUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPdfBusy(true); setPdfErr(null); setPdfPreview(null);
+    try {
+      const { parseClinicalPDF } = await import('./core/pdfParser.js');
+      const parsed = await parseClinicalPDF(file);
+      if (!parsed.ok) {
+        setPdfErr(parsed.error === 'unknown_clinical_pdf'
+          ? `Couldn't detect scan type from ${file.name}. Was this a DexaFit DEXA, VO2Max, or RMR report?`
+          : `Parser failed: ${parsed.error}`);
+      } else {
+        setPdfPreview(parsed);
+      }
+    } catch (err) {
+      setPdfErr(String(err?.message || err));
+    } finally {
+      setPdfBusy(false);
+      if (e.target) e.target.value = '';
+    }
+  }
+
+  function handleConfirmSave() {
+    if (!pdfPreview) return;
+    // Date fallback: if the PDF had no detectable date, use today.
+    const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+    const date = pdfPreview.date || today;
+    const next = [...(data.clinicalTests || [])];
+    // Replace any existing test of same type+date (re-import case)
+    const idx = next.findIndex(t => t?.type === pdfPreview.type && t?.date === date);
+    const entry = { type: pdfPreview.type, date, source: 'pdf', filename: pdfPreview.filename, metrics: pdfPreview.metrics };
+    if (idx >= 0) next[idx] = entry; else next.push(entry);
+    persist({ ...data, clinicalTests: next });
+    showToast?.(`Imported ${pdfPreview.type.toUpperCase()} scan · ${date}`);
+    setView(pdfPreview.type === 'vo2max' ? 'vo2' : pdfPreview.type);
+    setPdfPreview(null);
+  }
+
   return(
     <div style={S.sec}>
       <div style={S.st}>◉ Body & Fitness</div>
-      <div style={S.labNav}>
-        {[["overview","Overview"],["dexa","DEXA"],["vo2","VO₂ Max"],["rmr","RMR"]].map(([id,lbl])=>(
-          <button key={id} onClick={()=>setView(id)} style={{...S.lnb,...(view===id?S.lnba:{})}}>{lbl}</button>
-        ))}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}}>
+        <div style={S.labNav}>
+          {[["overview","Overview"],["dexa","DEXA"],["vo2","VO₂ Max"],["rmr","RMR"]].map(([id,lbl])=>(
+            <button key={id} onClick={()=>setView(id)} style={{...S.lnb,...(view===id?S.lnba:{})}}>{lbl}</button>
+          ))}
+        </div>
+        <button
+          onClick={() => pdfInputRef.current?.click()}
+          disabled={pdfBusy}
+          style={{
+            padding:'5px 10px', fontSize:11, fontWeight:500, letterSpacing:'0.04em',
+            background:'transparent', borderWidth:'0.5px', borderStyle:'solid', borderColor:'#a78bfa',
+            borderRadius:'var(--radius-sm)', color:'#a78bfa', cursor:'pointer',
+          }}
+          title="Upload a DexaFit DEXA / VO₂Max / RMR PDF — values auto-parse and save to your clinical history.">
+          {pdfBusy ? 'Parsing…' : '↑ Upload scan'}
+        </button>
+        <input
+          ref={pdfInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          style={{display:'none'}}
+          onChange={handleClinicalPdfUpload}
+        />
       </div>
 
-      {view==="overview"&&<>
+      {pdfErr && (
+        <div style={{padding:'8px 10px',marginBottom:8,fontSize:12,borderRadius:6,
+          background:'#3a1f1f',color:'#ffd4d4',borderWidth:'0.5px',borderStyle:'solid',borderColor:'#5a2f2f'}}>
+          {pdfErr}
+        </div>
+      )}
+
+      {pdfPreview && (
+        <div style={{padding:12,marginBottom:8,borderRadius:8,
+          background:C.surf,borderWidth:'0.5px',borderStyle:'solid',borderColor:'#a78bfa'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:600,color:'#a78bfa'}}>
+              Preview: {pdfPreview.type.toUpperCase()} · {pdfPreview.date || '(date not detected)'}
+            </div>
+            <div style={{fontSize:10,color:C.m}}>{pdfPreview.filename}</div>
+          </div>
+          <div style={{fontSize:11,color:C.m,marginBottom:8}}>
+            {Object.keys(pdfPreview.metrics).length} fields parsed. Verify before saving — anything missing
+            will show as "—" in the tab. If most fields are blank, click "Show raw PDF text" below
+            and copy the contents — that lets a developer write patterns that match this exact report layout.
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))',gap:6,maxHeight:200,overflowY:'auto',marginBottom:10}}>
+            {Object.entries(pdfPreview.metrics).map(([k, v]) => (
+              <div key={k} style={{fontSize:11,padding:'4px 8px',background:'rgba(255,255,255,0.02)',borderRadius:4}}>
+                <div style={{color:C.m,fontSize:9,letterSpacing:'0.04em',textTransform:'uppercase'}}>{k}</div>
+                <div style={{color:C.t,fontWeight:500}}>{Array.isArray(v) ? `[${v.join('–')}]` : String(v)}</div>
+              </div>
+            ))}
+          </div>
+          {!pdfPreview.date && (
+            <div style={{fontSize:11,color:'#fbbf24',marginBottom:6}}>
+              ⚠ Date not detected. Saving will use today's date — you can edit this later in clinicalTests storage.
+            </div>
+          )}
+          {/* Raw PDF text debug view — paste this back for parser tuning */}
+          {pdfPreview.rawText && (
+            <details style={{marginBottom:10}}>
+              <summary style={{cursor:'pointer',fontSize:11,color:'#fbbf24',padding:'4px 0'}}>
+                Show raw PDF text (for parser debugging — copy + paste back to refine patterns)
+              </summary>
+              <textarea
+                readOnly
+                value={pdfPreview.rawText}
+                onClick={e => e.target.select()}
+                style={{
+                  width:'100%',minHeight:160,marginTop:6,padding:8,
+                  fontFamily:'ui-monospace, SFMono-Regular, monospace',fontSize:10,
+                  background:'#0b0d12',color:'#c8d1dc',
+                  borderWidth:'0.5px',borderStyle:'solid',borderColor:'#2a2e38',
+                  borderRadius:4,resize:'vertical',
+                }}
+              />
+              <button
+                onClick={() => { navigator.clipboard?.writeText(pdfPreview.rawText); showToast?.('Raw PDF text copied to clipboard'); }}
+                style={{
+                  marginTop:6,padding:'4px 10px',fontSize:11,
+                  background:'transparent',color:'#a78bfa',
+                  borderWidth:'0.5px',borderStyle:'solid',borderColor:'#a78bfa',
+                  borderRadius:4,cursor:'pointer',
+                }}>
+                📋 Copy raw text
+              </button>
+            </details>
+          )}
+          <div style={{display:'flex',gap:6}}>
+            <button onClick={handleConfirmSave} style={{
+              padding:'6px 14px',fontSize:12,fontWeight:500,
+              background:'#a78bfa',color:'#0b0d12',
+              borderWidth:'0.5px',borderStyle:'solid',borderColor:'#a78bfa',
+              borderRadius:6,cursor:'pointer',
+            }}>
+              Save to history
+            </button>
+            <button onClick={() => setPdfPreview(null)} style={{
+              padding:'6px 14px',fontSize:12,
+              background:'transparent',color:C.m,
+              borderWidth:'0.5px',borderStyle:'solid',borderColor:'rgba(255,255,255,0.15)',
+              borderRadius:6,cursor:'pointer',
+            }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {view==="overview"&&(()=>{
+        // Read latest values from each test type. Falls back to "—" when no scan exists.
+        const dxa = latest.dexa?.metrics  || {};
+        const v2  = latest.vo2max?.metrics || {};
+        const rm  = latest.rmr?.metrics    || {};
+        // Garmin watch VO2 takes over if it's newer than the lab test
+        const labVO2Date = latest.vo2max?.date;
+        const useWatchVO2 = garminVO2 && (!labVO2Date || garminVO2.date > labVO2Date);
+        const vo2Headline = useWatchVO2 ? garminVO2.value : v2.vo2max;
+        const vo2Sub      = useWatchVO2
+          ? `📊 Watch · ${garminVO2.date}`
+          : (v2.percentile != null
+              ? `🔬 Lab · ${labVO2Date} · ${v2.percentile}th %ile`
+              : (labVO2Date ? `🔬 Lab · ${labVO2Date}` : '—'));
+        const fmt = (v) => v == null ? '—' : String(v);
+        const fmt1 = (v) => v == null ? '—' : (Math.round(Number(v) * 10) / 10).toString();
+        const fmtKcal = (v) => v == null ? '—' : Number(v).toLocaleString('en-US');
+
+        // Hybrid metrics — scale wins when fresh, lab is the anchor otherwise.
+        // bodyFatPct: scale `bodyFatPct` ↔ lab `dxa.bodyFatPct`.
+        const bodyFat = hybrid('bodyFatPct', dxa.bodyFatPct, latest.dexa?.date);
+        // Lean mass: scale provides skeletalMuscleMassLbs (skeletal only), DEXA provides
+        // total lean (skeletal + organs + water). They aren't the same metric, so we
+        // prefer the DEXA value here when present and only fall through to scale's
+        // skeletal muscle reading as a directional indicator.
+        const leanMass = (dxa.leanMass != null)
+          ? { value: dxa.leanMass, sub: latest.dexa?.date ? `🔬 DEXA · ${latest.dexa.date}` : '—', source: 'lab' }
+          : hybrid('skeletalMuscleMassLbs', null, null, { transform: v => `${v} skel.` });
+        // Weight: ALWAYS prefer scale (daily reading is the freshest possible).
+        const weight = hybrid('weightLbs', dxa.totalMass, latest.dexa?.date);
+
+        const cards = [
+          {label:"VO₂ Max",     value: fmt(vo2Headline),     unit:"ml/kg/min", sub: vo2Sub,                                                                                       color:"#34d399", icon:"◈"},
+          {label:"Bio Age",     value: fmt(v2.bioAge),       unit:"years",     sub: v2.bioAge != null ? `🔬 Lab · ${labVO2Date}` : "—",                                          color:"#4ade80", icon:"∿"},
+          {label:"Body Fat",    value: fmt1(bodyFat.value),  unit:"%",         sub: bodyFat.sub,                                                                                 color:"#f59e0b", icon:"⊗"},
+          {label:"Lean Mass",   value: fmt(leanMass.value),  unit:"lbs",       sub: leanMass.sub,                                                                                color:"#a78bfa", icon:"◆"},
+          {label:"Weight",      value: fmt1(weight.value),   unit:"lbs",       sub: weight.sub,                                                                                  color:"#60a5fa", icon:"⚖"},
+          {label:"RMR",         value: fmtKcal(rm.rmr),      unit:"kcal",      sub: latest.rmr?.date ? `🔬 Lab · ${latest.rmr.date}` : "—",                                       color:"#4ade80", icon:"⬡"},
+          {label:"T-Score",     value: fmt(dxa.tScore),      unit:"",          sub: dxa.tScore != null ? `🔬 DEXA · ${latest.dexa.date} (DEXA only)` : "—",                       color:"#4ade80", icon:"○"},
+          {label:"Visceral Fat",value: fmt(dxa.visceralFat), unit:"lbs",       sub: dxa.visceralFat != null ? `🔬 DEXA · ${latest.dexa.date} (DEXA only)` : "—",                  color:"#facc15", icon:"⚡"},
+          {label:"ALMI",        value: fmt(dxa.almi),        unit:"kg/m²",     sub: dxa.almi != null ? `🔬 DEXA · ${latest.dexa.date} (DEXA only)` : "—",                         color:"#fb923c", icon:"◉"},
+        ];
+        return (<>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          {[
-            {label:"VO₂ Max",value:"51",unit:"ml/kg/min",sub:"98th pct · Elite",color:"#34d399",icon:"◈"},
-            {label:"Bio Age",value:"33",unit:"years",sub:"17 yrs younger",color:"#4ade80",icon:"∿"},
-            {label:"Body Fat",value:"24.7",unit:"%",sub:"Target: 16.7%",color:"#f59e0b",icon:"⊗"},
-            {label:"Lean Mass",value:"134",unit:"lbs",sub:"Target: 138 lbs",color:"#a78bfa",icon:"◆"},
-            {label:"RMR",value:"1,880",unit:"kcal",sub:"Fast metabolism",color:"#4ade80",icon:"⬡"},
-            {label:"T-Score",value:"2.80",unit:"",sub:"Excellent bone density",color:"#4ade80",icon:"○"},
-            {label:"Visceral Fat",value:"1.29",unit:"lbs",sub:"Target: 0.60 lbs",color:"#facc15",icon:"⚡"},
-            {label:"ALMI",value:"9.1",unit:"kg/m²",sub:"Target: 9.3",color:"#fb923c",icon:"◉"},
-          ].map((c,i)=>(
+          {cards.map((c,i)=>(
             <div key={i} style={{...S.sc2,borderColor:`${c.color}40`}}>
               <div style={{fontSize:14,color:c.color,opacity:0.8}}>{c.icon}</div>
               <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em"}}>{c.value}<span style={{fontSize:"clamp(10px,0.4vw + 8px,12px)",color:C.m,fontWeight:400,marginLeft:3}}>{c.unit}</span></div>
@@ -653,48 +1494,47 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
           ))}
         </div>
 
-        <div style={{background:C.dnb,border:`0.5px solid rgba(248,113,113,0.2)`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.dn,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Priority Targets · Mar 2025 Baseline</div>
-          {[
-            ["Body Fat %","24.7% → 16.7%","Reduce 8 percentage points — primarily trunk fat (27.6%)"],
-            ["A/G Ratio","1.12 → <1.0","Apple-shaped distribution; reduce abdominal fat preferentially"],
-            ["Visceral Fat","1.29 → 0.60 lbs","Needs 53% reduction — key metabolic risk driver"],
-            ["Lean Mass","134 → 138 lbs","Add 4 lbs — prioritise resistance training"],
-            ["Redline Ratio","89% → 93%+","Train near VT2 (Zone 3) to improve fatigue resistance"],
-            ["Spine BMD","37th %ile","Below average — consider loading exercises + calcium/D3 review"],
-          ].map(([metric,target,note],i)=>(
-            <div key={i} style={{borderBottom:i<5?`0.5px solid rgba(255,255,255,0.06)`:"none",paddingBottom:i<5?8:0,marginBottom:i<5?8:0}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
-                <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t,fontWeight:500}}>{metric}</span>
-                <span style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.dn}}>{target}</span>
-              </div>
-              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>{note}</div>
+        {/* Empty-state hint when no tests imported yet */}
+        {!latest.dexa && !latest.vo2max && !latest.rmr && (
+          <div style={{background:C.surf,borderWidth:'0.5px',borderStyle:'solid',borderColor:'rgba(168,139,250,0.3)',borderRadius:"var(--radius-md)",padding:14,textAlign:'center'}}>
+            <div style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t,fontWeight:500,marginBottom:6}}>No clinical scans imported yet</div>
+            <div style={{fontSize:"clamp(11px,0.3vw + 9px,12px)",color:C.m,marginBottom:10,lineHeight:1.5}}>
+              Click <strong style={{color:'#a78bfa'}}>↑ Upload scan</strong> at the top right to drop in a DexaFit DEXA, VO₂Max, or RMR PDF.
+              Values auto-extract and save to your clinical history.
             </div>
-          ))}
-        </div>
+          </div>
+        )}
 
         <button style={S.aib} onClick={runAI} disabled={aiRun}><span>✦</span>{aiRun?"Analysing all data…":"Full Cross-Test AI Analysis"}</button>
         {aiText&&!aiRun&&<div style={S.air}><div style={S.aih}>✦ Integrated Clinical Analysis</div><div style={S.ait}>{aiText}</div></div>}
-      </>}
+      </>);
+      })()}
 
-      {view==="dexa"&&dexa&&<>
+      {view==="dexa"&&dexa&&(()=>{
+        const m = dexa.metrics || {};
+        // Build the cards from real metrics; fallback note is just a hint, not a target,
+        // since target values were specific to one historical scan.
+        const cards = [
+          {lbl:"Body Score",  key:'bodyScore',   unit:"",      note:m.bodyScore ? "Composite grade" : "—", clr:"#facc15"},
+          {lbl:"Total Mass",  key:'totalMass',   unit:"lbs",   note:"Total body mass",                       clr:"#f87171"},
+          {lbl:"Body Fat",    key:'bodyFatPct',  unit:"%",     note:"Total body fat %",                      clr:"#fbbf24"},
+          {lbl:"Lean Mass",   key:'leanMass',    unit:"lbs",   note:"Skeletal + soft lean",                  clr:"#facc15"},
+          {lbl:"Visceral Fat",key:'visceralFat', unit:"lbs",   note:"Trunk fat (metabolic risk)",            clr:"#f87171"},
+          {lbl:"T-Score",     key:'tScore',      unit:"",      note:"Bone vs young adult ref",                clr:"#4ade80"},
+          {lbl:"ALMI",        key:'almi',        unit:"kg/m²", note:"Appendicular lean mass index",          clr:"#facc15"},
+          {lbl:"FFMI",        key:'ffmi',        unit:"kg/m²", note:"Fat-free mass index",                    clr:"#facc15"},
+          {lbl:"A/G Ratio",   key:'agRatio',     unit:"",      note:"Android / gynoid fat",                   clr:"#f87171"},
+          {lbl:"Z-Score",     key:'zScore',      unit:"",      note:"Bone vs age-matched ref",                clr:"#4ade80"},
+        ].map(c => ({...c, val: m[c.key] != null ? m[c.key] : '—'}));
+        return (<>
+        {/* Historical scan picker — only shows if 2+ scans exist */}
+        <ScanPicker scans={byType.dexa} selectedDate={dexaDate} onSelect={setDexaDate} accentColor="#a78bfa" />
         <div style={{...S.snap,borderColor:"rgba(168,139,250,0.3)"}}>
           <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:"#a78bfa",letterSpacing:"0.1em",textTransform:"uppercase"}}>DEXA Body Composition · {dexa.date}</div>
-          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>DexaFit New York City</div>
+          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>{dexa.source==='pdf' ? 'Lab scan' : (dexa.source||'')}</div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          {[
-            {lbl:"Body Score",val:"B",unit:"",note:"Target: A",clr:"#facc15"},
-            {lbl:"Total Mass",val:"187",unit:"lbs",note:"Target: 175 lbs",clr:"#f87171"},
-            {lbl:"Body Fat",val:"24.7",unit:"%",note:"Target: 16.7%",clr:"#fbbf24"},
-            {lbl:"Lean Mass",val:"134",unit:"lbs",note:"Target: 138 lbs",clr:"#facc15"},
-            {lbl:"Visceral Fat",val:"1.29",unit:"lbs",note:"Target: 0.60 lbs",clr:"#f87171"},
-            {lbl:"T-Score",val:"2.80",unit:"",note:"Excellent",clr:"#4ade80"},
-            {lbl:"ALMI",val:"9.1",unit:"kg/m²",note:"Target: 9.3",clr:"#facc15"},
-            {lbl:"FFMI",val:"20.2",unit:"kg/m²",note:"Target: 21",clr:"#facc15"},
-            {lbl:"A/G Ratio",val:"1.12",unit:"",note:"Want <1.0",clr:"#f87171"},
-            {lbl:"Z-Score",val:"2.50",unit:"",note:"Excellent",clr:"#4ade80"},
-          ].map((c,i)=>(
+          {cards.map((c,i)=>(
             <div key={i} style={{...S.sc2,borderColor:`${c.clr}30`}}>
               <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t}}>{c.val}<span style={{fontSize:"clamp(10px,0.4vw + 8px,12px)",color:C.m,fontWeight:400,marginLeft:2}}>{c.unit}</span></div>
               <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,letterSpacing:"0.06em",textTransform:"uppercase"}}>{c.lbl}</div>
@@ -702,34 +1542,85 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
             </div>
           ))}
         </div>
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Regional Body Fat %</div>
-          {[["Total","24.7%","Target: 16.7%",0.75],["Trunk","27.6%","Main concern — 3% under peer avg",0.85],["Arms","20.7%","Good — at peer avg",0.55],["Legs","23.2%","4% over peer avg",0.70]].map(([region,val,note,fill],i)=>(
-            <div key={i} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t}}>{region}</span><span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t,fontWeight:500}}>{val}</span></div>
-              <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}><div style={{height:4,width:`${fill*100}%`,background:fill>0.75?C.dn:C.wn,borderRadius:2}}/></div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,marginTop:2}}>{note}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Bone Mineral Density by Region</div>
-          {[["Total Body","1.48 g/cm²","86th %ile","#4ade80"],["Legs","1.61 g/cm²","93rd %ile","#4ade80"],["Head","2.59 g/cm²","73rd %ile","#4ade80"],["Pelvis","1.27 g/cm²","71st %ile","#4ade80"],["Trunk","1.15 g/cm²","64th %ile","#facc15"],["Ribs","0.98 g/cm²","70th %ile","#4ade80"],["Arms","1.11 g/cm²","52nd %ile","#facc15"],["Spine","1.24 g/cm²","37th %ile ⚠","#f87171"]].map(([r,v,p,clr],i)=>(
-            <div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:i<7?`0.5px solid rgba(255,255,255,0.06)`:"none",paddingBottom:6,marginBottom:6}}>
-              <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t}}>{r}</span>
-              <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:clr}}>{v} · {p}</span>
-            </div>
-          ))}
-        </div>
-      </>}
+        {/* Regional Body Fat % — built from m.fatTrunk / m.fatArms / m.fatLegs.
+            Total cell uses the overall body fat %. Bar fills are normalized to a
+            30% ceiling (scan values rarely exceed that). */}
+        {(m.bodyFatPct != null || m.fatTrunk != null) && (
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
+            <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Regional Body Fat %</div>
+            {[
+              {region:"Total", val:m.bodyFatPct},
+              {region:"Trunk", val:m.fatTrunk},
+              {region:"Arms",  val:m.fatArms},
+              {region:"Legs",  val:m.fatLegs},
+            ].filter(r => r.val != null).map((r,i,arr)=>{
+              const fill = Math.min(1, Number(r.val)/30);
+              const valStr = Number(r.val).toFixed(1) + '%';
+              return (
+                <div key={i} style={{marginBottom:i<arr.length-1?10:0}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                    <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t}}>{r.region}</span>
+                    <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t,fontWeight:500}}>{valStr}</span>
+                  </div>
+                  <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
+                    <div style={{height:4,width:`${fill*100}%`,background:fill>0.75?C.dn:C.wn,borderRadius:2}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {/* Bone Mineral Density by Region — built from m.bmdTotal / m.bmdSpine / etc. */}
+        {(m.bmdTotal != null || m.bmdSpine != null) && (
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
+            <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Bone Mineral Density by Region</div>
+            {[
+              {r:"Total Body", v:m.bmdTotal,  p:m.bmdTotalPercentile},
+              {r:"Spine",      v:m.bmdSpine,  p:m.spinePercentile},
+              {r:"Legs",       v:m.bmdLegs,   p:m.bmdLegsPercentile},
+              {r:"Arms",       v:m.bmdArms,   p:m.bmdArmsPercentile},
+            ].filter(row => row.v != null).map((row,i,arr)=>{
+              const valStr = `${Number(row.v).toFixed(2)} g/cm²`;
+              const pStr = row.p != null ? ` · ${row.p}th %ile` : '';
+              const clr = row.p == null ? '#facc15' : row.p >= 70 ? '#4ade80' : row.p >= 50 ? '#facc15' : '#f87171';
+              return (
+                <div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:i<arr.length-1?`0.5px solid rgba(255,255,255,0.06)`:"none",paddingBottom:i<arr.length-1?6:0,marginBottom:i<arr.length-1?6:0}}>
+                  <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t}}>{row.r}</span>
+                  <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:clr}}>{valStr}{pStr}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </>);
+      })()}
 
-      {view==="vo2"&&vo2&&<>
+      {view==="vo2"&&(vo2 || garminVO2)&&(()=>{
+        const m = vo2?.metrics || {};
+        // If Garmin watch estimate is newer than the lab VO2 (or there's no lab),
+        // surface it as the headline. Lab still rendered below as the calibrated source.
+        const labDate = vo2?.date || null;
+        const garminNewer = garminVO2 && (!labDate || garminVO2.date > labDate);
+        const headlineVO2 = garminNewer ? garminVO2.value : (m.vo2max ?? '—');
+        const headlineSource = garminNewer
+          ? `Watch estimate · ${garminVO2.date}`
+          : (labDate ? `Lab VO₂ Max · ${labDate}` : 'No data');
+        const cards = [
+          {lbl:"VO₂ Max",      val: headlineVO2,         unit:"ml/kg/min", sub: headlineSource,                                              clr:"#60a5fa"},
+          {lbl:"Bio Age",      val: m.bioAge,            unit:"years",     sub: m.bioAge != null ? "Lab estimate" : "—",                     clr:"#4ade80"},
+          {lbl:"Redline Ratio",val: m.redlineRatio,      unit:"%",         sub: m.redlinePercentile != null ? `${m.redlinePercentile}th %ile` : "—", clr:"#facc15"},
+          {lbl:"Lean VO₂ Max", val: m.leanVO2,           unit:"ml/lm·kg",  sub: m.leanVO2Percentile != null ? `${m.leanVO2Percentile}th %ile` : "—", clr:"#4ade80"},
+          {lbl:"Leg Lean VO₂", val: m.legLeanVO2,        unit:"ml/lm·kg",  sub: m.legLeanVO2Percentile != null ? `${m.legLeanVO2Percentile}th %ile` : "—", clr:"#4ade80"},
+          {lbl:"Max HR",       val: m.maxHR,             unit:"bpm",       sub: "From lab test",                                               clr:"#facc15"},
+        ].map(c => ({...c, val: c.val == null || c.val === '' ? '—' : c.val}));
+        return (<>
+        <ScanPicker scans={byType.vo2max} selectedDate={vo2Date} onSelect={setVo2Date} accentColor="#60a5fa" />
         <div style={{...S.snap,borderColor:"rgba(96,165,250,0.3)"}}>
-          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:"#60a5fa",letterSpacing:"0.1em",textTransform:"uppercase"}}>VO₂ Max Assessment · {vo2.date}</div>
-          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>DexaFit New York City</div>
+          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:"#60a5fa",letterSpacing:"0.1em",textTransform:"uppercase"}}>VO₂ Max Assessment · {vo2?.date || (garminVO2 ? garminVO2.date : '—')}</div>
+          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>{garminNewer ? `Garmin watch (lab last: ${labDate || 'never'})` : (vo2?.source==='pdf' ? 'Lab' : (vo2?.source||''))}</div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-          {[{lbl:"VO₂ Max",val:"51",unit:"ml/kg/min",sub:"Elite · 98th %ile",clr:"#60a5fa"},{lbl:"Bio Age",val:"33",unit:"years",sub:"17 yrs younger",clr:"#4ade80"},{lbl:"Redline Ratio",val:"89",unit:"%",sub:"70th %ile · Good",clr:"#facc15"},{lbl:"Lean VO₂ Max",val:"72",unit:"ml/lm·kg",sub:"99th %ile · Elite",clr:"#4ade80"},{lbl:"Leg Lean VO₂",val:"200",unit:"ml/lm·kg",sub:"96th %ile · Elite",clr:"#4ade80"},{lbl:"Max HR",val:"164",unit:"bpm",sub:"58th %ile",clr:"#facc15"}].map((c,i)=>(
+          {cards.map((c,i)=>(
             <div key={i} style={{...S.sc2,borderColor:`${c.clr}35`}}>
               <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em"}}>{c.val}<span style={{fontSize:"clamp(10px,0.4vw + 8px,12px)",color:C.m,fontWeight:400,marginLeft:2}}>{c.unit}</span></div>
               <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,textTransform:"uppercase",letterSpacing:"0.05em"}}>{c.lbl}</div>
@@ -737,34 +1628,121 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
             </div>
           ))}
         </div>
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Your Training Zones</div>
-          {[{z:"Zone 4 · Peak",hr:"152–172 bpm",kcal:"1225–1388 kcal/hr",note:"VO₂Max development & HIIT",clr:"#f87171",pct:"20%"},{z:"Zone 3 · High",hr:"138–152 bpm",kcal:"1057–1225 kcal/hr",note:"Tempo — raise Redline Ratio",clr:"#fb923c",pct:"selective"},{z:"Zone 2 · Moderate",hr:"99–138 bpm",kcal:"601–1057 kcal/hr",note:"Fat oxidation & mitochondria",clr:"#60a5fa",pct:"80%"},{z:"Zone 1 · Recovery",hr:"82–99 bpm",kcal:"501–601 kcal/hr",note:"Active recovery & warmup",clr:"#4ade80",pct:""}].map((z,i)=>(
-            <div key={i} style={{borderLeft:`3px solid ${z.clr}`,paddingLeft:10,marginBottom:i<3?10:0}}>
-              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t,fontWeight:500}}>{z.z}</span>{z.pct&&<span style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",background:`${z.clr}20`,color:z.clr,padding:"2px 6px",borderRadius:3}}>{z.pct} of training</span>}</div>
-              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:z.clr}}>{z.hr}</div>
-              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>{z.kcal} · {z.note}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Ventilatory Thresholds</div>
-          {[["VT1","110 bpm","Peak fat oxidation — Zone 2 ceiling","#4ade80"],["VT2","154 bpm","Rapid lactate accumulation — Zone 3/4 boundary","#f87171"]].map(([k,v,note,clr],i)=>(
-            <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:i<1?8:0}}>
-              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:clr,fontWeight:500,minWidth:36}}>{k}</div>
-              <div><div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.t}}>{v}</div><div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>{note}</div></div>
-            </div>
-          ))}
-        </div>
-      </>}
+        {/* Training Zones — built from m.zone1..zone4 ([loBpm, hiBpm] arrays).
+            Hidden when no zone data (e.g., Garmin watch fallback path). */}
+        {(m.zone1 || m.zone2 || m.zone3 || m.zone4) && (
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
+            <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Your Training Zones</div>
+            {[
+              {z:"Zone 4 · Peak",     range: m.zone4, note:"VO₂Max development & HIIT",       clr:"#f87171"},
+              {z:"Zone 3 · High",     range: m.zone3, note:"Tempo — raise Redline Ratio",     clr:"#fb923c"},
+              {z:"Zone 2 · Moderate", range: m.zone2, note:"Fat oxidation & mitochondria",    clr:"#60a5fa"},
+              {z:"Zone 1 · Recovery", range: m.zone1, note:"Active recovery & warmup",         clr:"#4ade80"},
+            ].filter(z => Array.isArray(z.range) && z.range.length === 2).map((z,i,arr)=>(
+              <div key={i} style={{borderLeft:`3px solid ${z.clr}`,paddingLeft:10,marginBottom:i<arr.length-1?10:0}}>
+                <span style={{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.t,fontWeight:500}}>{z.z}</span>
+                <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:z.clr}}>{z.range[0]}–{z.range[1]} bpm</div>
+                <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>{z.note}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Ventilatory Thresholds — from m.vt1 / m.vt2 (bpm). */}
+        {(m.vt1 != null || m.vt2 != null) && (
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
+            <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Ventilatory Thresholds</div>
+            {[
+              {k:"VT1", v:m.vt1, note:"Peak fat oxidation — Zone 2 ceiling",         clr:"#4ade80"},
+              {k:"VT2", v:m.vt2, note:"Rapid lactate accumulation — Zone 3/4 boundary", clr:"#f87171"},
+            ].filter(t => t.v != null).map((t,i,arr)=>(
+              <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:i<arr.length-1?8:0}}>
+                <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:t.clr,fontWeight:500,minWidth:36}}>{t.k}</div>
+                <div>
+                  <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.t}}>{t.v} bpm</div>
+                  <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>{t.note}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>);
+      })()}
 
-      {view==="rmr"&&rmr&&<>
+      {view==="rmr"&&rmr&&(()=>{
+        const m = rmr.metrics || {};
+        // Helper: format kcal with thousand separators
+        const kcal = (v) => v == null ? '—' : Number(v).toLocaleString('en-US');
+        // Net delta vs predicted — labels the user's metabolism speed.
+        // Threshold lowered to ±50 because that's where DexaFit's report
+        // typically flips between FAST / AVERAGE / SLOW classifications
+        // (matching the verbatim label on your scan).
+        const delta = (m.rmr != null && m.predicted != null) ? Math.round(m.rmr - m.predicted) : null;
+        const speedLabel = delta == null ? null
+          : delta >= 50  ? `Fast (+${delta} vs predicted)`
+          : delta <= -50 ? `Slow (${delta} vs predicted)`
+          : `Average (${delta >= 0 ? '+' : ''}${delta} vs predicted)`;
+        const peerLabel = (m.rmr != null && m.peerAvg != null)
+          ? (m.rmr >= m.peerAvg ? 'Above peers' : 'Below peers')
+          : 'Peer reference';
+        const cards = [
+          {lbl:"RMR",          val: kcal(m.rmr),        unit:"kcal/day", sub: speedLabel || 'Resting metabolic rate', clr:"#4ade80"},
+          {lbl:"Predicted RMR",val: kcal(m.predicted),  unit:"kcal/day", sub:'Statistical avg for age/body',           clr:"#facc15"},
+          {lbl:"RER",          val: m.rer != null ? Number(m.rer).toFixed(2) : '—', unit:"", sub: (m.fatPct != null && m.carbsPct != null) ? `Fat ${m.fatPct}% / Carbs ${m.carbsPct}%` : 'Respiratory exchange ratio', clr:"#60a5fa"},
+          {lbl:"Peer Average", val: kcal(m.peerAvg),    unit:"kcal/day", sub: peerLabel,                                clr:"#fb923c"},
+        ];
+        // TDEE rows: prefer parser-extracted PDF values, fall back to RMR × standard
+        // Mifflin-St Jeor activity multipliers when the PDF didn't yield them.
+        // Multipliers are the canonical ones used by every nutrition tool:
+        //   Sedentary 1.2 · Lightly 1.375 · Moderately 1.55 · Very 1.725 · Extremely 1.9
+        // Tagged so the UI can show "(estimated from RMR)" when computed.
+        const tdeeFromRmr = (factor) => m.rmr != null ? Math.round(Number(m.rmr) * factor) : null;
+        // Sanity check: a stored TDEE value is "good" only if it's within a
+        // plausible range of RMR × factor (±30%). This kicks out absurd values
+        // like 1 kcal that earlier parser bugs may have stored — falls through
+        // to the computed value instead.
+        const isSane = (stored, expected) => {
+          if (stored == null) return false;
+          if (expected == null) return true; // no RMR to compare; trust the stored value
+          const ratio = stored / expected;
+          return ratio >= 0.7 && ratio <= 1.3;
+        };
+        const useStored = (stored, factor) => {
+          const expected = tdeeFromRmr(factor);
+          return isSane(stored, expected) ? stored : expected;
+        };
+        const tdeeRowDefs = [
+          {level:"Sedentary",         factor:1.20,  stored:m.tdeeSedentary},
+          {level:"Lightly Active",    factor:1.375, stored:m.tdeeLightlyActive},
+          {level:"Moderately Active", factor:1.55,  stored:m.tdeeModerate},
+          {level:"Very Active",       factor:1.725, stored:m.tdeeVeryActive},
+          {level:"Extremely Active",  factor:1.90,  stored:m.tdeeExtreme},
+        ].map(r => ({
+          level: r.level,
+          tdee:  useStored(r.stored, r.factor),
+          computed: !isSane(r.stored, tdeeFromRmr(r.factor)),
+        }));
+        const anyComputed = tdeeRowDefs.some(r => r.tdee != null && r.computed);
+        const tdeeRows = tdeeRowDefs.filter(r => r.tdee != null).map(r => {
+          // Fat-loss range: ~500-1000 kcal deficit. Lean-gain range: ~250-500 kcal surplus.
+          const fatLossLo = Math.round(r.tdee - 1000);
+          const fatLossHi = Math.round(r.tdee - 500);
+          const leanLo    = Math.round(r.tdee + 250);
+          const leanHi    = Math.round(r.tdee + 500);
+          return {
+            level: r.level,
+            tdeeStr:    `${r.tdee.toLocaleString('en-US')} kcal`,
+            fatLossStr: `${fatLossLo.toLocaleString('en-US')}–${fatLossHi.toLocaleString('en-US')}`,
+            leanStr:    `${leanLo.toLocaleString('en-US')}–${leanHi.toLocaleString('en-US')}`,
+          };
+        });
+        return (<>
+        <ScanPicker scans={byType.rmr} selectedDate={rmrDate} onSelect={setRmrDate} accentColor="#4ade80" />
         <div style={{...S.snap,borderColor:"rgba(74,222,128,0.3)"}}>
           <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.ta,letterSpacing:"0.1em",textTransform:"uppercase"}}>Resting Metabolic Rate · {rmr.date}</div>
-          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>DexaFit New York City</div>
+          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>{rmr.source==='pdf' ? 'Lab' : (rmr.source||'')}</div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          {[{lbl:"RMR",val:"1,880",unit:"kcal/day",sub:"Fast (+97 vs predicted)",clr:"#4ade80"},{lbl:"Predicted RMR",val:"1,783",unit:"kcal/day",sub:"Statistical avg for age/body",clr:"#facc15"},{lbl:"RER",val:"0.84",unit:"",sub:"Fat 53% / Carbs 47%",clr:"#60a5fa"},{lbl:"Peer Average",val:"1,915",unit:"kcal/day",sub:"Slightly below peers",clr:"#fb923c"}].map((c,i)=>(
+          {cards.map((c,i)=>(
             <div key={i} style={{...S.sc2,borderColor:`${c.clr}35`}}>
               <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em"}}>{c.val}<span style={{fontSize:"clamp(10px,0.4vw + 8px,12px)",color:C.m,fontWeight:400,marginLeft:2}}>{c.unit}</span></div>
               <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,textTransform:"uppercase",letterSpacing:"0.06em"}}>{c.lbl}</div>
@@ -772,29 +1750,45 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
             </div>
           ))}
         </div>
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.ta,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>Resting Fuel Composition (RER 0.84)</div>
-          <div style={{height:20,borderRadius:4,overflow:"hidden",display:"flex",marginBottom:6}}>
-            <div style={{width:"53%",background:"#60a5fa",display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#fff",fontWeight:500}}>Fat 53%</span></div>
-            <div style={{width:"47%",background:"#fb923c",display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#fff",fontWeight:500}}>Carbs 47%</span></div>
-          </div>
-          <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>Good metabolic flexibility. RER 0.70 = pure fat; 1.0 = pure carbs. Your 0.84 shows balanced substrate use at rest.</div>
-        </div>
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
-          <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.ta,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Total Daily Energy Expenditure</div>
-          {[["Sedentary","2,256 kcal","1,256–1,756","2,506–2,756"],["Lightly Active","2,585 kcal","1,585–2,085","2,835–3,085"],["Moderately Active","2,914 kcal","1,914–2,414","3,164–3,414"],["Very Active","3,243 kcal","2,243–2,743","3,493–3,743"],["Extremely Active","3,572 kcal","2,572–3,072","3,822–4,072"]].map(([level,tdee,fatLoss,lean],i)=>(
-            <div key={i} style={{display:"grid",gridTemplateColumns:"1.2fr 0.8fr 1fr 1fr",borderBottom:i<4?`0.5px solid rgba(255,255,255,0.06)`:"none",paddingBottom:5,marginBottom:5,gap:4}}>
-              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.t}}>{level}</div>
-              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.ta,fontWeight:500}}>{tdee}</div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa"}}>{fatLoss}</div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa"}}>{lean}</div>
+        {/* Resting Fuel Composition — built from m.fatPct / m.carbsPct */}
+        {(m.fatPct != null && m.carbsPct != null) && (
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
+            <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.ta,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10}}>
+              Resting Fuel Composition{m.rer != null ? ` (RER ${Number(m.rer).toFixed(2)})` : ''}
             </div>
-          ))}
-          <div style={{display:"grid",gridTemplateColumns:"1.2fr 0.8fr 1fr 1fr",marginTop:4}}>
-            <div/><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m}}>TDEE</div><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa"}}>Fat Loss</div><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa"}}>Lean Gain</div>
+            <div style={{height:20,borderRadius:4,overflow:"hidden",display:"flex",marginBottom:6}}>
+              <div style={{width:`${m.fatPct}%`,background:"#60a5fa",display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#fff",fontWeight:500}}>Fat {m.fatPct}%</span></div>
+              <div style={{width:`${m.carbsPct}%`,background:"#fb923c",display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#fff",fontWeight:500}}>Carbs {m.carbsPct}%</span></div>
+            </div>
+            <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>
+              RER 0.70 = pure fat oxidation; 1.0 = pure carb. {m.rer != null && m.rer < 0.80 ? 'Fat-dominant fuel use at rest.' : m.rer != null && m.rer > 0.90 ? 'Carb-dominant fuel use at rest.' : 'Balanced substrate use at rest.'}
+            </div>
           </div>
-        </div>
-      </>}
+        )}
+        {/* TDEE table — built from the five tdee* fields */}
+        {tdeeRows.length > 0 && (
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:8}}>
+              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.ta,letterSpacing:"0.12em",textTransform:"uppercase"}}>Total Daily Energy Expenditure</div>
+              {anyComputed && (
+                <div style={{fontSize:9,color:C.m,fontStyle:'italic'}}>estimated · RMR × activity factor</div>
+              )}
+            </div>
+            {tdeeRows.map((row,i)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1.2fr 0.8fr 1fr 1fr",borderBottom:i<tdeeRows.length-1?`0.5px solid rgba(255,255,255,0.06)`:"none",paddingBottom:5,marginBottom:5,gap:4}}>
+                <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.t}}>{row.level}</div>
+                <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.ta,fontWeight:500}}>{row.tdeeStr}</div>
+                <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa"}}>{row.fatLossStr}</div>
+                <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa"}}>{row.leanStr}</div>
+              </div>
+            ))}
+            <div style={{display:"grid",gridTemplateColumns:"1.2fr 0.8fr 1fr 1fr",marginTop:4}}>
+              <div/><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m}}>TDEE</div><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa"}}>Fat Loss</div><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#a78bfa"}}>Lean Gain</div>
+            </div>
+          </div>
+        )}
+      </>);
+      })()}
     </div>
   );
 }
@@ -1061,7 +2055,7 @@ function HomeCockpit({data,setTab}){
   const todayStr=td();
 
   // ── YTD activity ──
-  const ytdActs=activities.filter(a=>a.date&&new Date(a.date)>=yearStart);
+  const ytdActs=activities.filter(a=>{const d=parseLocalDate(a.date);return d&&d>=yearStart;});
   const ytdRuns=ytdActs.filter(a=>a.activityType?.toLowerCase().includes('run'));
   const ytdStrength=ytdActs.filter(a=>{const t=a.activityType?.toLowerCase()||'';return t.includes('strength')||t.includes('training');});
   const totalMi=ytdRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
@@ -1087,16 +2081,45 @@ function HomeCockpit({data,setTab}){
   const currentBF=sortedW[0]?.bodyFatPct;
 
   // ── Recovery (7-day) ──
+  // HRV merge: Worker writes overnightHRV onto sleep rows (Phase 4c), while
+  // older flow stored it in the dedicated `hrv` collection. The Weekly card
+  // previously read only `hrv` and missed the worker-sourced values entirely.
+  // Build a unified by-date set with worker rows winning per date.
   const d7=new Date();d7.setDate(today.getDate()-7);
-  const recentHRV=hrvData.filter(h=>new Date(h.date)>=d7);
   const recentSleep=sleepData.filter(s=>new Date(s.date)>=d7);
-  const recentHRVValid=recentHRV.filter(h=>h.overnightHRV);
-  const avgHRV7=recentHRVValid.length?Math.round(recentHRVValid.reduce((s,h)=>s+h.overnightHRV,0)/recentHRVValid.length):null;
+  const mergedHrvLast7 = (() => {
+    const byDate = new Map();
+    for (const h of (hrvData || [])) {
+      if (h?.date && new Date(h.date) >= d7 && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
+        byDate.set(h.date, Number(h.overnightHRV));
+      }
+    }
+    for (const s of (sleepData || [])) {
+      if (s?.date && new Date(s.date) >= d7 && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
+        byDate.set(s.date, Number(s.overnightHRV)); // worker wins over legacy
+      }
+    }
+    return [...byDate.values()];
+  })();
+  const avgHRV7 = mergedHrvLast7.length
+    ? Math.round(mergedHrvLast7.reduce((s, v) => s + v, 0) / mergedHrvLast7.length)
+    : null;
   const recentSleepDur=recentSleep.filter(s=>s.durationMinutes);
   const avgSleepMins7=recentSleepDur.length?Math.round(recentSleepDur.reduce((s,sl)=>s+sl.durationMinutes,0)/recentSleepDur.length):null;
-  // latestSleepScore = most recent non-null score (capped at 100), not an average
+  // latestSleepScore — only if the most-recent row is from today/yesterday
+  // AND has a non-null score. Don't fall back to a 2+ night old score —
+  // that misleads "last night" when last night's row exists but the score
+  // is still pending (Garmin Worker hasn't pulled it yet).
   const sortedSleepAll=[...sleepData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const latestSleepScore=(()=>{const s=sortedSleepAll.find(s=>s.sleepScore!=null);return s?Math.min(s.sleepScore,100):null;})();
+  const latestSleepScore=(()=>{
+    const top=sortedSleepAll[0];
+    if(!top) return null;
+    const today=td();
+    const yest=(()=>{const d=new Date();d.setDate(d.getDate()-1);return td(d);})();
+    if(top.date!==today && top.date!==yest) return null;
+    if(top.sleepScore==null) return null;
+    return Math.min(top.sleepScore,100);
+  })();
   const latestRHR=sortedSleepAll[0]?.restingHR||null;
 
   // ── 30-day nutrition (merged: cronometer CSV + manual nutritionLog) ──
@@ -1114,7 +2137,7 @@ function HomeCockpit({data,setTab}){
   const avgProtein=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.protein||0),0)/recentNut.length):null;
 
   // ── Race countdown ──
-  const nextRace=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
+  const nextRace=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=now2;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date))[0]||null;}catch{return null;}})();
   const raceDaysLeft=nextRace?Math.ceil((new Date(nextRace.date)-new Date(new Date().setHours(0,0,0,0)))/86400000):null;
 
   // ── Race readiness (uses trainingIntelligence) ──
@@ -1134,10 +2157,15 @@ function HomeCockpit({data,setTab}){
   const compoundScore=Math.round(((Math.min(volPct,1)*25)+(pacePct*25)+(sleepPct*25)+((protPct>0.85?1:protPct)*15)+(weightPct*10)));
 
   // ── Weekly stats for sparklines ──
+  // Monday-start weeks (Sunday belongs to the previous week's Monday). Without
+  // the Sunday=>6 offset, Sunday's bucket would land on tomorrow's Monday and
+  // include up to a week of FUTURE-looking data — i.e. "next week" appears in
+  // the rightmost column. Activity dates anchor at local noon to dodge UTC.
   const weeklyMiles=Array.from({length:8},(_,i)=>{
-    const wStart=new Date(today);wStart.setDate(today.getDate()-(7*(7-i)+today.getDay()));wStart.setHours(0,0,0,0);
+    const dow=today.getDay();const offset=dow===0?6:dow-1;
+    const wStart=new Date(today);wStart.setDate(today.getDate()-(7*(7-i)+offset));wStart.setHours(0,0,0,0);
     const wEnd=new Date(wStart);wEnd.setDate(wStart.getDate()+7);
-    return activities.filter(a=>{const d=new Date(a.date);return d>=wStart&&d<wEnd&&a.activityType?.toLowerCase().includes('run');}).reduce((s,a)=>s+(a.distanceMi||0),0);
+    return activities.filter(a=>{const d=parseLocalDate(a.date);return d&&d>=wStart&&d<wEnd&&a.activityType?.toLowerCase().includes('run');}).reduce((s,a)=>s+(a.distanceMi||0),0);
   });
 
   // ── Style helpers ──
@@ -1390,7 +2418,49 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // ── Load data ──
   const profile={...(storage.get('profile')||{}),...getGoals()};
   const activities=getUnifiedActivities();
-  const nutrition=storage.get('cronometer')||[];
+  // Nutrition source for the Weekly snapshot card.
+  // Prior bug (Phase 4g fix): read directly from the legacy `cronometer`
+  // storage key, which captured only manual CSV imports — completely missed
+  // the Cronometer Worker writes that land in `nutritionLog` as full-day
+  // entries (id `cronometer-live:${date}`). Result: weekly card showed 0g
+  // protein / blank consumed despite fresh data being available.
+  //
+  // Sources merged here:
+  //   - nutDailyTotals(ds): nutritionLog full-day + manual + legacy cronometer
+  //                         (returns calories/protein/carbs/fat/fiber/sugar/water)
+  //   - nutritionLog full-day entry's `extended` block: sodium/potassium/magnesium/etc.
+  //     (cronometer-client.js writes these as a separate field on the full-day entry)
+  const nutrition = (() => {
+    const days = [];
+    const ref = new Date();
+    const allNutLog = (typeof storage !== 'undefined' && storage.get('nutritionLog')) || [];
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(ref);
+      d.setDate(ref.getDate() - i);
+      const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const t = nutDailyTotals(ds);
+      // Pull micros off the cronometer-live full-day entry's `extended` block.
+      const fullDay = allNutLog
+        .filter(e => e?.date === ds && e?.meal === 'full-day')
+        .sort((a, b) => (b?.createdAt || '').localeCompare(a?.createdAt || ''))[0];
+      const ext = fullDay?.extended || {};
+      if (t.calories > 0 || t.protein > 0 || t.entryCount > 0) {
+        days.push({
+          date: ds,
+          ...t,
+          // Micronutrients (mg unless noted)
+          sodium:    Number(ext.sodium) || 0,
+          potassium: Number(ext.potassium) || 0,
+          magnesium: Number(ext.magnesium) || 0,
+          calcium:   Number(ext.calcium) || 0,
+          iron:      Number(ext.iron) || 0,
+          caffeine:  Number(ext.caffeine) || 0,
+          alcohol:   Number(ext.alcohol) || 0,
+        });
+      }
+    }
+    return days;
+  })();
   const weightData=storage.get('weight')||[];
   const sleepData=storage.get('sleep')||[];
   const hrvData=storage.get('hrv')||[];
@@ -1482,11 +2552,13 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // ── This/last week activities ──
   const thisWeekActs=activities.filter(a=>inWk(a.date,monday,now));
   const lastWeekActs=activities.filter(a=>inWk(a.date,lastMonday,lastSunday));
-  const runs=a=>/running|trail/i.test(a.activityType||'');
-  const strength=a=>/strength|weight/i.test(a.activityType||'');
+  // Canonical classifiers — single source of truth in activityClass.js.
+  // HIIT counts as a run (distance) but is excluded from strength.
+  const runs=isRunAct;
+  const strength=isStrengthAct;
   const runCount=thisWeekActs.filter(runs).length;
   const strengthCount=thisWeekActs.filter(strength).length;
-  const otherCount=thisWeekActs.filter(a=>!runs(a)&&!strength(a)).length;
+  const otherCount=thisWeekActs.filter(a=>!runs(a)&&!strength(a)&&!isMobilityAct(a)).length;
 
   const sum=(arr,key)=>arr.reduce((s,a)=>s+(parseFloat(a[key])||0),0);
   const avg2=(arr,key)=>arr.length?sum(arr,key)/arr.length:0;
@@ -1549,25 +2621,66 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const fatDelta=thisWeekNut.length&&lastWeekNut.length?Math.round(avg2(thisWeekNut,'fat')-avg2(lastWeekNut,'fat')):null;
 
   // Body / Weight
+  // Each metric falls through to the most recent row that HAS that field —
+  // HC-sourced rows lack bodyFat/lean/BMI (HC doesn't pass them through),
+  // so taking sortedWeight[0] for everything blanks those fields whenever
+  // HC was the last writer. Also: defensive range-guard on BMI to filter
+  // out garbage values like 5306 from any malformed CSV row.
   const sortedWeight=[...weightData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const latestW2=sortedWeight[0];
   const prevW2=sortedWeight.find(w=>w.date&&new Date(w.date+'T12:00:00')<monday);
-  const currentWeight=latestW2?.weightLbs||null;
-  const currentBodyFat=latestW2?.bodyFatPct||null;
-  const currentLeanMass=latestW2?.skeletalMuscleMassLbs||null;
-  const currentBMI=latestW2?.bmi||null;
+  const findLatest = (key, validator = v => v != null) => {
+    for (const r of sortedWeight) if (validator(r?.[key])) return { value: r[key], row: r };
+    return null;
+  };
+  const findPrev = (key, validator = v => v != null) => {
+    for (const r of sortedWeight) {
+      if (r?.date && new Date(r.date+'T12:00:00') < monday && validator(r?.[key])) return { value: r[key], row: r };
+    }
+    return null;
+  };
+  const isPlausibleBmi = (v) => typeof v === 'number' && v >= 10 && v <= 60;
+  const currentWeight   = findLatest('weightLbs')?.value || null;
+  const currentBodyFat  = findLatest('bodyFatPct', v => typeof v === 'number' && v > 0 && v < 60)?.value || null;
+  const currentLeanMass = findLatest('skeletalMuscleMassLbs', v => typeof v === 'number' && v > 0 && v < 300)?.value || null;
+  const currentBMI      = findLatest('bmi', isPlausibleBmi)?.value || null;
   const latestWeightDate=latestW2?.date?new Date(latestW2.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
   const weightDelta=currentWeight&&prevW2?.weightLbs?parseFloat((currentWeight-prevW2.weightLbs).toFixed(1)):null;
-  const bodyFatDelta=currentBodyFat&&prevW2?.bodyFatPct?parseFloat((currentBodyFat-prevW2.bodyFatPct).toFixed(1)):null;
-  const leanDelta=currentLeanMass&&prevW2?.skeletalMuscleMassLbs?parseFloat((currentLeanMass-prevW2.skeletalMuscleMassLbs).toFixed(1)):null;
-  const bmiDelta=currentBMI&&prevW2?.bmi?parseFloat((currentBMI-prevW2.bmi).toFixed(1)):null;
+  // Deltas use the prior valid row of each field (not just last week's last row),
+  // because if last week's last row was HC-sourced too, prevW2.bodyFatPct is null.
+  const prevBodyFat  = findPrev('bodyFatPct', v => typeof v === 'number' && v > 0 && v < 60)?.value || null;
+  const prevLeanMass = findPrev('skeletalMuscleMassLbs', v => typeof v === 'number' && v > 0 && v < 300)?.value || null;
+  const prevBMI      = findPrev('bmi', isPlausibleBmi)?.value || null;
+  const bodyFatDelta = currentBodyFat && prevBodyFat ? parseFloat((currentBodyFat - prevBodyFat).toFixed(1)) : null;
+  const leanDelta    = currentLeanMass && prevLeanMass ? parseFloat((currentLeanMass - prevLeanMass).toFixed(1)) : null;
+  const bmiDelta     = currentBMI && prevBMI ? parseFloat((currentBMI - prevBMI).toFixed(1)) : null;
 
   // HRV & Sleep
-  const thisWeekHRV=hrvData.filter(h=>inWk(h.date,monday,now));
-  const lastWeekHRV=hrvData.filter(h=>inWk(h.date,lastMonday,lastSunday));
-  const avgHRVv=thisWeekHRV.length?avg2(thisWeekHRV,'overnightHRV'):null;
-  const lastAvgHRV=lastWeekHRV.length?avg2(lastWeekHRV,'overnightHRV'):null;
-  const hrvDelta=avgHRVv&&lastAvgHRV?Math.round(avgHRVv-lastAvgHRV):null;
+  // HRV: merge legacy hrv collection + Worker-tagged sleep rows (overnightHRV).
+  // The legacy collection is empty for users on the Garmin Worker path, so
+  // reading `hrvData` alone produces an empty list and the tile shows "—".
+  // Worker-source wins per date when both exist.
+  const mergeHrvForRange = (rangeStart, rangeEnd) => {
+    const byDate = new Map();
+    for (const h of (hrvData || [])) {
+      if (h?.date && inWk(h.date, rangeStart, rangeEnd)
+          && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
+        byDate.set(h.date, { date: h.date, overnightHRV: Number(h.overnightHRV) });
+      }
+    }
+    for (const s of (sleepData || [])) {
+      if (s?.date && inWk(s.date, rangeStart, rangeEnd)
+          && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
+        byDate.set(s.date, { date: s.date, overnightHRV: Number(s.overnightHRV) });
+      }
+    }
+    return [...byDate.values()];
+  };
+  const thisWeekHRV  = mergeHrvForRange(monday, now);
+  const lastWeekHRV  = mergeHrvForRange(lastMonday, lastSunday);
+  const avgHRVv      = thisWeekHRV.length ? avg2(thisWeekHRV, 'overnightHRV') : null;
+  const lastAvgHRV   = lastWeekHRV.length ? avg2(lastWeekHRV, 'overnightHRV') : null;
+  const hrvDelta     = avgHRVv && lastAvgHRV ? Math.round(avgHRVv - lastAvgHRV) : null;
   const thisWeekSleep=sleepData.filter(s=>inWk(s.date,monday,now));
   const lastWeekSleep=sleepData.filter(s=>inWk(s.date,lastMonday,lastSunday));
   const avgSleepMins=thisWeekSleep.length?Math.round(avg2(thisWeekSleep,'durationMinutes')):null;
@@ -1589,12 +2702,116 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const last30Crono=nutrition.filter(c=>c.date>=td(d30)&&c.calories);
   const avg30Cal=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.calories)||0),0)/last30Crono.length):null;
   const avg30Pro=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.protein)||0),0)/last30Crono.length):null;
+  const avg30Carbs=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.carbs)||0),0)/last30Crono.length):null;
+  const avg30Fat=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.fat)||0),0)/last30Crono.length):null;
+  // 30-day average daily burn for the Nutrition donut: RMR floor + activity calories ÷ 30
+  const last30Acts=activities.filter(a=>a.date>=td(d30));
+  const last30ActKcal=last30Acts.reduce((s,a)=>s+(parseFloat(a.calories)||0),0);
+  const avg30Burned=Math.round(((parseFloat(profile?.dailyCalorieTarget)||1880)+(last30ActKcal/30)));
+  const calT=parseFloat(profile?.dailyCalorieTarget)||2200;
+
+  // ── Training analysis variables (Phase 4l moves from EdgeIQ) ──
+  // Suffixed with Ytd / Trend where Dashboard already has same-name
+  // variables for THIS-WEEK calculations (e.g. avgPaceSecs is this-week
+  // pace at line 2595; mine is YTD average and gets a different name).
+  const ytdStrength=yearActs.filter(isStrengthAct);
+  const yearStartDt=new Date(now.getFullYear(),0,1);
+  const weeksElapsed=Math.max(1,(now-yearStartDt)/(7*86400000));
+  const avgWeeklyMi=yearDist/weeksElapsed;
+  const avgWeeklyHrsRun=(yearRuns2.reduce((s,a)=>s+(a.durationSecs||0),0)/3600)/weeksElapsed;
+  const avgWeeklyHrsStr=(ytdStrength.reduce((s,a)=>s+(a.durationSecs||0),0)/3600)/weeksElapsed;
+  const runPacesYtd=yearRuns2.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
+  const avgPaceSecsYtd=runPacesYtd.length?runPacesYtd.reduce((s,v)=>s+v,0)/runPacesYtd.length:null;
+  const fmtPaceTrend=s=>s?`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`:'—';
+  // goalPaceSecs already exists in Dashboard scope (line 2600) — reuse it
+  const avgHRTrend=yearRuns2.length?Math.round(yearRuns2.reduce((s,a)=>s+(parseFloat(a.avgHR)||0),0)/yearRuns2.filter(a=>a.avgHR).length):null;
+  const longRun=Math.max(...yearRuns2.slice(-12).map(a=>a.distanceMi||0),0);
+  const annualRunTarget=parseFloat(profile?.annualRunDistanceTarget)||800;
+  const annualWorkoutTarget=parseFloat(profile?.annualWorkoutsTarget)||200;
+  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||20;
+  const strTarget=parseFloat(profile?.weeklyStrengthTarget)||2;
+  const aeroPct=yearWorkouts>0?Math.round((yearRuns2.length/yearWorkouts)*100):62;
+  const anaPct=100-aeroPct;
+  // RPE: average of any logged self-reported RPE values from dailyLogs
+  const allLogs=storage.get('dailyLogs')||[];
+  const rpeEntries=allLogs.filter(l=>l?.rpe!=null&&!isNaN(parseFloat(l.rpe)));
+  const avgRPE=rpeEntries.length?(rpeEntries.reduce((s,l)=>s+parseFloat(l.rpe),0)/rpeEntries.length).toFixed(1):null;
+
+  // ── Recovery panel variables (Phase 4l Stage 2.4) ──
+  const d7Trend=new Date(now);d7Trend.setDate(d7Trend.getDate()-7);
+  const d30Trend=new Date(now);d30Trend.setDate(d30Trend.getDate()-30);
+  const recentHRV7=hrvData.filter(h=>h?.date&&new Date(h.date)>=d7Trend&&h.overnightHRV);
+  const recentHRV30=hrvData.filter(h=>h?.date&&new Date(h.date)>=d30Trend&&h.overnightHRV);
+  const recentSleep7=sleepData.filter(s=>s?.date&&new Date(s.date)>=d7Trend);
+  const recentSleep30=sleepData.filter(s=>s?.date&&new Date(s.date)>=d30Trend);
+  const avgHRV7=recentHRV7.length?Math.round(recentHRV7.reduce((s,h)=>s+h.overnightHRV,0)/recentHRV7.length):null;
+  const avgHRV30=recentHRV30.length?Math.round(recentHRV30.reduce((s,h)=>s+h.overnightHRV,0)/recentHRV30.length):null;
+  const recentSleepDur7=recentSleep7.filter(s=>s.durationMinutes);
+  const avgSleepMins7=recentSleepDur7.length?Math.round(recentSleepDur7.reduce((s,sl)=>s+sl.durationMinutes,0)/recentSleepDur7.length):null;
+  const recentSleepDur30=recentSleep30.filter(s=>s.durationMinutes);
+  const avgSleepMins30=recentSleepDur30.length?Math.round(recentSleepDur30.reduce((s,sl)=>s+sl.durationMinutes,0)/recentSleepDur30.length):null;
+  const recentRHR30=recentSleep30.filter(s=>s.restingHR);
+  const avgRHR30=recentRHR30.length?Math.round(recentRHR30.reduce((s,sl)=>s+sl.restingHR,0)/recentRHR30.length):null;
+  const fmtSleep=m=>m?`${Math.floor(m/60)}h ${m%60}m`:'—';
+
+  // ── 30-day Cockpit variables (Phase 4l Stage 2.3 — moved from EdgeIQ) ──
+  // Latest biometrics (today/yesterday only — no stale fallback)
+  const sortedSleepDash=[...sleepData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const sortedHRVDash=[...hrvData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const todayStrTrend=td();
+  const yestStrTrend=(()=>{const d=new Date();d.setDate(d.getDate()-1);return td(d);})();
+  const latestSleepScoreDash=(()=>{
+    const top=sortedSleepDash[0];
+    if(!top) return null;
+    if(top.date!==todayStrTrend && top.date!==yestStrTrend) return null;
+    if(top.sleepScore==null) return null;
+    return Math.min(top.sleepScore,100);
+  })();
+  const latestRHRDash=sortedSleepDash[0]?.restingHR||null;
+  const latestHRVDash=sortedHRVDash[0]?.overnightHRV||sortedHRVDash[0]?.value||null;
+  const avgWeeklyHrsTotal=avgWeeklyHrsRun+avgWeeklyHrsStr;
+  // 8-week stats for sparklines + Annual Trends 8-wk charts
+  // Fields: mi, hrs, sleepScore, rhr, hrv, pace (avg run pace secs), weight (avg)
+  const weeklyStatsTrend=Array.from({length:8},(_,i)=>{
+    const ws=new Date(now);ws.setDate(now.getDate()-(7*(7-i)+now.getDay()));ws.setHours(0,0,0,0);
+    const we=new Date(ws);we.setDate(ws.getDate()+7);
+    const wAll=activities.filter(a=>{const d=new Date(a.date);return d>=ws&&d<we;});
+    const wRuns=wAll.filter(isRunAct);
+    const mi=wRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
+    const hrs=wAll.reduce((s,a)=>s+(a.durationSecs||0),0)/3600;
+    const wSleep=sleepData.filter(s=>{const d=new Date(s.date);return d>=ws&&d<we;});
+    const sScores=wSleep.filter(s=>s.sleepScore).map(s=>s.sleepScore);
+    const sleepScore=sScores.length?Math.round(sScores.reduce((a,b)=>a+b,0)/sScores.length):null;
+    const rhrs=wSleep.filter(s=>s.restingHR).map(s=>s.restingHR);
+    const rhr=rhrs.length?Math.round(rhrs.reduce((a,b)=>a+b,0)/rhrs.length):null;
+    const wHRV=hrvData.filter(h=>{const d=new Date(h.date);return d>=ws&&d<we;});
+    const hrvs=wHRV.filter(h=>h.overnightHRV).map(h=>h.overnightHRV);
+    const hrv=hrvs.length?Math.round(hrvs.reduce((a,b)=>a+b,0)/hrvs.length):null;
+    // Avg pace this week (seconds per mile)
+    const paces=wRuns.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
+    const pace=paces.length?paces.reduce((a,b)=>a+b,0)/paces.length:null;
+    // Avg weight this week
+    const wWeight=weightData.filter(w=>{const d=new Date(w.date);return d>=ws&&d<we;});
+    const wts=wWeight.map(w=>parseFloat(w.weightLbs)).filter(v=>v>0);
+    const weight=wts.length?wts.reduce((a,b)=>a+b,0)/wts.length:null;
+    return {mi,hrs,sleepScore,rhr,hrv,pace,weight};
+  });
+  const weeklyHrsTargetTrend=parseFloat(profile?.weeklyTimeTargetHrs)||5;
+  const maxHrsTrend=Math.max(...weeklyStatsTrend.map(w=>w.hrs),weeklyHrsTargetTrend,1);
+  const validPacesTrend=weeklyStatsTrend.map(w=>w.pace).filter(Boolean);
+  const minPaceTrend=validPacesTrend.length?Math.min(...validPacesTrend):0;
+  const maxPaceTrend=validPacesTrend.length?Math.max(...validPacesTrend):1;
+  const validWeightsTrend=weeklyStatsTrend.map(w=>w.weight).filter(Boolean);
+  const minWtTrend=validWeightsTrend.length?Math.min(...validWeightsTrend):0;
+  const maxWtTrend=validWeightsTrend.length?Math.max(...validWeightsTrend):1;
+  const targetWtTrend=parseFloat(profile?.targetWeight)||175;
+
   const today=td();
   const allRaces=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
   const todayDate=new Date();todayDate.setHours(0,0,0,0);
   const cutoff=new Date(todayDate);cutoff.setDate(todayDate.getDate()+90);
-  const upRaces=allRaces.filter(r=>{if(!r.date)return false;const d=new Date(r.date);return d>=todayDate&&d<=cutoff;}).sort((a,b)=>new Date(a.date)-new Date(b.date));
-  const nextFutureRace=allRaces.filter(r=>r.date&&new Date(r.date)>=todayDate).sort((a,b)=>new Date(a.date)-new Date(b.date))[0];
+  const upRaces=allRaces.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=todayDate&&d<=cutoff;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
+  const nextFutureRace=allRaces.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=todayDate;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date))[0];
 
   // ── ProgBar helper ──
   const ProgBar=({label,actual,target,unit})=>{
@@ -1616,8 +2833,31 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   return(
     <div style={S.sec}>
 
-      {/* ── Section 1: Weekly Cockpit ── */}
-      <div style={{fontSize:13,fontWeight:500,color:C.m,marginBottom:8}}>◈ Week of {weekLabel}</div>
+      {/* ── 30-day Cockpit · TOP of Trend tab (Phase 4l rev) ──
+          7 sparkline tiles. Sets the "trend → trend → trend" flow before
+          the WoW summary cards below. ── */}
+      {(() => {
+        const milesHist     = weeklyStatsTrend.map(w => w.mi || 0);
+        const hoursHist     = weeklyStatsTrend.map(w => w.hrs || 0);
+        const hrvHist       = weeklyStatsTrend.map(w => w.hrv).filter(Boolean);
+        const avgHrHist     = yearRuns2.slice(-8).map(r => r.avgHR || null).filter(Boolean);
+        const rhrHist       = weeklyStatsTrend.map(w => w.rhr).filter(Boolean);
+        const sleepScoreHist= weeklyStatsTrend.map(w => w.sleepScore).filter(Boolean);
+        const proteinHist   = nutrition.slice(0, 8).map(n => n.protein || null).reverse().filter(Boolean);
+        const G = getGoals();
+        return <CockpitRail gauges={[
+          { label: 'Avg miles/wk',  value: Number(avgWeeklyMi.toFixed(1)),         unit: 'mi',    goal: G.weeklyRunDistanceTarget, history: milesHist,     color: '#60a5fa' },
+          { label: 'Avg hours/wk',  value: Number(avgWeeklyHrsTotal.toFixed(1)),   unit: 'hrs',   goal: G.weeklyTimeTargetHrs,     history: hoursHist,     color: '#a78bfa' },
+          { label: 'Avg run HR',    value: avgHRTrend || null,                      unit: 'bpm',   goal: G.targetAvgRunHR, invert: true, history: avgHrHist, color: '#fbbf24' },
+          { label: 'RHR',           value: latestRHRDash || null,                   unit: 'bpm',   goal: G.targetRHR,      invert: true, history: rhrHist,   color: '#f59e0b' },
+          { label: 'HRV',           value: latestHRVDash || null,                   unit: 'ms',    goal: G.targetHRV,                    history: hrvHist,   color: '#34d399' },
+          { label: 'Sleep score',   value: latestSleepScoreDash || null,            unit: '/100',  goal: G.targetSleepScore,             history: sleepScoreHist, color: '#22d3ee' },
+          { label: 'Protein',       value: avg30Pro || null,                        unit: 'g',     goal: G.dailyProteinTarget,           history: proteinHist, color: '#f472b6' },
+        ]}/>;
+      })()}
+
+      {/* ── Week of X — WoW summary cards (3 side-by-side) ── */}
+      <div style={{fontSize:13,fontWeight:500,color:C.m,marginBottom:8,marginTop:12}}>◈ Week of {weekLabel}</div>
       <div className="arnold-dashboard-panels" style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0, 1fr))',gap:'clamp(8px,1vw,12px)',marginBottom:10}}>
 
         {/* ── TRAINING ── */}
@@ -1734,92 +2974,285 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
 
       </div>
 
-      {/* ── Weekly Sync (Sunday CSV drop) — desktop only ── */}
-      {!isDashMobile&&(
-      <div style={{...panelStyle,borderLeft:`3px solid ${C.acc}`}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-          <div>
-            <div style={{fontSize:13,fontWeight:500,color:C.t}}>◈ Weekly Sync</div>
-            <div style={{fontSize:10,color:C.m,marginTop:2}}>Drop your Sunday Garmin + Cronometer exports (Activities, HRV, Sleep, Weight, Cronometer)</div>
-          </div>
-          <label style={{fontSize:11,padding:'6px 12px',borderRadius:6,background:'rgba(167,139,250,0.15)',color:C.acc,border:`0.5px solid ${C.ab2}`,cursor:syncing?'wait':'pointer'}}>
-            {syncing?'Syncing…':'Choose files'}
-            <input type="file" accept=".csv" multiple style={{display:'none'}} disabled={syncing} onChange={e=>handleWeeklySync(Array.from(e.target.files||[]))}/>
-          </label>
-        </div>
-        {Object.keys(syncStatus).length>0&&(
-          <div style={{display:'flex',flexDirection:'column',gap:4,marginTop:8}}>
-            {Object.entries(syncStatus).map(([name,s])=>(
-              <div key={name} style={{fontSize:11,color:s.ok?'#4ade80':'#f87171',display:'flex',justifyContent:'space-between'}}>
-                <span>{s.ok?'✓':'✗'} {name}</span>
-                <span style={{color:C.m}}>{s.ok?`${s.type} · ${s.count} rows`:s.error}</span>
+      {/* Weekly Sync removed (Phase 4k) — auto-sync via Garmin Worker +
+          Cronometer Worker handles this end-to-end. Manual CSV imports
+          still available in Profile → Imports for one-off backfills. */}
+
+      {/* AI Weekly Summary section removed (Phase 4k) — the Cockpit cards
+          + Annual Progress + Principles Score already convey the weekly
+          state at a glance; the streaming AI button added more clutter
+          than insight. The aiInsights collection and Anthropic call path
+          remain available for the Training tab's "Analyze training" CTA. */}
+
+      {/* ── Sections 3-5 rearranged into a 2-column layout (Phase 4k):
+          LEFT  · Annual Progress (full height column)
+          RIGHT · Body & Fitness Baseline (top)
+                · Principles Score (below)
+          All three panels share the same surface background, border,
+          radius, header style, and padding rhythm for consistency. ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))",gap:"clamp(10px,1vw,14px)",alignItems:"start"}}>
+        {/* LEFT: Annual Progress · races inline below the bars */}
+        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px)"}}>
+          <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:14}}>⚑ Annual Progress · {yearStr}</div>
+          <ProgBar label="Annual run distance" actual={Math.round(yearDist)} target={parseFloat(profile.annualRunDistanceTarget)||800} unit="mi"/>
+          <ProgBar label="Annual workouts" actual={yearWorkouts} target={parseFloat(profile.annualWorkoutsTarget)||200} unit="sessions"/>
+          <ProgBar label="Avg weekly distance" actual={Math.round(weeklyAvgDist*10)/10} target={parseFloat(profile.weeklyRunDistanceTarget)||20} unit="mi"/>
+          {avg30Cal!=null&&<ProgBar label="Avg daily calories" actual={avg30Cal} target={parseFloat(profile.dailyCalorieTarget)||2200} unit="kcal"/>}
+          {avg30Pro!=null&&<ProgBar label="Avg daily protein" actual={avg30Pro} target={parseFloat(profile.dailyProteinTarget)||150} unit="g"/>}
+
+          <div style={{height:1,background:C.b,margin:"14px 0 12px"}}/>
+          <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:10}}>⚑ Next Races</div>
+          {upRaces.length>0?upRaces.map((r,i)=>(
+            <div key={i} style={{marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:13,fontWeight:500,color:C.t}}>{r.name||"Race"}</span>
+                {r.source==='garmin-ics'&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:"rgba(74,222,128,0.12)",color:"#4ade80"}}>Garmin</span>}
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-      )}
-
-      {/* ── Section 2: AI Weekly Summary ── */}
-      <button style={{...S.aib,...(aiSummLoad?{opacity:0.7,cursor:"not-allowed"}:{})}} onClick={onAiSum} disabled={aiSummLoad}>
-        <span style={aiSummLoad?{display:"inline-block",animation:"arnoldSpin 1s linear infinite"}:{}}>{aiSummLoad?"◌":"✦"}</span>
-        {aiSummLoad?"Generating Summary…":"Generate AI Weekly Summary"}
-      </button>
-      {(aiSummLoad||aiSummStream)&&(
-        <div style={S.aisp}>
-          <div style={S.aish}>
-            <span style={{color:C.acc,fontSize:"clamp(12px,0.5vw + 10px,14px)"}}>✦</span>
-            <span>ARNOLD · Weekly Summary</span>
-            {aiSummLoad&&<span style={{marginLeft:"auto",color:C.m,fontSize:"clamp(10px,0.3vw + 9px,11px)",letterSpacing:"0.05em"}}>streaming…</span>}
-          </div>
-          {aiSummStream?<div style={S.aist}>{aiSummStream}</div>:<div style={{display:"flex",gap:5,padding:"10px 0",alignItems:"center"}}>{[0,1,2].map(i=><span key={i} style={{width:5,height:5,borderRadius:"50%",background:C.acc,display:"inline-block",opacity:0.4+i*0.3}}/>)}</div>}
+              <div style={{fontSize:11,color:C.m,marginTop:2}}>{new Date(r.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · {daysUntil(r.date)} days away{(r.distanceKm||r.distance_km)?` · ${raceTypeBadge(r.distanceKm||r.distance_km)}`:''}</div>
+              {(r.goalTime||r.goal_time)&&<div style={{fontSize:11,color:C.m}}>Goal: {r.goalTime||r.goal_time}</div>}
+            </div>
+          )):allRaces.length>0?<div style={{fontSize:12,color:C.m}}>No races in the next 90 days{nextFutureRace?<span> · Next: <span style={{color:C.t}}>{nextFutureRace.name}</span></span>:""}<div style={{cursor:"pointer",color:C.ta,marginTop:4}} onClick={()=>setTab("races")}>See all races →</div></div>:<div style={{fontSize:12,color:C.m,cursor:"pointer"}} onClick={()=>setTab("races")}>Sync your Garmin calendar in the Races tab →</div>}
         </div>
-      )}
-      {!aiSummLoad&&!aiSummStream&&data.aiInsights[0]&&<div style={S.ip}><div style={S.ih}>Last Analysis · {data.aiInsights[0].date}</div><div style={S.it2}>{data.aiInsights[0].text.slice(0,220)}…</div></div>}
 
-      {/* ── Section 3: Annual Progress & Upcoming Races ── */}
-      <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px)"}}>
-        <div style={{fontSize:10,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:14}}>⚑ Annual Progress · {yearStr}</div>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:"clamp(10px,1vw,16px)"}}>
-          <div>
-            <ProgBar label="Annual run distance" actual={Math.round(yearDist)} target={parseFloat(profile.annualRunDistanceTarget)||800} unit="mi"/>
-            <ProgBar label="Annual workouts" actual={yearWorkouts} target={parseFloat(profile.annualWorkoutsTarget)||200} unit="sessions"/>
-            <ProgBar label="Avg weekly distance" actual={Math.round(weeklyAvgDist*10)/10} target={parseFloat(profile.weeklyRunDistanceTarget)||20} unit="mi"/>
-            {avg30Cal!=null&&<ProgBar label="Avg daily calories" actual={avg30Cal} target={parseFloat(profile.dailyCalorieTarget)||2200} unit="kcal"/>}
-            {avg30Pro!=null&&<ProgBar label="Avg daily protein" actual={avg30Pro} target={parseFloat(profile.dailyProteinTarget)||150} unit="g"/>}
-          </div>
-          <div>
-            <div style={{fontSize:10,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:10}}>⚑ Next Races</div>
-            {upRaces.length>0?upRaces.map((r,i)=>(
-              <div key={i} style={{marginBottom:12}}>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{fontSize:13,fontWeight:500,color:C.t}}>{r.name||"Race"}</span>
-                  {r.source==='garmin-ics'&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:"rgba(74,222,128,0.12)",color:"#4ade80"}}>Garmin</span>}
+        {/* RIGHT column: Baseline (top) + Principles (bottom) */}
+        <div style={{display:"flex",flexDirection:"column",gap:"clamp(10px,1vw,14px)"}}>
+          {/* Body & Fitness Baseline — same panel surface as Annual Progress for visual rhythm */}
+          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px)",cursor:"pointer"}} onClick={()=>setTab("clinical")}>
+            <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:14}}>◉ Body & Fitness Baseline · Mar 2025</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"clamp(8px,0.6vw,12px)"}}>
+              {[["VO₂ Max","51","#34d399"],["Bio Age","33y","#4ade80"],["Body Fat","24.7%","#fbbf24"],["RMR","1,880","#facc15"]].map(([l,v,c],i)=>(
+                <div key={i} style={{textAlign:"center"}}>
+                  <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:c,lineHeight:1}}>{v}</div>
+                  <div style={{fontSize:10,fontWeight:500,letterSpacing:"0.06em",color:C.m,textTransform:"uppercase",marginTop:6}}>{l}</div>
                 </div>
-                <div style={{fontSize:11,color:C.m}}>{new Date(r.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · {daysUntil(r.date)} days away{(r.distanceKm||r.distance_km)?` · ${raceTypeBadge(r.distanceKm||r.distance_km)}`:''}</div>
-                {(r.goalTime||r.goal_time)&&<div style={{fontSize:11,color:C.m}}>Goal: {r.goalTime||r.goal_time}</div>}
+              ))}
+            </div>
+          </div>
+
+          {/* Principles Score — flows below Baseline in the right column */}
+          <PrinciplesPanel data={data}/>
+        </div>
+      </div>
+
+      {/* ── Annual Trends · Last 8 Weeks (Phase 4l moved from EdgeIQ) ──
+          Three 8-week mini-charts side-by-side: training hours bar,
+          avg pace line, weight line — plus annual goal progress bars. ── */}
+      {(() => {
+        const subHdrA={fontSize:9,fontWeight:500,letterSpacing:'0.07em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
+        const dividerA={height:1,background:'var(--border-default)',margin:'10px 0'};
+        return (
+          <div style={panelStyle}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>◦ Annual Trends · Last 8 Weeks</span>
+              <span style={{fontSize:10,color:'var(--text-muted)'}}>weekly aggregates</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:'clamp(10px,1vw,16px)',marginBottom:14}}>
+              {/* Weekly training hours bar chart */}
+              <div>
+                <div style={subHdrA}>Weekly training hours</div>
+                <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
+                  <line x1="2" y1={68-(weeklyHrsTargetTrend/maxHrsTrend)*60} x2="238" y2={68-(weeklyHrsTargetTrend/maxHrsTrend)*60} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>
+                  {weeklyStatsTrend.map((w,i)=>{
+                    const barW=22;const gap=6;const x=i*(barW+gap)+8;
+                    const h=Math.max(2,(w.hrs/maxHrsTrend)*60);
+                    const y=68-h;
+                    const isThis=i===7;
+                    return(<g key={i}>
+                      <rect x={x} y={y} width={barW} height={h} rx={2} fill={isThis?'#a78bfa':'rgba(167,139,250,0.4)'}/>
+                      <text x={x+barW/2} y={y-3} textAnchor="middle" fontSize="7" fill="var(--text-muted)">{w.hrs.toFixed(1)}</text>
+                    </g>);
+                  })}
+                </svg>
+                <div style={{fontSize:10,color:'#a78bfa',marginTop:4}}>Goal: {weeklyHrsTargetTrend} hrs/week</div>
               </div>
-            )):allRaces.length>0?<div style={{fontSize:12,color:C.m}}>No races in the next 90 days{nextFutureRace?<span> · Next: <span style={{color:C.t}}>{nextFutureRace.name}</span></span>:""}<div style={{cursor:"pointer",color:C.ta,marginTop:4}} onClick={()=>setTab("races")}>See all races →</div></div>:<div style={{fontSize:12,color:C.m,cursor:"pointer"}} onClick={()=>setTab("races")}>Sync your Garmin calendar in the Races tab →</div>}
+              {/* Avg pace line chart */}
+              <div>
+                <div style={subHdrA}>Avg pace</div>
+                <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
+                  {(()=>{
+                    if(validPacesTrend.length<2)return<text x="120" y="40" textAnchor="middle" fontSize="9" fill="var(--text-muted)">Not enough data</text>;
+                    const rng=maxPaceTrend-minPaceTrend||1;
+                    const xS=i=>10+(i/7)*220;
+                    const yS=v=>65-((maxPaceTrend-v)/rng)*55;
+                    const goalY=goalPaceSecs>=minPaceTrend&&goalPaceSecs<=maxPaceTrend?yS(goalPaceSecs):null;
+                    const pts=weeklyStatsTrend.map((w,i)=>w.pace?{x:xS(i),y:yS(w.pace)}:null).filter(Boolean);
+                    const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+                    return<>
+                      {goalY!=null&&<line x1="2" y1={goalY} x2="238" y2={goalY} stroke="#4ade80" strokeWidth="0.5" strokeDasharray="2,2" opacity="0.6"/>}
+                      <path d={path} fill="none" stroke="#4ade80" strokeWidth="1.5"/>
+                      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="2" fill="#4ade80"/>)}
+                    </>;
+                  })()}
+                </svg>
+                <div style={{fontSize:10,color:'#4ade80',marginTop:4}}>Goal: {fmtPaceTrend(goalPaceSecs)} /mi</div>
+              </div>
+              {/* Weight line chart */}
+              <div>
+                <div style={subHdrA}>Weight</div>
+                <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
+                  {(()=>{
+                    if(validWeightsTrend.length<2)return<text x="120" y="40" textAnchor="middle" fontSize="9" fill="var(--text-muted)">Not enough data</text>;
+                    const lo=Math.min(minWtTrend,targetWtTrend);
+                    const hi=Math.max(maxWtTrend,targetWtTrend);
+                    const rng=hi-lo||1;
+                    const xS=i=>10+(i/7)*220;
+                    const yS=v=>65-((v-lo)/rng)*55;
+                    const targetY=yS(targetWtTrend);
+                    const pts=weeklyStatsTrend.map((w,i)=>w.weight?{x:xS(i),y:yS(w.weight)}:null).filter(Boolean);
+                    const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+                    return<>
+                      <line x1="2" y1={targetY} x2="238" y2={targetY} stroke="#fbbf24" strokeWidth="0.5" strokeDasharray="2,2" opacity="0.6"/>
+                      <path d={path} fill="none" stroke="#fbbf24" strokeWidth="1.5"/>
+                      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="2" fill="#fbbf24"/>)}
+                    </>;
+                  })()}
+                </svg>
+                <div style={{fontSize:10,color:'#fbbf24',marginTop:4}}>Target: {targetWtTrend} lbs</div>
+              </div>
+            </div>
+            <div style={dividerA}/>
+            <div style={subHdrA}>Annual Goal Progress</div>
+            <MiniBar label="Avg hours/wk" displayValue={`${avgWeeklyHrsTotal.toFixed(1)} hrs`} goalLabel={`Goal ${weeklyHrsTargetTrend} hrs/wk`} pct={avgWeeklyHrsTotal/weeklyHrsTargetTrend}/>
+            <MiniBar label="Avg pace" displayValue={fmtPaceTrend(avgPaceSecsYtd)} goalLabel={`Goal ${fmtPaceTrend(goalPaceSecs)} /mi`} pct={avgPaceSecsYtd?Math.min(goalPaceSecs/avgPaceSecsYtd,1):0} inverted/>
+            <MiniBar label="Avg daily protein" displayValue={`${avg30Pro||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avg30Pro||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
+            <MiniBar label="Avg daily calories" displayValue={`${avg30Cal||0} kcal`} goalLabel={`Goal ${calT} kcal`} pct={(avg30Cal||0)/calT}/>
+          </div>
+        );
+      })()}
+
+      {/* ── Training analysis (moved from EdgeIQ tab in Phase 4l) ──
+          3 annual dials + Run/Strength MiniBar breakdowns. ── */}
+      {(() => {
+        // Local DualArcDial helper (mirrors TrainingTab's). Aero/Ana split.
+        const DualArcDial=({aero,ana,size=76})=>{
+          const r=size/2-8;
+          const circ=2*Math.PI*r;
+          const arcLength=circ*0.75;
+          const aeroFilled=(aero/100)*arcLength;
+          const anaFilled=(ana/100)*arcLength;
+          return(
+            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
+              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#4ade80" strokeWidth="6"
+                strokeDasharray={`${aeroFilled} ${circ}`}
+                strokeDashoffset={-arcLength*0.167}
+                strokeLinecap="round"
+                transform={`rotate(135 ${size/2} ${size/2})`}/>
+              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#f87171" strokeWidth="6"
+                strokeDasharray={`${anaFilled} ${circ}`}
+                strokeDashoffset={-(arcLength*0.167+aeroFilled)}
+                strokeLinecap="round"
+                transform={`rotate(135 ${size/2} ${size/2})`}/>
+              <text x={size/2} y={size/2-5} textAnchor="middle" fontSize="7.5" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>aero/ana</text>
+              <text x={size/2} y={size/2+7} textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{aero}/{ana}</text>
+              <text x={size/2} y={size/2+17} textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>%</text>
+            </svg>
+          );
+        };
+        const divider={height:1,background:'var(--border-default)',margin:'10px 0'};
+        const subHdr={fontSize:9,fontWeight:500,letterSpacing:'0.08em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
+        return (
+          <div style={{...panelStyle,borderLeft:'3px solid #60a5fa'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Training</span>
+              <span style={{fontSize:10,color:'var(--text-muted)'}}>year to date</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:12}}>
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+                <ArcDialSVG value={yearDist} max={annualRunTarget} color="#60a5fa" label="mi" sublabel={Math.round(yearDist)} size={76}/>
+                <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Annual miles</div>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+                <ArcDialSVG value={yearWorkouts} max={annualWorkoutTarget} color="#a78bfa" label="wks" sublabel={yearWorkouts} size={76}/>
+                <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Workouts</div>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
+                <DualArcDial aero={aeroPct} ana={anaPct} size={76}/>
+                <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Aero/Ana balance</div>
+              </div>
+            </div>
+            <div style={divider}/>
+            <div style={subHdr}>Running</div>
+            <MiniBar label="Avg weekly distance" displayValue={`${avgWeeklyMi.toFixed(1)} mi`} goalLabel={`Goal ${weeklyRunTarget} mi`} pct={avgWeeklyMi/weeklyRunTarget}/>
+            <MiniBar label="Avg weekly hours run" displayValue={`${avgWeeklyHrsRun.toFixed(1)} hrs`} goalLabel="Goal 4 hrs" pct={avgWeeklyHrsRun/4}/>
+            <MiniBar label="Avg pace vs goal" displayValue={fmtPaceTrend(avgPaceSecsYtd)} goalLabel={`Goal ${fmtPaceTrend(goalPaceSecs)} /mi`} pct={avgPaceSecsYtd?Math.min(goalPaceSecs/avgPaceSecsYtd,1):0} inverted/>
+            <MiniBar label="Avg HR runs" displayValue={avgHRTrend?`${avgHRTrend} bpm`:'—'} goalLabel="Aerobic zone" pct={avgHRTrend?Math.max(0,1-Math.abs(avgHRTrend-140)/40):0}/>
+            <MiniBar label="Long run last 30d" displayValue={`${longRun.toFixed(1)} mi`} goalLabel="Goal 10 mi" pct={longRun/10}/>
+            <div style={divider}/>
+            <div style={subHdr}>Strength</div>
+            <MiniBar label="Avg per week" displayValue={`${(ytdStrength.length/weeksElapsed).toFixed(1)} sess`} goalLabel={`Goal ${strTarget}/wk`} pct={(ytdStrength.length/weeksElapsed)/strTarget}/>
+            <MiniBar label="Avg weekly hours strength" displayValue={`${avgWeeklyHrsStr.toFixed(1)} hrs`} goalLabel="Goal 1 hr" pct={avgWeeklyHrsStr/1}/>
+            <MiniBar label="Avg RPE" displayValue={avgRPE||'—'} goalLabel="Self-reported" pct={avgRPE?parseFloat(avgRPE)/10:0}/>
+          </div>
+        );
+      })()}
+
+      {/* ── Nutrition analysis (moved from EdgeIQ tab in Phase 4l) ──
+          30-day rolling average — kcal balance donut + macro MiniBars. */}
+      <div style={{...panelStyle,borderLeft:'3px solid #4ade80'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Nutrition</span>
+          <span style={{fontSize:10,color:'var(--text-muted)'}}>
+            30-day average · {last30Crono.length} day{last30Crono.length === 1 ? '' : 's'} of data
+          </span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
+          <svg width="68" height="68" viewBox="0 0 68 68" style={{flexShrink:0}}>
+            <circle cx="34" cy="34" r="26" fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
+            <circle cx="34" cy="34" r="26" fill="none" stroke="#4ade80" strokeWidth="6"
+              strokeDasharray={`${Math.min((avg30Cal||0)/calT,1)*163} 163`}
+              strokeDashoffset="41" strokeLinecap="round"/>
+            <text x="34" y="32" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>30d avg</text>
+            <text x="34" y="44" textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{avg30Cal||'—'}</text>
+            <text x="34" y="54" textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>kcal</text>
+          </svg>
+          <div style={{flex:1,fontSize:10,color:'var(--text-muted)'}}>
+            <div>Consumed: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avg30Cal?avg30Cal.toLocaleString():'—'}</span></div>
+            <div>Burned: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avg30Burned?avg30Burned.toLocaleString():'—'}</span></div>
+            <div style={{color:avg30Cal&&avg30Cal<avg30Burned?'#4ade80':'#fbbf24',marginTop:2}}>
+              {avg30Cal?`${avg30Cal<avg30Burned?'↓':'↑'} ${Math.abs(avg30Cal-avg30Burned).toLocaleString()} kcal/day`:'—'}
+            </div>
           </div>
         </div>
+        <MiniBar label="Protein" displayValue={`${avg30Pro||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avg30Pro||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
+        <MiniBar label="Carbs" displayValue={`${avg30Carbs||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyCarbTarget)||180}g`} pct={(avg30Carbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
+        <MiniBar label="Fat" displayValue={`${avg30Fat||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyFatTarget)||65}g`} pct={(avg30Fat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
       </div>
 
-      {/* ── Section 4: Body & Fitness Baseline ── */}
-      <div style={{background:"rgba(96,165,250,0.06)",border:"0.5px solid rgba(96,165,250,0.2)",borderRadius:"var(--radius-md)",padding:12,cursor:"pointer"}} onClick={()=>setTab("clinical")}>
-        <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:"#60a5fa",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>◉ Body & Fitness Baseline · Mar 2025</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
-          {[["VO₂ Max","51","#34d399"],["Bio Age","33y","#4ade80"],["Body Fat","24.7%","#fbbf24"],["RMR","1,880","#facc15"]].map(([l,v,c],i)=>(
-            <div key={i} style={{textAlign:"center"}}><div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:c}}>{v}</div><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,textTransform:"uppercase"}}>{l}</div></div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Section 5: Principles Score ── */}
-      <PrinciplesPanel data={data}/>
-
-      {/* ── Section 6: Historical Imports ── */}
-      <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.06em",color:"var(--text-muted)",textTransform:"uppercase",marginTop:14}}>◦ Historical Imports</div>
-      <ImportHub data={data} showToast={showToast}/>
+      {/* ── Recovery / Readiness (Phase 4l Stage 2.4 — moved from EdgeIQ) ──
+          this-week vs 30-day average tiles for HRV, Sleep, RHR. ── */}
+      {(() => {
+        const subHdrR={fontSize:9,fontWeight:500,letterSpacing:'0.07em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
+        const miniTile={background:'var(--bg-elevated)',borderRadius:6,padding:'7px 8px',textAlign:'center'};
+        const miniVal={fontSize:13,fontWeight:500,color:'var(--text-primary)',lineHeight:1.2};
+        const miniLbl={fontSize:9,color:'var(--text-muted)',marginTop:2};
+        return (
+          <div style={{...panelStyle,borderLeft:'3px solid #22d3ee'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Recovery / Readiness</span>
+              <span style={{fontSize:10,color:'var(--text-muted)'}}>this week vs 30-day</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)'}}>
+              <div>
+                <div style={subHdrR}>This Week</div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
+                  <div style={miniTile}><div style={miniVal}>{avgHRV7?`${avgHRV7}ms`:'—'}</div><div style={miniLbl}>HRV</div></div>
+                  <div style={miniTile}><div style={miniVal}>{fmtSleep(avgSleepMins7)}</div><div style={miniLbl}>Sleep{latestSleepScoreDash?` · ${latestSleepScoreDash}`:''}</div></div>
+                  <div style={miniTile}><div style={miniVal}>{latestRHRDash?`${latestRHRDash} bpm`:'—'}</div><div style={miniLbl}>RHR</div></div>
+                </div>
+              </div>
+              <div>
+                <div style={subHdrR}>30-Day Avg</div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
+                  <div style={miniTile}><div style={miniVal}>{avgHRV30?`${avgHRV30}ms`:'—'}</div><div style={miniLbl}>HRV</div></div>
+                  <div style={miniTile}><div style={miniVal}>{fmtSleep(avgSleepMins30)}</div><div style={miniLbl}>Sleep</div></div>
+                  <div style={miniTile}><div style={miniVal}>{avgRHR30?`${avgRHR30} bpm`:'—'}</div><div style={miniLbl}>RHR</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1872,7 +3305,7 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
   const todayActs = useMemo(() => activities.filter(a => a.date === todayStr), [activities, todayStr]);
 
   const runMetrics = useMemo(() => {
-    const runs = todayActs.filter(a => /run/i.test(a.activityType || ''));
+    const runs = todayActs.filter(isRunAct);
     if (!runs.length) return null;
     const best = runs.reduce((b, r) => (r.durationSecs || 0) > (b.durationSecs || 0) ? r : b, runs[0]);
     return computeRTSS({ durationSecs: best.durationSecs, avgPaceRaw: best.avgPaceRaw, avgHR: best.avgHeartRate || best.avgHR, ftpPace });
@@ -2084,6 +3517,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
   const[nutUploadKey,setNutUploadKey]=useState(0);
   const[saveStatus,setSaveStatus]=useState(null);
   const[todayLoaded,setTodayLoaded]=useState(false);
+  // Split-view toggle: false = smart grouping (hard sessions solo, easy runs
+  // aggregate, strength aggregates), true = every activity gets its own card.
+  const[splitView,setSplitView]=useState(false);
   const fitRef=useRef();
   const nutRef=useRef();
   const profile={...(storage.get('profile')||{}),...getGoals()};
@@ -2166,6 +3602,13 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     setFitError(null);
     try{
       const parsed=await parseFITFile(file);
+      // Stamp the source so fit-relay merge can dedup by filename across devices,
+      // and so the local UI can identify "where did this activity come from".
+      if(!parsed.source||typeof parsed.source!=='object'){
+        parsed.source={type:'fit',filename:file.name};
+      }else if(!parsed.source.filename){
+        parsed.source.filename=file.name;
+      }
       // APPEND rather than replace — two FIT uploads on the same day are both kept.
       // Dedup on a composite key so re-uploading the same file doesn't double-count.
       const fitKey=f=>`${f.date||''}|${f.activityType||''}|${f.startTime||f.time||''}|${f.durationSecs||f.durationMins||''}`;
@@ -2175,6 +3618,18 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       });
       setFitFilename(file.name);
       showToast(`✓ FIT parsed — ${parsed.activityType}`);
+      // Phase 4b: push to FIT relay so paired devices can pull this directly,
+      // independent of the encrypted-blob cloud-sync (which has been the failure
+      // point for cross-device FIT propagation). Fire-and-forget — local save
+      // is the source of truth, relay is best-effort transport.
+      try{
+        const pushRes=await pushFitToRelay(parsed.date||td(),file.name,parsed);
+        if(pushRes.ok){
+          console.log(`[fit-relay] pushed ${file.name} (${pushRes.bytes} bytes) for ${parsed.date}`);
+        }else if(pushRes.error!=='not_paired'){
+          console.warn('[fit-relay] push failed (non-fatal):',pushRes.error);
+        }
+      }catch(e){console.warn('[fit-relay] push threw (non-fatal):',e?.message||e);}
     }catch(e){setFitError(`Could not read FIT file: ${e.message}`);}
   };
   const handleTodayNut=async file=>{
@@ -2413,18 +3868,35 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     if(inMemory.length)return inMemory.map(sanitizeFit);
     const acts=getUnifiedActivities().filter(a=>a.date===todayStr);
     return acts.map(row=>{
-      const isRun=/running|trail/i.test(row.activityType||'');
-      const isStrength=/strength|weight/i.test(row.activityType||'');
+      // Prefer the row's own classification flags (set by fitParser /
+      // garmin-activities-client). Fall back to regex against activityType
+      // when flags are missing — historical CSV rows lack these fields.
+      // Regex updated: matches "Run (outdoor)", "Run (treadmill)", "HIIT",
+      // "Trail Run", etc. — the previous /running|trail/ pattern only caught
+      // legacy CSV strings and missed the modern parser's "Run (...)" labels.
+      const isMobility = row.isMobility === true || /mobility|stretch|yoga|pilates|flexibility|breathwork/i.test(row.activityType||'');
+      const isRun = !isMobility && (row.isRun === true || row.isHIIT === true || /\b(run|jog|hiit|interval|tempo|trail|fartlek|sprint|track)\b/i.test(row.activityType||'') || /\b(run|jog|hiit|fartlek|interval|tempo)\b/i.test(row.activityName||''));
+      const isStrength = !isMobility && !isRun && (row.isStrength === true || /strength|weight|gym|hyrox|circuit/i.test(row.activityType||''));
+      const isHIIT = row.isHIIT === true || row.activityType === 'HIIT';
       const mins=row.durationSecs?Math.round(row.durationSecs/60):null;
       return sanitizeFit({
         ...row,
-        isRun,isStrength,
+        isRun,isStrength,isMobility,isHIIT,
         durationMins:mins,
         duration:row.durationFormatted||(mins?`${mins} min`:'—'),
         avgPacePerMi:row.avgPaceRaw,
         avgPowerW:row.avgPower,
         maxPowerW:row.maxPower,
-        aerobicTrainingEffect:row.aerobicTE,
+        // Training Effect aliasing — Garmin FIT parser writes
+        // aerobicTrainingEffect / anaerobicTrainingEffect, while older CSV
+        // imports use aerobicTE / anaerobicTE. Prefer the FIT field, fall
+        // back to CSV. (Phase 4d: previously this line overwrote the FIT
+        // value with the CSV alias, blanking out auto-imported workouts.)
+        aerobicTrainingEffect: row.aerobicTrainingEffect ?? row.aerobicTE,
+        anaerobicTrainingEffect: row.anaerobicTrainingEffect ?? row.anaerobicTE,
+        // Bidirectional aliases so UI code reading either name works.
+        aerobicTE: row.aerobicTrainingEffect ?? row.aerobicTE,
+        anaerobicTE: row.anaerobicTrainingEffect ?? row.anaerobicTE,
         source:'activities-csv',
       });
     });
@@ -2456,15 +3928,34 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
   const safeDisp=(v,field)=>{const n=safeN(v,field);return n==null?'—':n;};
 
   // ─── Group same-type activities & compute cumulative metrics ────────────────
-  // Two strength sessions on the same day collapse into ONE aggregated card;
-  // a run + strength still render as two separate cards because their metric
-  // schemas diverge. Single-session groups pass through unchanged.
+  // Smart grouping for multi-workout days:
+  //   • Hard sessions (HIIT / Fartlek / intervals / tempo / sprint / track)
+  //     render SOLO — their pace splits, HR profile, power, TE are
+  //     individually meaningful and can't be averaged with other runs.
+  //   • Easy / Z2 / recovery / long-slow runs aggregate into one "today's
+  //     easy mileage" card.
+  //   • Strength sessions aggregate by default (cumulative tonnage / sets).
+  //   • Mobility renders solo (each session has its own focus).
+  //   • Cycling / swim render solo.
+  // The user can flip the splitView toggle to render every activity on its
+  // own card regardless of kind.
   const fitGroups=(()=>{
     if(!fitDataList.length)return[];
-    const groupKey=fd=>fd.isRun?'run':fd.isStrength?'strength':(fd.activityType||'other');
+    const groupKey=(fd,i)=>{
+      // Toggle on: every activity is its own card (unique per index)
+      if (splitView) return `solo__${i}`;
+      // Hard sessions and mobility are inherently solo (different focus per session)
+      if (isHardSession(fd) || isMobilityAct(fd)) return `solo__${i}`;
+      // Easy runs aggregate together
+      if (isRunAct(fd)) return 'run-easy';
+      // Strength aggregates
+      if (isStrengthAct(fd)) return 'strength';
+      // Other sports — solo
+      return `solo__${i}`;
+    };
     const buckets=new Map();
     fitDataList.forEach((fd,i)=>{
-      const k=groupKey(fd);
+      const k=groupKey(fd,i);
       if(!buckets.has(k))buckets.set(k,[]);
       buckets.get(k).push({...fd,_origIdx:i});
     });
@@ -2554,7 +4045,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     const monday=new Date();
     monday.setDate(monday.getDate()-(monday.getDay()||7)+1);
     monday.setHours(0,0,0,0);
-    return acts.filter(a=>new Date(a.date)>=monday&&/run/i.test(a.activityType||''))
+    return acts.filter(a=>new Date(a.date)>=monday&&isRunAct(a))
       .reduce((sum,a)=>sum+(a.distanceMi||0),0);
   })();
 
@@ -2576,12 +4067,12 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
   // Daily miles
   const dailyMiles=last7Days.map(d=>{
-    const dayActs=allActs.filter(a=>a.date===d&&/run/i.test(a.activityType||''));
+    const dayActs=allActs.filter(a=>a.date===d&&isRunAct(a));
     return dayActs.reduce((s,a)=>s+(a.distanceMi||0),0);
   });
   // Daily pace (avg of running activities, in seconds)
   const dailyPaceSecs=last7Days.map(d=>{
-    const dayActs=allActs.filter(a=>a.date===d&&/run/i.test(a.activityType||''));
+    const dayActs=allActs.filter(a=>a.date===d&&isRunAct(a));
     const paces=dayActs.map(a=>paceToSecs(a.avgPaceRaw)).filter(Boolean);
     return paces.length?paces.reduce((a,b)=>a+b,0)/paces.length:null;
   });
@@ -2728,12 +4219,13 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
   // Today's Movement — ambient NEAT from Health Connect (populated by
   // syncDailyEnergy). Null when no HC wellness row exists for today yet.
-  // Re-reads when a FIT uploads lands (cheap storage read, low risk).
+  // Reads `hcDailyEnergy` — the dedicated HC-owned collection (separated
+  // from dailyLogs in Phase 4a bug fix to avoid FIT/HC overwrite collisions).
   const todayMovement=(()=>{
     try{
       const today=td();
-      const logs=storage.get('dailyLogs')||[];
-      const entry=logs.find(e=>e&&e.date===today);
+      const rows=storage.get('hcDailyEnergy')||[];
+      const entry=rows.find(r=>r&&r.date===today);
       if(!entry)return null;
       const steps=Number(entry.steps)||0;
       const active=Number(entry.activeCalories)||0;
@@ -2755,13 +4247,41 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       )}
 
       {/* ═══ Two-column cockpit (desktop) / Single-column (mobile views) ═══ */}
+      {mobileView==='nutrition' && (
+        <>
+          <TodaysTargetLine />
+          <PillarCoachingStrip
+            pillars={['nutrition']}
+            fallbackTitle="Fuel on track"
+            fallbackDetail="Intake pacing, macro balance, and protein gap all clear. Keep logging today's meals to keep the calibration tight."
+            accentColor="#fbbf24"
+          />
+        </>
+      )}
+      {mobileView==='activity' && (
+        <PillarCoachingStrip
+          pillars={['run', 'recovery']}
+          fallbackTitle="Training & recovery clean"
+          fallbackDetail="No workout flagged today, but recovery markers (HRV, sleep) look solid. Use a clean day for mobility / Z2 if you have the time."
+          accentColor="#60a5fa"
+        />
+      )}
+
       <div className="arnold-daily-grid" style={{display:'grid',gridTemplateColumns:mobileView?'1fr':'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
 
         {/* ── LEFT: Activity (show in desktop or mobileView=activity) ── */}
         {mobileView!=='nutrition'&&<div>
-          <UploadPill label="Today's Training" sub="Drop .fit or click to browse"
-            accept=".fit,.FIT" onFile={handleTodayFIT} inputRef={fitRef}
-            loaded={!!todayFIT} filename={fitFilename} error={fitError}/>
+          {/* Activity coaching strip — desktop Daily tab only. Garmin Worker
+              auto-sync now handles all FIT imports, so the manual upload pill
+              has been retired (Phase 4j-i). */}
+          {!mobileView && (
+            <PillarCoachingStrip
+              pillars={['run', 'recovery']}
+              fallbackTitle="Training & recovery clean"
+              fallbackDetail="No workout flagged today, but recovery markers (HRV, sleep) look solid. Use a clean day for mobility / Z2 if you have the time."
+              accentColor="#60a5fa"
+            />
+          )}
 
           {!fitData?(
             <div style={panelStyle}>
@@ -2770,14 +4290,30 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
               </div>
             </div>
           ):<>
-            {/* Day summary strip — shown when more than one activity GROUP exists
-                (e.g. a run and a strength). Per-group aggregates are already
-                inside each card, so skip this when there's only one group. */}
-            {fitGroups.length>1&&(
+            {/* Day summary strip — shown when there are 2+ activities. Includes
+                a Split / Merged toggle so the user can flip between smart-grouped
+                cards (hard sessions solo, easy runs / strength aggregated) and
+                one-card-per-activity. */}
+            {fitDataList.length>1&&(
               <div style={{...panelStyle,marginBottom:8}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,gap:10}}>
                   <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>Today · {fitDataList.length} {fitDataList.length===1?'activity':'activities'}</span>
-                  <span style={{fontSize:10,color:'var(--text-muted)'}}>cumulative</span>
+                  <div style={{display:'flex',alignItems:'center',gap:6}}>
+                    <button
+                      onClick={()=>setSplitView(v=>!v)}
+                      style={{
+                        fontSize:9,fontWeight:600,padding:'4px 9px',borderRadius:6,
+                        background:splitView?'rgba(96,165,250,0.15)':'rgba(255,255,255,0.04)',
+                        color:splitView?'#60a5fa':'var(--text-muted)',
+                        border:`0.5px solid ${splitView?'rgba(96,165,250,0.3)':'var(--border-default)'}`,
+                        cursor:'pointer',letterSpacing:'0.04em',textTransform:'uppercase',
+                      }}
+                      title="Toggle between merged (smart grouping) and split (every session as its own card)"
+                    >
+                      {splitView?'⊟ Merge':'⊞ Split'}
+                    </button>
+                    <span style={{fontSize:10,color:'var(--text-muted)'}}>cumulative</span>
+                  </div>
                 </div>
                 <div style={{display:'flex',gap:5}}>
                   {[
@@ -2805,9 +4341,23 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
                 {/* Type badge */}
                 <div style={{display:'flex',gap:5,marginBottom:12,alignItems:'center'}}>
-                  <span style={{fontSize:9,fontWeight:500,padding:'2px 9px',borderRadius:10,background:fd.isRun?'rgba(96,165,250,0.12)':'rgba(167,139,250,0.12)',color:fd.isRun?'#60a5fa':'#a78bfa'}}>
-                    {fd.isRun?'Run':'Strength'} · Garmin FIT{fd._groupCount>1?` · cumulative`:''}
-                  </span>
+                  {(() => {
+                    const label = fd.isHIIT ? 'HIIT'
+                                : fd.isRun ? 'Run'
+                                : fd.isMobility ? 'Mobility'
+                                : fd.isStrength ? 'Strength'
+                                : (fd.activityType || 'Activity');
+                    const color = fd.isHIIT ? '#fbbf24'
+                                : fd.isRun ? '#60a5fa'
+                                : fd.isMobility ? '#22d3ee'
+                                : '#a78bfa';
+                    const bg = `${color}1f`;
+                    return (
+                      <span style={{fontSize:9,fontWeight:500,padding:'2px 9px',borderRadius:10,background:bg,color}}>
+                        {label} · Garmin FIT{fd._groupCount>1?` · cumulative`:''}
+                      </span>
+                    );
+                  })()}
                   <span style={{fontSize:9,color:'var(--text-muted)'}}>{fd.date} · {fd.time}</span>
                 </div>
 
@@ -2919,7 +4469,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                       {label:'body batt',val:fd.bodyBatteryDrain?`-${fd.bodyBatteryDrain}`:'—'},
                       {label:'TSS',val:fd.trainingStressScore?fd.trainingStressScore.toFixed(0):'—'},
                       {label:'aero TE',val:(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'},
-                      {label:'anaero TE',val:fd.anaerobicTE?fd.anaerobicTE.toFixed(1):'—'},
+                      {label:'anaero TE',val:(fd.anaerobicTrainingEffect||fd.anaerobicTE)?(fd.anaerobicTrainingEffect||fd.anaerobicTE).toFixed(1):'—'},
                     ].map(m=>(
                       <div key={m.label} style={miniTile}>
                         <div style={miniVal}>{m.val}</div>
@@ -2937,7 +4487,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   {idx===fitGroups.length-1&&(()=>{
                     const acts=getUnifiedActivities();
                     const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
-                    const wkStrength=acts.filter(a=>/strength|weight/i.test(a.activityType||'')&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                    const wkStrength=acts.filter(a=>isStrengthAct(a)&&a.date&&new Date(a.date+'T12:00:00')>=monday);
                     const wkCount=wkStrength.length;
                     const wkMins=wkStrength.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
                     const target=parseFloat(profile?.weeklyStrengthTarget)||2;
@@ -2996,10 +4546,20 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
         {/* ── RIGHT: Nutrition (show in desktop or mobileView=nutrition) ── */}
         {mobileView!=='activity'&&<div>
-          {/* Cronometer CSV upload — desktop only (not on mobile nutrition tab) */}
-          {!mobileView&&<UploadPill label="Today's nutrition" sub="Drop Cronometer CSV or click"
-            accept=".csv" onFile={handleTodayNut} inputRef={nutRef}
-            loaded={!!todayNutrition} filename={nutFilename} error={nutError}/>}
+          {/* Today's target + nutrition coaching — desktop Daily tab only.
+              Cronometer live worker auto-pulls daily nutrition; the manual
+              CSV upload pill has been retired (Phase 4j-i). */}
+          {!mobileView && (
+            <>
+              <TodaysTargetLine />
+              <PillarCoachingStrip
+                pillars={['nutrition']}
+                fallbackTitle="Fuel on track"
+                fallbackDetail="Intake pacing, macro balance, and protein gap all clear. Keep logging today's meals to keep the calibration tight."
+                accentColor="#fbbf24"
+              />
+            </>
+          )}
 
           {/* ── New NutritionInput panel (all sections: dials, supplements, systems, micros, macros-vs-goal, water, log food) ── */}
           <div>
@@ -3452,7 +5012,7 @@ async function processImport(type,text){
     await await saveGarminActivities(merged);
     storage.set('activities',merged);
     // Also save to legacy garmin store for Training tab compatibility
-    const runRows=rows.filter(r=>/running|trail/i.test(r.activityType||''));
+    const runRows=rows.filter(isRunAct);
     if(runRows.length){
       const legacyRows=runRows.map(r=>({...r,avgPacePerKm:r.avgPaceRaw||null,source:'garmin-csv'}));
       const exLeg=await getGarmin();
@@ -3682,7 +5242,8 @@ function HealthSystemTile({ sys }) {
   const fillTint = status === 'good' ? 'rgba(74,222,128,0.15)'
     : status === 'focus' ? 'rgba(251,191,36,0.15)'
     : 'rgba(248,113,113,0.18)';
-  const icon = SYSTEM_ICONS[id] ? SYSTEM_ICONS[id](color) : null;
+  const pngSrc = SYSTEM_PNGS_DESKTOP[id];
+  const svgIcon = SYSTEM_ICONS[id] ? SYSTEM_ICONS[id](color) : null;
   return (
     <div style={{
       position: 'relative',
@@ -3703,12 +5264,11 @@ function HealthSystemTile({ sys }) {
       }} />
       <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
         <div style={{
-          width: 26, height: 26, margin: '0 auto 5px',
-          borderRadius: 7,
-          background: 'var(--bg-elevated)',
-          border: '0.5px solid var(--border-subtle)',
+          width: 44, height: 44, margin: '0 auto 6px',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>{icon}</div>
+        }}>{pngSrc
+          ? <img src={pngSrc} alt={name} width={44} height={44} style={{ display: 'block' }} />
+          : svgIcon}</div>
         <div style={{
           fontSize: 9, fontWeight: 600, color: 'var(--text-primary)',
           lineHeight: 1.15, marginBottom: 3, minHeight: 22,
@@ -3731,7 +5291,258 @@ function HealthSystemTile({ sys }) {
   );
 }
 
+// ─── Start Tile Picker Section (Goals tab, Phase 4b) ──────────────────────
+// Embeds the picker inline as the last section of the Goals tab. Lets the
+// user pick which 2-4 metrics show in each Start screen category. Saves to
+// storage('startTilePrefs'); cloud-sync propagates to mobile within seconds.
+function StartTilePickerSection({ data }) {
+  // useStorageVersion → tile context rebuilds whenever any storage key changes.
+  // Previously this useMemo had [] deps, so the picker would only see fresh
+  // data after a force-close + reopen — annoying UX after every Cloud Sync.
+  const storageVersion = useStorageVersion();
+  const ctx = useMemo(() => buildTileContext({
+    activities: getUnifiedActivities(),
+    sleepData: cleanSleepForAveraging(storage.get('sleep') || []),
+    hrvData: storage.get('hrv') || [],
+    weightData: storage.get('weight') || [],
+    nutritionLog: storage.get('nutritionLog') || [],
+    cronometer: storage.get('cronometer') || [],
+    dailyLogs: storage.get('dailyLogs') || [],
+    profile: { ...(storage.get('profile') || {}), ...getGoals() },
+    wellness: storage.get('wellness') || [],
+  }), [storageVersion]);
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '0.5px solid var(--border-default)', borderRadius: 'var(--radius-md)', padding: '14px 16px', marginTop: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>◈ Customize Start Screen</div>
+      <StartTilePickerInner ctx={ctx} layout="grid" />
+    </div>
+  );
+}
+
+// ─── Today's energy target line (web EdgeIQ panel) ─────────────────────────
+function TodaysTargetLine() {
+  const dyn = useMemo(() => getDynamicMacroTarget(), []);
+  if (!dyn.dynamicTarget) return null;
+  return (
+    <div style={{
+      padding: '8px 12px', borderRadius: 8,
+      background: 'rgba(155,142,196,0.06)',
+      border: '1px solid rgba(155,142,196,0.15)',
+      marginBottom: 8,
+      display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap',
+    }}>
+      <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        Today's Target
+      </span>
+      <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{dyn.dynamicTarget} kcal</span>
+      {dyn.isTrainingDay && (
+        <span style={{ fontSize: 10, color: '#e0b45e', fontWeight: 600 }}>
+          training day · {dyn.baseline} + {dyn.eatBackKcal} earned
+        </span>
+      )}
+      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+        <strong style={{ color: '#9b8ec4' }}>{dyn.proteinG}g</strong> P ·
+        <strong style={{ color: '#6bcf9a', marginLeft: 4 }}>{dyn.carbsG}g</strong> C ·
+        <strong style={{ color: '#e0b45e', marginLeft: 4 }}>{dyn.fatG}g</strong> F ·
+        <strong style={{ color: '#6fd4e4', marginLeft: 4 }}>{dyn.fiberG}g</strong> fiber
+      </span>
+    </div>
+  );
+}
+
+// ─── Calibration headline (single-row, tap-to-navigate) ───────────────────
+// One-line status summary at the top of the EdgeIQ panel. Tap navigates to
+// the Goals tab where the full Nutrition Calibration Panel lives — that's
+// the canonical home for the deep diagnostic (predicted/actual tiles,
+// path-to-target, RMR/TDEE breakdown, drift causes, body prompts).
+//
+// Today's target line lives on Daily / Fuel where you log food.
+function CalibrationSummaryStrip({ setTab }) {
+  const cal = useMemo(() => {
+    try { return assessCalibration({ weeks: 4 }); } catch { return null; }
+  }, []);
+  if (!cal || cal.status === 'no-data') return null;
+  const statusColor =
+    cal.status === 'aligned'    ? '#4ade80' :
+    cal.status === 'under-loss' ? '#fbbf24' :
+    cal.status === 'over-loss'  ? '#60a5fa' :
+                                  'var(--text-muted)';
+  const statusLabel =
+    cal.status === 'aligned'    ? 'ON PACE' :
+    cal.status === 'under-loss' ? 'BEHIND'  :
+    cal.status === 'over-loss'  ? 'AHEAD'   :
+                                  cal.status.toUpperCase();
+  const tile = (label, value, sub, color) => (
+    <div style={{
+      flex: 1, minWidth: 0, padding: '8px 12px', borderRadius: 8,
+      background: 'rgba(255,255,255,0.025)',
+      borderLeft: `2px solid ${color}`,
+    }}>
+      <div style={{ fontSize: 8, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color, fontFamily: 'var(--font-mono)' }}>{value}</div>
+      {sub && <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>{sub}</div>}
+    </div>
+  );
+  const rec = useMemo(() => { try { return recommendCalorieTarget(); } catch { return null; } }, []);
+
+  // Compact one-line summary
+  const driftStr = `${cal.driftLbs > 0 ? '+' : ''}${cal.driftLbs.toFixed(1)} lb drift`;
+  const etaPart  = rec?.projectedDate ? ` · ETA ${rec.projectedDate}` : '';
+  const goalPart = rec?.userTargetDate
+    ? ` vs goal ${rec.userTargetDate}${rec?.requiredLossRate != null && rec.requiredLossRate > 1.0 ? ' — aggressive' : ''}`
+    : '';
+
+  return (
+    <div
+      onClick={() => setTab?.('goals')}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '10px 12px', borderRadius: 8,
+        background: 'rgba(255,255,255,0.025)',
+        borderLeft: `3px solid ${statusColor}`,
+        cursor: setTab ? 'pointer' : 'default',
+        userSelect: 'none',
+        marginBottom: 10,
+      }}
+      title={setTab ? 'Open full calibration panel in Goals' : ''}
+    >
+      <span style={{ fontSize: 11, fontWeight: 800, color: statusColor, letterSpacing: '0.05em', flexShrink: 0 }}>
+        {statusLabel}
+      </span>
+      <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {driftStr}{etaPart}{goalPart}
+      </span>
+      {setTab && (
+        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+          see Goals →
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── Pillar-filtered coaching strip ───────────────────────────────────────
+// Used by Fuel (nutrition pillar) and Play (run + recovery pillars).
+// Shows up to 3 prompts limited to the requested pillars, plus a contextual
+// "all clear" fallback message when no prompts fire for those pillars.
+function PillarCoachingStrip({ pillars, fallbackTitle, fallbackDetail, accentColor = '#9b8ec4' }) {
+  const wanted = Array.isArray(pillars) ? pillars : [pillars];
+  const prompts = useMemo(() => getPromptsByPillar(wanted, 3), [wanted.join(',')]);
+  const colorFor = sev =>
+    sev === 'critical' ? '#f87171' :
+    sev === 'warning'  ? '#fbbf24' :
+    sev === 'positive' ? '#4ade80' :
+                         '#60a5fa';
+  const iconFor = pillar =>
+    pillar === 'nutrition' ? '🍽' :
+    pillar === 'recovery'  ? '☾' :
+    pillar === 'run'       ? '↗' :
+    pillar === 'body'      ? '◎' : '•';
+
+  const card = {
+    background: 'var(--bg-surface)',
+    border: '0.5px solid var(--border-default)',
+    borderRadius: 'var(--radius-md)',
+    padding: '12px 14px',
+    marginBottom: 10,
+  };
+
+  if (!prompts.length) {
+    return (
+      <div style={card}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: `${accentColor}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 13 }}>✓</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: accentColor, marginBottom: 2 }}>{fallbackTitle}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>{fallbackDetail}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+        ◎ Today's Coaching
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {prompts.map(p => {
+          const c = colorFor(p.severity);
+          return (
+            <div key={p.id} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10,
+              padding: '10px 12px', borderRadius: 8,
+              background: 'rgba(255,255,255,0.025)',
+              borderLeft: `3px solid ${c}`,
+            }}>
+              <div style={{ fontSize: 14, opacity: 0.75, marginTop: 1, minWidth: 14, textAlign: 'center' }}>{iconFor(p.pillar)}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: c, marginBottom: 2 }}>{p.title}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>{p.detail}</div>
+              </div>
+              {p.action?.label && (
+                <div style={{ fontSize: 9, fontWeight: 700, color: c, opacity: 0.85, whiteSpace: 'nowrap', alignSelf: 'center', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {p.action.label}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Coaching prompts strip ────────────────────────────────────────────────
+// (legacy) Generic top-3 strip — kept available for non-EdgeIQ surfaces if
+// needed; not currently rendered.
+function CoachingStrip({ dateStr }) {
+  const prompts = useMemo(() => getTopCoachingPrompts(3), [dateStr]);
+  if (!prompts.length) return <TodaysTargetLine />;
+  const colorFor = sev =>
+    sev === 'critical' ? '#f87171' :
+    sev === 'warning'  ? '#fbbf24' :
+    sev === 'positive' ? '#4ade80' :
+                         '#60a5fa';
+  const iconFor = pillar =>
+    pillar === 'nutrition' ? '🍽' :
+    pillar === 'recovery'  ? '☾' :
+    pillar === 'run'       ? '↗' :
+    pillar === 'body'      ? '◎' : '•';
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:10}}>
+      <TodaysTargetLine />
+      {prompts.map(p => {
+        const c = colorFor(p.severity);
+        return (
+          <div key={p.id} style={{
+            display:'flex',alignItems:'flex-start',gap:10,
+            padding:'8px 10px',borderRadius:8,
+            background:'rgba(255,255,255,0.025)',
+            borderLeft:`3px solid ${c}`,
+          }}>
+            <div style={{fontSize:14,opacity:0.7,marginTop:1,minWidth:14,textAlign:'center'}}>{iconFor(p.pillar)}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:600,color:c,marginBottom:2}}>{p.title}</div>
+              <div style={{fontSize:11,color:'var(--text-muted)',lineHeight:1.35}}>{p.detail}</div>
+            </div>
+            {p.action?.label && (
+              <div style={{fontSize:10,fontWeight:600,color:c,opacity:0.85,whiteSpace:'nowrap',alignSelf:'center'}}>
+                → {p.action.label}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function HealthSystemsGrid({ dateStr }) {
+  // CalibrationSummaryStrip is now rendered separately by the parent so it
+  // can sit at the very top with Cockpit + Focus tiles between it and the
+  // Health Systems grid (Phase 4k web layout pass).
   const report = useMemo(() => getSystemsReport(dateStr), [dateStr]);
   const goodCount = report.filter(s => s.status === 'good').length;
   const focusCount = report.filter(s => s.status === 'focus').length;
@@ -3788,7 +5599,7 @@ function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
     setAiLoading(true);setAiStream2('');
     try{
       // Build a compact training context from the same data the tab already reads.
-      const ytdRunsLocal=activities.filter(a=>a.date&&new Date(a.date)>=new Date(new Date().getFullYear(),0,1)&&/run/i.test(a.activityType||''));
+      const ytdRunsLocal=activities.filter(a=>a.date&&new Date(a.date)>=new Date(new Date().getFullYear(),0,1)&&isRunAct(a));
       const ytdMi=ytdRunsLocal.reduce((s,a)=>s+(a.distanceMi||0),0);
       const last7Sleep=sleepData.slice(0,7).filter(s=>s.durationMinutes);
       const last7HRV=hrvData.slice(0,7).filter(h=>h.overnightHRV);
@@ -3856,7 +5667,7 @@ Structure:
   },[]);
 
   // Empty state — on mobile, show MobileHome even without data (with sync prompt)
-  const nextRaceEmpty=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
+  const nextRaceEmpty=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=now2;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date))[0]||null;}catch{return null;}})();
   if(!activities.length&&!cronometer.length&&!weightData.length){
     if(isMobile){
       return <MobileHome data={data} onOpenTab={setTab} initialView={mobileInitView} />;
@@ -3889,7 +5700,7 @@ Structure:
   const daysInYear=Math.floor((today-yearStart)/86400000)||1;
 
   // YTD activities
-  const ytdActs=activities.filter(a=>a.date&&new Date(a.date)>=yearStart);
+  const ytdActs=activities.filter(a=>{const d=parseLocalDate(a.date);return d&&d>=yearStart;});
   const ytdRuns=ytdActs.filter(a=>a.activityType?.toLowerCase().includes('run'));
   const ytdStrength=ytdActs.filter(a=>{const t=a.activityType?.toLowerCase()||'';return t.includes('strength')||t.includes('training');});
 
@@ -3912,21 +5723,23 @@ Structure:
   const aeroPct=totalSessions>0?Math.round((ytdRuns.length/totalSessions)*100):62;
   const anaPct=100-aeroPct;
 
-  // Weekly stats for charts (last 8 weeks)
+  // Weekly stats for charts (last 8 weeks) — Monday-start weeks. Sunday belongs
+  // to the previous week's Monday, so we offset by 6 instead of getDay()=0.
   const weeklyStats=Array.from({length:8},(_,i)=>{
-    const wStart=new Date(today);wStart.setDate(today.getDate()-(7*(7-i)+today.getDay()));wStart.setHours(0,0,0,0);
+    const dow=today.getDay();const offset=dow===0?6:dow-1;
+    const wStart=new Date(today);wStart.setDate(today.getDate()-(7*(7-i)+offset));wStart.setHours(0,0,0,0);
     const wEnd=new Date(wStart);wEnd.setDate(wStart.getDate()+7);
-    const wRuns=activities.filter(a=>{const d=new Date(a.date);return d>=wStart&&d<wEnd&&a.activityType?.toLowerCase().includes('run');});
-    const wAll=activities.filter(a=>{const d=new Date(a.date);return d>=wStart&&d<wEnd;});
+    const wRuns=activities.filter(a=>{const d=parseLocalDate(a.date);return d&&d>=wStart&&d<wEnd&&a.activityType?.toLowerCase().includes('run');});
+    const wAll=activities.filter(a=>{const d=parseLocalDate(a.date);return d&&d>=wStart&&d<wEnd;});
     const wMi=wRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
     const wHrs=wAll.reduce((s,a)=>s+(a.durationSecs||0),0)/3600;
     const wPaces=wRuns.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
     const wPace=wPaces.length?wPaces.reduce((s,v)=>s+v,0)/wPaces.length:null;
-    const wWeights=weightData.filter(w=>{const d=new Date(w.date);return d>=wStart&&d<wEnd;});
+    const wWeights=weightData.filter(w=>{const d=parseLocalDate(w.date);return d&&d>=wStart&&d<wEnd;});
     const wWt=wWeights.length?wWeights.reduce((s,w)=>s+(w.weightLbs||0),0)/wWeights.length:null;
     // Sleep / HRV / RHR per week — same window, averaged
-    const wSleep=sleepData.filter(s=>{const d=new Date(s.date);return d>=wStart&&d<wEnd;});
-    const wHRV=hrvData.filter(h=>{const d=new Date(h.date);return d>=wStart&&d<wEnd&&h.overnightHRV;});
+    const wSleep=sleepData.filter(s=>{const d=parseLocalDate(s.date);return d&&d>=wStart&&d<wEnd;});
+    const wHRV=hrvData.filter(h=>{const d=parseLocalDate(h.date);return d&&d>=wStart&&d<wEnd&&h.overnightHRV;});
     const wSleepScore=wSleep.filter(s=>s.sleepScore).length?Math.round(wSleep.filter(s=>s.sleepScore).reduce((s,sl)=>s+sl.sleepScore,0)/wSleep.filter(s=>s.sleepScore).length):null;
     const wHRVAvg=wHRV.length?Math.round(wHRV.reduce((s,h)=>s+h.overnightHRV,0)/wHRV.length):null;
     const wRHRArr=wSleep.filter(s=>s.restingHR);
@@ -3969,19 +5782,44 @@ Structure:
   const avgBurned=(avgCalories||0)+341;
   const calT=parseFloat(profile?.dailyCalorieTarget)||2200;
 
-  // 7-day recovery
+  // 7-day recovery — HRV merge same pattern as the upper card.
+  // Worker writes overnightHRV onto sleep rows (Phase 4c); legacy `hrv`
+  // collection holds older / CSV-imported readings. Worker wins per date.
   const sevenDays=new Date();sevenDays.setDate(today.getDate()-7);
-  const recentHRV=hrvData.filter(h=>new Date(h.date)>=sevenDays);
   const recentSleep=sleepData.filter(s=>new Date(s.date)>=sevenDays);
-  const recentHRVValid2=recentHRV.filter(h=>h.overnightHRV);
-  const avgHRV7=recentHRVValid2.length?Math.round(recentHRVValid2.reduce((s,h)=>s+h.overnightHRV,0)/recentHRVValid2.length):null;
+  const _mergedHrv7 = (() => {
+    const byDate = new Map();
+    for (const h of (hrvData || [])) {
+      if (h?.date && new Date(h.date) >= sevenDays && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
+        byDate.set(h.date, Number(h.overnightHRV));
+      }
+    }
+    for (const s of (sleepData || [])) {
+      if (s?.date && new Date(s.date) >= sevenDays && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
+        byDate.set(s.date, Number(s.overnightHRV));
+      }
+    }
+    return [...byDate.values()];
+  })();
+  const avgHRV7 = _mergedHrv7.length ? Math.round(_mergedHrv7.reduce((s, v) => s + v, 0) / _mergedHrv7.length) : null;
   const recentSleepDur2=recentSleep.filter(s=>s.durationMinutes);
   const avgSleepMins7=recentSleepDur2.length?Math.round(recentSleepDur2.reduce((s,sl)=>s+sl.durationMinutes,0)/recentSleepDur2.length):null;
   // sortedSleep uses full cleaned dataset (not just 7-day) — needed for history sparklines and MobileHome
   const sortedSleep=[...sleepData].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const latestRHR=sortedSleep[0]?.restingHR||null;
-  // latestSleepScore = most recent non-null score (not an average — averages inflate when weekly-avg rows exist)
-  const latestSleepScore=(()=>{const s=sortedSleep.find(s=>s.sleepScore!=null);return s?Math.min(s.sleepScore,100):null;})();
+  // latestSleepScore — only if the most-recent row is from today/yesterday
+  // AND has a non-null score. Stale fallback (older nights) was causing
+  // "last night" to display 2-3 night old scores when today's row was
+  // pending Garmin Worker pull.
+  const latestSleepScore=(()=>{
+    const top=sortedSleep[0];
+    if(!top) return null;
+    const today=td();
+    const yest=(()=>{const d=new Date();d.setDate(d.getDate()-1);return td(d);})();
+    if(top.date!==today && top.date!==yest) return null;
+    if(top.sleepScore==null) return null;
+    return Math.min(top.sleepScore,100);
+  })();
   // 7-day average sleep score for Focus tile threshold checks
   const avgSleepScore7=recentSleep.filter(s=>s.sleepScore).length?Math.round(recentSleep.filter(s=>s.sleepScore).reduce((s,sl)=>s+sl.sleepScore,0)/recentSleep.filter(s=>s.sleepScore).length):null;
 
@@ -4135,7 +5973,7 @@ Structure:
   const targetWt=parseFloat(profile?.targetWeight)||175;
 
   // Next race for mobile home
-  const nextRaceMobile=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>r.date&&new Date(r.date)>=now2).sort((a,b)=>new Date(a.date)-new Date(b.date))[0]||null;}catch{return null;}})();
+  const nextRaceMobile=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=now2;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date))[0]||null;}catch{return null;}})();
 
   // On mobile, render MobileHome (Start screen) — TrainingTab runs for tab==='training'
   if(isMobile){
@@ -4157,78 +5995,33 @@ Structure:
         </div>
       </div>
 
-      {/* ═══════ SECTION 1: HEALTH SYSTEMS — holistic status at a glance ═══════ */}
-      <HealthSystemsGrid dateStr={td()} />
+      {/* ═══════ SECTION 1: CALIBRATION COACH LINE (single row, top of page) ═══════ */}
+      <CalibrationSummaryStrip setTab={setTab} />
 
-      {/* ═══════ SECTION 2: COCKPIT — short-term signal gauges ═══════ */}
-      {(()=>{
-        const milesHist=weeklyStats.map(w=>w.mi||0);
-        const hoursHist=weeklyStats.map(w=>w.hrs||0);
-        const hrvHist=weeklyStats.map(w=>w.hrv).filter(Boolean);
-        const avgHrHist=ytdRuns.slice(-8).map(r=>r.avgHR||null).filter(Boolean);
-        const rhrHist=weeklyStats.map(w=>w.rhr).filter(Boolean);
-        const G=getGoals();
-        const sleepScoreHist=weeklyStats.map(w=>w.sleepScore).filter(Boolean);
-        const proteinHist=recentNut.slice(0,8).map(n=>n.protein||null).reverse().filter(Boolean);
-        return <CockpitRail gauges={[
-          {label:'Weekly miles',  value:Number(avgWeeklyMi.toFixed(1)), unit:'mi', goal:G.weeklyRunDistanceTarget, history:milesHist, color:'#60a5fa'},
-          {label:'Weekly hours',  value:Number(avgWeeklyHrsTotal.toFixed(1)), unit:'hrs', goal:G.weeklyTimeTargetHrs, history:hoursHist, color:'#a78bfa'},
-          {label:'Avg run HR',    value:avgHR||null, unit:'bpm', goal:G.targetAvgRunHR, invert:true, history:avgHrHist, color:'#fbbf24'},
-          {label:'RHR',           value:latestRHR||null, unit:'bpm', goal:G.targetRHR, invert:true, history:rhrHist, color:'#f59e0b'},
-          {label:'HRV',           value:hrvHist.slice(-1)[0]||null, unit:'ms', goal:G.targetHRV, history:hrvHist, color:'#34d399'},
-          {label:'Sleep score',   value:latestSleepScore||null, unit:'/100', goal:G.targetSleepScore, history:sleepScoreHist, color:'#22d3ee'},
-          {label:'Protein',       value:avgProtein||null, unit:'g', goal:G.dailyProteinTarget, history:proteinHist, color:'#f472b6'},
-        ]}/>;
-      })()}
+      {/* Cockpit row moved to Trend tab (Phase 4l Stage 2.3). */}
 
       {/* Focus areas */}
       <div className="arnold-focus-tiles" style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(focusItems.length,4)}, minmax(0,1fr))`,gap:8}}>
         {focusItems.slice(0,4).map((f,i)=><FocusCard key={i} {...f}/>)}
       </div>
 
-      {/* ═══════ SECTION 3: TRAINING SIGNALS ═══════ */}
-      <div style={{...panelStyle,borderLeft:'3px solid #60a5fa'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Training</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>year to date</span>
-        </div>
+      {/* ═══════ SECTION 3: HEALTH SYSTEMS — moved below cockpit + focus tiles ═══════ */}
+      <HealthSystemsGrid dateStr={td()} />
 
-        {/* 3 arc dials */}
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:12}}>
-          <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-            <ArcDialSVG value={totalMi} max={annualRunTarget} color="#60a5fa" label="mi" sublabel={Math.round(totalMi)} size={76}/>
-            <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Annual miles</div>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-            <ArcDialSVG value={totalSessions} max={annualWorkoutTarget} color="#a78bfa" label="wks" sublabel={totalSessions} size={76}/>
-            <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Workouts</div>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-            <DualArcDial aero={aeroPct} ana={anaPct} size={76}/>
-            <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Aero/Ana balance</div>
-          </div>
-        </div>
+      {/* ═══════ SECTION 4: DCY BREAKDOWN — calibration math expander ═══════ */}
+      {(() => {
+        let dcyDaily=null;
+        try{ dcyDaily=dcyToday(); } catch(e){ console.warn('dcy() failed:',e); }
+        return <DcyDetails dcyDaily={dcyDaily} />;
+      })()}
 
-        <div style={divider}/>
-        <div style={subHdr}>Running</div>
-        <MiniBar label="Avg weekly distance" displayValue={`${avgWeeklyMi.toFixed(1)} mi`} goalLabel={`Goal ${weeklyRunTarget} mi`} pct={avgWeeklyMi/weeklyRunTarget}/>
-        <MiniBar label="Avg weekly hours run" displayValue={`${avgWeeklyHrsRun.toFixed(1)} hrs`} goalLabel="Goal 4 hrs" pct={avgWeeklyHrsRun/4}/>
-        <MiniBar label="Avg pace vs goal" displayValue={fmtPace(avgPaceSecs)} goalLabel={`Goal ${fmtPace(goalPaceSecs)} /mi`} pct={avgPaceSecs?Math.min(goalPaceSecs/avgPaceSecs,1):0} inverted/>
-        <MiniBar label="Avg HR runs" displayValue={avgHR?`${avgHR} bpm`:'—'} goalLabel="Aerobic zone" pct={avgHR?Math.max(0,1-Math.abs(avgHR-140)/40):0}/>
-        <MiniBar label="Long run last 30d" displayValue={`${longRun.toFixed(1)} mi`} goalLabel="Goal 10 mi" pct={longRun/10}/>
-
-        <div style={divider}/>
-        <div style={subHdr}>Strength</div>
-        <MiniBar label="Avg per week" displayValue={`${(ytdStrength.length/weeksElapsed).toFixed(1)} sess`} goalLabel={`Goal ${strTarget}/wk`} pct={(ytdStrength.length/weeksElapsed)/strTarget}/>
-        <MiniBar label="Avg weekly hours strength" displayValue={`${avgWeeklyHrsStr.toFixed(1)} hrs`} goalLabel="Goal 1 hr" pct={avgWeeklyHrsStr/1}/>
-        <MiniBar label="Avg RPE" displayValue={avgRPE||'—'} goalLabel="Self-reported" pct={avgRPE?parseFloat(avgRPE)/10:0}/>
-      </div>
+      {/* Training + Nutrition panels moved to Trend tab (Phase 4l Stage 2.1+2.2). */}
 
       {/* Race Focus + Observations */}
       {(()=>{
         const races=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
         const nowD=new Date();
-        const upcoming=races.filter(r=>r.date&&new Date(r.date)>=nowD).sort((a,b)=>new Date(a.date)-new Date(b.date));
+        const upcoming=races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=nowD;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
         const nr=upcoming[0];
         const runs30=ytdRuns.filter(a=>new Date(a.date)>=thirtyDays);
         const paces30=runs30.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
@@ -4254,166 +6047,12 @@ Structure:
         </div>
       )}
 
-      {/* ═══════ SECTION 4: NUTRITION SIGNALS ═══════ */}
-      <div style={{...panelStyle,borderLeft:'3px solid #4ade80'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Nutrition</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>7-day average</span>
-        </div>
+      {/* Nutrition section relocated to the right column of the
+          Training+Nutrition row above (Phase 4k web layout pass). */}
 
-        {/* Calorie balance donut */}
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
-          <svg width="68" height="68" viewBox="0 0 68 68" style={{flexShrink:0}}>
-            <circle cx="34" cy="34" r="26" fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
-            <circle cx="34" cy="34" r="26" fill="none" stroke="#4ade80" strokeWidth="6"
-              strokeDasharray={`${Math.min((avgCalories||0)/calT,1)*163} 163`}
-              strokeDashoffset="41" strokeLinecap="round"/>
-            <text x="34" y="32" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>30d avg</text>
-            <text x="34" y="44" textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{avgCalories||'—'}</text>
-            <text x="34" y="54" textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>kcal</text>
-          </svg>
-          <div style={{flex:1,fontSize:10,color:'var(--text-muted)'}}>
-            <div>Consumed: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avgCalories?avgCalories.toLocaleString():'—'}</span></div>
-            <div>Burned: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avgBurned?avgBurned.toLocaleString():'—'}</span></div>
-            <div style={{color:avgCalories&&avgCalories<avgBurned?'#4ade80':'#fbbf24',marginTop:2}}>
-              {avgCalories?`${avgCalories<avgBurned?'↓':'↑'} ${Math.abs(avgCalories-avgBurned).toLocaleString()} kcal/day`:'—'}
-            </div>
-          </div>
-        </div>
-        <MiniBar label="Protein" displayValue={`${avgProtein||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avgProtein||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-        <MiniBar label="Carbs" displayValue={`${avgCarbs||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyCarbTarget)||180}g`} pct={(avgCarbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
-        <MiniBar label="Fat" displayValue={`${avgFat||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyFatTarget)||65}g`} pct={(avgFat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
-      </div>
+      {/* Recovery / Readiness panel moved to Trend tab (Phase 4l Stage 2.4). */}
 
-      {/* ═══════ SECTION 5: RECOVERY / READINESS ═══════ */}
-      <div style={{...panelStyle,borderLeft:'3px solid #22d3ee'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Recovery / Readiness</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>this week vs 30-day</span>
-        </div>
-
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)'}}>
-          {/* This week */}
-          <div>
-            <div style={subHdr}>This Week</div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
-              <div style={miniTile}>
-                <div style={miniVal}>{avgHRV7?`${avgHRV7}ms`:'—'}</div>
-                <div style={miniLbl}>HRV</div>
-              </div>
-              <div style={miniTile}>
-                <div style={miniVal}>{fmtSleep(avgSleepMins7)}</div>
-                <div style={miniLbl}>Sleep{latestSleepScore?` · ${latestSleepScore}`:''}</div>
-              </div>
-              <div style={miniTile}>
-                <div style={miniVal}>{latestRHR?`${latestRHR} bpm`:'—'}</div>
-                <div style={miniLbl}>RHR</div>
-              </div>
-            </div>
-          </div>
-          {/* 30-day average */}
-          <div>
-            <div style={subHdr}>30-Day Avg</div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
-              <div style={miniTile}>
-                <div style={miniVal}>{avgHRV30?`${avgHRV30}ms`:'—'}</div>
-                <div style={miniLbl}>HRV</div>
-              </div>
-              <div style={miniTile}>
-                <div style={miniVal}>{fmtSleep(avgSleepMins30)}</div>
-                <div style={miniLbl}>Sleep</div>
-              </div>
-              <div style={miniTile}>
-                <div style={miniVal}>{avgRHR30?`${avgRHR30} bpm`:'—'}</div>
-                <div style={miniLbl}>RHR</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════ SECTION 6: ANNUAL TRENDS ═══════ */}
-      <div style={panelStyle}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>◦ Annual Trends · Last 8 Weeks</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>weekly aggregates</span>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:'clamp(10px,1vw,16px)',marginBottom:14}}>
-
-          {/* Weekly training hours bar chart */}
-          <div>
-            <div style={subHdr}>Weekly training hours</div>
-            <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
-              <line x1="2" y1={68-(weeklyHrsTarget/maxHrs)*60} x2="238" y2={68-(weeklyHrsTarget/maxHrs)*60} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>
-              {weeklyStats.map((w,i)=>{
-                const barW=22;const gap=6;const x=i*(barW+gap)+8;
-                const h=Math.max(2,(w.hrs/maxHrs)*60);
-                const y=68-h;
-                const isThis=i===7;
-                return(<g key={i}>
-                  <rect x={x} y={y} width={barW} height={h} rx={2} fill={isThis?'#a78bfa':'rgba(167,139,250,0.4)'}/>
-                  <text x={x+barW/2} y={y-3} textAnchor="middle" fontSize="7" fill="var(--text-muted)">{w.hrs.toFixed(1)}</text>
-                </g>);
-              })}
-            </svg>
-            <div style={{fontSize:10,color:'#a78bfa',marginTop:4}}>Goal: {weeklyHrsTarget} hrs/week</div>
-          </div>
-
-          {/* Avg pace line chart */}
-          <div>
-            <div style={subHdr}>Avg pace</div>
-            <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
-              {(()=>{
-                if(validPaces.length<2)return<text x="120" y="40" textAnchor="middle" fontSize="9" fill="var(--text-muted)">Not enough data</text>;
-                const rng=maxPace-minPace||1;
-                const xS=i=>10+(i/7)*220;
-                const yS=v=>65-((maxPace-v)/rng)*55;
-                const goalY=goalPaceSecs>=minPace&&goalPaceSecs<=maxPace?yS(goalPaceSecs):null;
-                const pts=weeklyStats.map((w,i)=>w.pace?{x:xS(i),y:yS(w.pace)}:null).filter(Boolean);
-                const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-                return<>
-                  {goalY!=null&&<line x1="2" y1={goalY} x2="238" y2={goalY} stroke="#4ade80" strokeWidth="0.5" strokeDasharray="2,2" opacity="0.6"/>}
-                  <path d={path} fill="none" stroke="#4ade80" strokeWidth="1.5"/>
-                  {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="2" fill="#4ade80"/>)}
-                </>;
-              })()}
-            </svg>
-            <div style={{fontSize:10,color:'#4ade80',marginTop:4}}>Goal: {fmtPace(goalPaceSecs)} /mi</div>
-          </div>
-
-          {/* Weight line chart */}
-          <div>
-            <div style={subHdr}>Weight</div>
-            <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
-              {(()=>{
-                if(validWeights.length<2)return<text x="120" y="40" textAnchor="middle" fontSize="9" fill="var(--text-muted)">Not enough data</text>;
-                const lo=Math.min(minWt,targetWt);
-                const hi=Math.max(maxWt,targetWt);
-                const rng=hi-lo||1;
-                const xS=i=>10+(i/7)*220;
-                const yS=v=>65-((v-lo)/rng)*55;
-                const targetY=yS(targetWt);
-                const pts=weeklyStats.map((w,i)=>w.weight?{x:xS(i),y:yS(w.weight)}:null).filter(Boolean);
-                const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-                return<>
-                  <line x1="2" y1={targetY} x2="238" y2={targetY} stroke="#fbbf24" strokeWidth="0.5" strokeDasharray="2,2" opacity="0.6"/>
-                  <path d={path} fill="none" stroke="#fbbf24" strokeWidth="1.5"/>
-                  {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="2" fill="#fbbf24"/>)}
-                </>;
-              })()}
-            </svg>
-            <div style={{fontSize:10,color:'#fbbf24',marginTop:4}}>Target: {targetWt} lbs</div>
-          </div>
-
-        </div>
-
-        <div style={divider}/>
-        <div style={subHdr}>Annual Goal Progress</div>
-        <MiniBar label="Weekly training hours" displayValue={`${avgWeeklyHrsTotal.toFixed(1)} hrs`} goalLabel={`Goal ${weeklyHrsTarget} hrs/wk`} pct={avgWeeklyHrsTotal/weeklyHrsTarget}/>
-        <MiniBar label="Avg pace" displayValue={fmtPace(avgPaceSecs)} goalLabel={`Goal ${fmtPace(goalPaceSecs)} /mi`} pct={avgPaceSecs?Math.min(goalPaceSecs/avgPaceSecs,1):0} inverted/>
-        <MiniBar label="Avg daily protein" displayValue={`${avgProtein||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avgProtein||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-        <MiniBar label="Avg daily calories" displayValue={`${avgCalories||0} kcal`} goalLabel={`Goal ${calT} kcal`} pct={(avgCalories||0)/calT}/>
-      </div>
+      {/* Annual Trends moved to Trend tab (Phase 4l Stage 2.5). */}
 
     </div>
   );
@@ -5262,13 +6901,16 @@ const S={
   sec:{display:"flex",flexDirection:"column",gap:"clamp(10px,1vw,16px)"},
   st:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",paddingBottom:8,borderBottom:`0.5px solid ${C.bs}`},
   sc:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)",display:"flex",flexDirection:"column",gap:4},
-  sc2:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)",display:"flex",flexDirection:"column",gap:4},
+  // Border split into individual properties so inline overrides of just
+  // borderColor (used heavily in card grids) don't trigger React 19's
+  // "removing style property during rerender" warning.
+  sc2:{background:C.surf,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.b,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)",display:"flex",flexDirection:"column",gap:4},
   sic:{fontSize:"clamp(14px,1vw + 10px,18px)",color:C.acc,opacity:0.8},
   sv:{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em"},
   sl2:{fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,color:C.t},
   ss:{fontSize:"clamp(10px,0.3vw + 9px,12px)",color:C.m},
   cg:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"clamp(10px,1vw,16px)"},
-  snap:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)",display:"flex",justifyContent:"space-between",alignItems:"flex-start"},
+  snap:{background:C.surf,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.b,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)",display:"flex",justifyContent:"space-between",alignItems:"flex-start"},
   tb:{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-sm)",background:C.surf},
   wb:{background:C.elev,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
   wt2:{fontSize:"clamp(13px,0.8vw + 9px,16px)",fontWeight:500,color:C.t},
@@ -5279,20 +6921,24 @@ const S={
   empty:{textAlign:"center",color:C.m,fontSize:"clamp(12px,0.5vw + 10px,14px)",padding:"32px 16px",border:`0.5px dashed ${C.b}`,borderRadius:"var(--radius-md)"},
   labNav:{display:"flex",gap:6,flexWrap:"wrap"},
   lnb:{background:"transparent",border:`0.5px solid ${C.b}`,color:C.s,padding:"5px 14px",borderRadius:"var(--radius-sm)",cursor:"pointer",fontFamily:"var(--font-ui)",fontSize:11,fontWeight:500,letterSpacing:"0.04em",transition:"all var(--transition)"},
-  lnba:{background:C.ad,borderColor:C.ab2,color:C.ta},
+  // Active state: use the full `border` shorthand instead of borderColor alone.
+  // Mixing shorthand (border) and non-shorthand (borderColor) on the same
+  // element triggers a React 19 warning when toggling between active/inactive
+  // because removing borderColor while a `border` shorthand is set is ambiguous.
+  lnba:{background:C.ad,border:`0.5px solid ${C.ab2}`,color:C.ta},
   lg:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)",display:"flex",flexDirection:"column",gap:10},
   gt:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,color:C.ta,letterSpacing:"0.08em",textTransform:"uppercase"},
   fr:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"clamp(10px,1vw,16px)"},
   field:{display:"flex",flexDirection:"column",gap:5},
   fl:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,letterSpacing:"0.06em",color:C.m,textTransform:"uppercase"},
   inp:{background:C.inp,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-sm)",color:C.t,padding:"10px 14px",fontFamily:"var(--font-ui)",fontSize:"clamp(13px,0.5vw + 10px,15px)",outline:"none",width:"100%",boxSizing:"border-box",transition:`border-color var(--transition),box-shadow var(--transition)`},
-  ta:{background:C.inp,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-sm)",color:C.t,padding:"10px 14px",fontFamily:"var(--font-ui)",fontSize:"clamp(13px,0.5vw + 10px,15px)",resize:"vertical",minHeight:72,outline:"none",width:"100%",boxSizing:"border-box",transition:`border-color var(--transition),box-shadow var(--transition)`},
+  ta:{background:C.inp,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.b,borderRadius:"var(--radius-sm)",color:C.t,padding:"10px 14px",fontFamily:"var(--font-ui)",fontSize:"clamp(13px,0.5vw + 10px,15px)",resize:"vertical",minHeight:72,outline:"none",width:"100%",boxSizing:"border-box",transition:`border-color var(--transition),box-shadow var(--transition)`},
   eb:{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.ta,background:C.ad,padding:"3px 10px",borderRadius:"var(--radius-sm)",alignSelf:"flex-start",border:`0.5px solid ${C.ab2}`},
-  sb:{background:C.ad,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,letterSpacing:"0.03em",cursor:"pointer",color:C.ta,width:"100%",transition:`background var(--transition),border-color var(--transition)`},
+  sb:{background:C.ad,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.ab2,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,letterSpacing:"0.03em",cursor:"pointer",color:C.ta,width:"100%",transition:`background var(--transition),border-color var(--transition)`},
   gb:{background:"transparent",border:`0.5px solid ${C.b}`,color:C.s,borderRadius:"var(--radius-sm)",padding:"9px 16px",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,cursor:"pointer",transition:`all var(--transition)`},
   db:{background:C.dnb,border:`0.5px solid rgba(248,113,113,0.25)`,color:C.dn,padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",borderRadius:"var(--radius-md)",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,cursor:"pointer",width:"100%",transition:`all var(--transition)`},
   scard:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"12px 8px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:6,transition:`border-color var(--transition)`},
-  ic:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
+  ic:{background:C.surf,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.b,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
   uz:{border:`0.5px dashed ${C.b}`,borderRadius:"var(--radius-md)",padding:20,display:"flex",flexDirection:"column",alignItems:"center",gap:6,cursor:"pointer",background:"transparent"},
   is:{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"clamp(12px,1vw,18px)",background:C.ad,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-md)",textAlign:"center"},
   aib:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderLeft:`3px solid ${C.acc}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,letterSpacing:"0.03em",cursor:"pointer",display:"flex",alignItems:"center",gap:8,justifyContent:"center",width:"100%",boxSizing:"border-box",transition:`background var(--transition),border-color var(--transition)`},
