@@ -4,6 +4,7 @@
 // (fetched from Open-Meteo if race is ≤16 days out).
 
 import { useEffect, useState } from "react";
+import { parseLocalDate } from "../core/dateUtils.js";
 
 const WMO = {
   0:  { icon: "☀", label: "Clear",         color: "#fbbf24" },
@@ -36,9 +37,11 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
 
   useEffect(() => {
     if (!race?.location) return;
-    const raceDate = new Date(race.date);
-    const now = new Date();
-    const days = Math.ceil((raceDate - now) / 86400000);
+    const raceDate = parseLocalDate(race.date);
+    if (!raceDate) return;
+    const raceMid = new Date(raceDate); raceMid.setHours(0, 0, 0, 0);
+    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+    const days = Math.round((raceMid - todayMid) / 86400000);
     if (days < 0) { setWeatherState("error"); return; }
     let cancelled = false;
     setWeatherState("loading");
@@ -121,9 +124,12 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
     </div>
   );
 
-  const raceDate = new Date(race.date);
-  const now = new Date();
-  const days = Math.ceil((raceDate - now) / 86400000);
+  const raceDate = parseLocalDate(race.date) || new Date(NaN);
+  // Days-until uses midnight-to-midnight diff. Anything else gives users
+  // off-by-one results depending on what time they're checking.
+  const raceMid = new Date(raceDate); raceMid.setHours(0, 0, 0, 0);
+  const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+  const days = Math.round((raceMid - todayMid) / 86400000);
   const dateLbl = raceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const delta = avgPace30 && goalPaceSecs ? Math.round(avgPace30 - goalPaceSecs) : null;
   const onTrack = delta !== null && delta <= 0;

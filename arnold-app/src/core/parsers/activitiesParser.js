@@ -19,6 +19,41 @@ function parseTime(v) {
   return null;
 }
 
+// Robust Garmin date normalizer.
+// Garmin's "Activities CSV" export uses US format "M/D/YYYY H:MM" — slicing
+// the first 10 chars (the previous behavior) yielded "1/2/2026 1" garbage,
+// which downstream `new Date(...)` parsed inconsistently and threw whole
+// activities into wrong years (e.g., Jan-26 ski sessions ended up dated
+// 2025-12-XX). Other Garmin endpoints emit ISO "YYYY-MM-DD HH:MM:SS";
+// we accept both. Always returns a clean "YYYY-MM-DD" string in local time
+// (no UTC drift) so YTD filters and date comparisons are reliable.
+function normalizeDate(rawDate) {
+  if (!rawDate || typeof rawDate !== 'string') return null;
+  const s = rawDate.trim();
+  // ISO format: starts with YYYY-MM-DD
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  // US format: M/D/YYYY or MM/DD/YYYY (Garmin's CSV export default)
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (us) {
+    const [, mon, day, year] = us;
+    return `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  // Fallback: trust the JS parser, build local ISO
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Pull a HH:MM[:SS] substring out of a raw datetime field. Independent of
+// date format — works on both "1/2/2026 11:05" and "2026-01-02 11:05:00".
+function extractTime(rawDate) {
+  if (!rawDate || typeof rawDate !== 'string') return null;
+  const m = rawDate.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}${m[3] ? ':' + m[3] : ''}`;
+}
+
 function fmtDuration(s) {
   if (s == null) return null;
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
@@ -43,8 +78,9 @@ export function parseActivitiesCSV(text) {
 
     const rawDate = g(row, 'date');
     if (!rawDate || rawDate === '--') continue;
-    const datePart = rawDate.slice(0, 10);
-    const timePart = rawDate.length > 10 ? rawDate.slice(11, 19) : null;
+    const datePart = normalizeDate(rawDate);
+    const timePart = extractTime(rawDate);
+    if (!datePart) continue;  // unparseable date → skip the row
 
     const distMi = num(g(row, 'distance'));
     const distKm = distMi != null ? Math.round(distMi * 1.60934 * 100) / 100 : null;

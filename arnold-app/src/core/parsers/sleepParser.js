@@ -169,22 +169,81 @@ function parseKeyValueSleep(lines) {
   const light = parseDuration(find('light', 'duration')).minutes;
   const awake = parseDuration(find('awake')).minutes;
 
+  // ── Sleep Score (Garmin's proprietary value, 0-100) ─────────────────────
+  // Distinct from the section-header label "Sleep Score 1 Day" (which has
+  // empty value and is filtered out at line 149). find('sleep','score') will
+  // return the value of "Sleep Score" row.
   const score = int(find('sleep', 'score')) ?? int(find('score'));
+
   const rhr = int(find('resting', 'heart')) ?? int(find('resting', 'hr'));
-  const hrv = int(find('hrv'));
-  const bb = int(find('body', 'battery'));
-  const spo2 = num(find('spo'));
-  const resp = num(find('respiration'));
+
+  // ── HRV: split numeric vs qualitative ───────────────────────────────────
+  // Garmin Sleep CSV emits two rows:
+  //   "Avg Overnight HRV, 41 ms"   ← numeric night value (ms)
+  //   "7d Avg HRV, Balanced"        ← qualitative weekly status (string)
+  // Earlier code did int(find('hrv')) which matched the first occurrence
+  // (numeric), stored 41 into a field named "hrvStatus", and silently
+  // dropped the "Balanced" label. Now we split into two distinct fields.
+  const overnightHRV = int(find('avg', 'overnight', 'hrv'));
+  const hrvStatusLabel = (() => {
+    // Try several forms of the qualitative HRV row
+    const candidates = [
+      find('7d', 'hrv'),
+      find('weekly', 'hrv'),
+      find('hrv', 'status'),
+    ];
+    const v = candidates.find(c => c != null);
+    if (!v) return null;
+    // Normalize: strip whitespace, keep only the label string
+    return String(v).trim() || null;
+  })();
+
+  // ── Body Battery Change (overnight delta, NOT the morning score) ────────
+  // The CSV row is literally "Body Battery Change, +49" — a NIGHTLY GAIN
+  // measured by the watch. Earlier code stored this as `bodyBattery` which
+  // implied an absolute morning value; tiles labeled "Body Battery" then
+  // displayed +49 as if it were a 0-100 score. Renamed for clarity.
+  // The actual morning Body Battery score requires Garmin Connect Wellness
+  // sync (Phase 4 Worker integration); HC does not expose it.
+  const bodyBatteryChange = int(find('body', 'battery', 'change'))
+    ?? int(find('body', 'battery'));
+
+  // ── New fields exposed for tile registry use ────────────────────────────
+  // These are present in every Garmin Sleep CSV but were previously dropped
+  // on import. Each is a distinct measurement, not redundant with the
+  // existing fields:
+  //   overnightHR  — average HR while asleep (different from RHR which is
+  //                  the lowest sustained reading)
+  //   pulseOxLow   — minimum SpO2 during the night (apnea / breathing
+  //                  disruption indicator)
+  //   respirationLow — minimum respiratory rate during the night
+  //   overnightStress — Garmin's stress score during sleep (lower = more
+  //                     restorative)
+  //   restlessCount — number of restless moments / micro-arousals
+  const overnightHR    = int(find('avg', 'overnight', 'heart'));
+  const pulseOxLow     = num(find('lowest', 'spo'));
+  const respirationLow = num(find('lowest', 'respiration'));
+  const overnightStress = int(find('stress', 'avg'));
+  const restlessCount  = int(find('restless'));
+
+  const spo2 = num(find('avg', 'spo')) ?? num(find('spo'));
+  const resp = num(find('avg', 'respiration')) ?? num(find('respiration'));
   const quality = find('quality');
 
   return [{
     date,
     sleepScore: score != null ? Math.min(score, 100) : null,
     restingHR: rhr,
-    bodyBattery: bb,
+    overnightHR,
+    bodyBatteryChange,
     pulseOx: spo2,
+    pulseOxLow,
     respiration: resp,
-    hrvStatus: hrv,
+    respirationLow,
+    overnightHRV,
+    hrvStatus: hrvStatusLabel,
+    overnightStress,
+    restlessCount,
     quality: quality || null,
     durationMinutes: dur.minutes,
     durationFormatted: dur.formatted,
@@ -229,13 +288,34 @@ export function parseSleepCSV(text) {
     const lightMin = parseStageMinutes(g(row, 'light sleep'));
     const awakeMin = parseStageMinutes(g(row, 'awake'));
 
+    // Tabular Garmin Sleep CSV — same field-rename treatment as the key-value
+    // path. See parseKeyValueSleep for the rationale on bodyBatteryChange and
+    // the HRV split.
+    const overnightHRVCol = int(g(row, 'avg overnight hrv')) ?? int(g(row, 'overnight hrv'));
+    const hrvStatusCol = (() => {
+      const v = g(row, 'hrv status');
+      if (v == null) return null;
+      const s = String(v).trim();
+      if (!s) return null;
+      // If column literally contains a number (older Garmin exports stored
+      // overnight HRV ms in a column named "HRV Status"), route to numeric
+      // overnightHRV instead of the qualitative slot.
+      if (/^\d+(?:\.\d+)?(?:\s*ms)?$/i.test(s)) return null;
+      return s;
+    })();
     const base = {
       sleepScore: int(g(row, 'score')),
       restingHR: int(g(row, 'resting heart rate')) ?? int(g(row, 'avg resting hr')) ?? int(g(row, 'rhr')) ?? int(g(row, 'resting hr')),
-      bodyBattery: int(g(row, 'body battery')),
-      pulseOx: num(g(row, 'pulse ox')),
-      respiration: num(g(row, 'respiration')),
-      hrvStatus: int(g(row, 'hrv status')),
+      overnightHR: int(g(row, 'avg overnight heart')) ?? int(g(row, 'overnight heart')),
+      bodyBatteryChange: int(g(row, 'body battery change')) ?? int(g(row, 'body battery')),
+      pulseOx: num(g(row, 'avg spo')) ?? num(g(row, 'pulse ox')) ?? num(g(row, 'spo')),
+      pulseOxLow: num(g(row, 'lowest spo')) ?? num(g(row, 'min spo')),
+      respiration: num(g(row, 'avg respiration')) ?? num(g(row, 'respiration')),
+      respirationLow: num(g(row, 'lowest respiration')) ?? num(g(row, 'min respiration')),
+      overnightHRV: overnightHRVCol,
+      hrvStatus: hrvStatusCol,
+      overnightStress: int(g(row, 'stress avg')) ?? int(g(row, 'avg stress')),
+      restlessCount: int(g(row, 'restless')),
       quality: g(row, 'quality') || null,
       durationMinutes: dur.minutes,
       durationFormatted: dur.formatted,

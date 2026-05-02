@@ -39,8 +39,12 @@ const MAGIC = new Uint8Array([65, 82, 78, 79, 76, 68, 0, 1]); // "ARNOLD\x00\x01
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
 const PBKDF2_ITERATIONS = 600_000;
-const DEBOUNCE_MS = 5_000;
-const FOREGROUND_PULL_MS = 5 * 60 * 1000;
+// Push debounce: collapses rapid in-progress edits (slider drags, typing)
+// into a single push. 1s is plenty for that while keeping sync feel instant.
+const DEBOUNCE_MS = 1_000;
+// Foreground pull: how often the phone polls the relay for incoming changes
+// while visible. 90s trades a little battery for snappier cross-device feel.
+const FOREGROUND_PULL_MS = 90 * 1000;
 const PAD_BUCKET_BYTES = 64 * 1024;
 const SNAPSHOT_SCHEMA = 1;
 
@@ -337,10 +341,151 @@ function mergeArrays(local, remote, remoteWrittenAt = 0) {
   return merged;
 }
 
-function applySnapshot(remote) {
+// ── Union merge for append-only medical records ─────────────────────────────
+// Lab snapshots and clinical tests are append-only history: a blood panel
+// dated 2024-06-21 should NEVER be silently erased by a sync round. The
+// generic mergeArrays() above does LWW-with-remote-wins — fine for activity
+// logs and FIT files where deletions need to propagate, catastrophic for
+// medical records.
+//
+// This merge unions by date (and type for clinical tests). For overlapping
+// dates we union the markers/metrics — so if device A has glucose recorded
+// for 2025-12-06 and device B has cholesterol for the same date, the merged
+// snapshot has both.  No data is ever dropped.
+//
+// The cost of this semantic: deletions can't propagate across devices for
+// these collections. Acceptable trade — the user can re-edit on every device
+// they care about, and the alternative (losing real lab history to an
+// empty remote blob) is unacceptable. This was the root cause of the
+// "labs disappear and reappear" cycle on 2026-04-26.
+function unionLabSnapshots(local, remote) {
+  if (!Array.isArray(local))  local = [];
+  if (!Array.isArray(remote)) remote = [];
+  const byDate = new Map();
+  for (const r of remote) { if (r?.date) byDate.set(r.date, { ...r }); }
+  for (const l of local) {
+    if (!l?.date) continue;
+    const existing = byDate.get(l.date);
+    if (!existing) {
+      byDate.set(l.date, { ...l });
+    } else {
+      // Union markers — both panels' values survive
+      byDate.set(l.date, {
+        ...existing,
+        ...l,
+        markers: { ...(existing.markers || {}), ...(l.markers || {}) },
+      });
+    }
+  }
+  return [...byDate.values()].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+function unionClinicalTests(local, remote) {
+  if (!Array.isArray(local))  local = [];
+  if (!Array.isArray(remote)) remote = [];
+  const byKey = new Map();
+  const k = t => `${t?.date || ''}|${t?.type || ''}`;
+  for (const r of remote) { if (r?.date && r?.type) byKey.set(k(r), { ...r }); }
+  for (const l of local) {
+    if (!l?.date || !l?.type) continue;
+    const existing = byKey.get(k(l));
+    if (!existing) {
+      byKey.set(k(l), { ...l });
+    } else {
+      byKey.set(k(l), {
+        ...existing,
+        ...l,
+        metrics: { ...(existing.metrics || {}), ...(l.metrics || {}) },
+      });
+    }
+  }
+  return [...byKey.values()].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+// supplementsLog is an OBJECT keyed by date, with each date holding an
+// object of {stackEntryId: timestamp}. Default LWW would have each device
+// completely replace the other's day record on push — so if you tap "taken"
+// for fish-oil on web and creatine on the phone before either syncs, the
+// later push wipes the earlier one's mark.
+//
+// Union merge handles this: for each date, union both devices' entry sets
+// and pick the LATEST timestamp on conflicts. This means tapping "taken" on
+// either device propagates to the other; the only thing that doesn't
+// propagate is an explicit untoggle (deletion) — same trade-off as labs.
+function unionSupplementsLog(local, remote) {
+  if (!local  || typeof local  !== 'object' || Array.isArray(local))  local  = {};
+  if (!remote || typeof remote !== 'object' || Array.isArray(remote)) remote = {};
+  const merged = {};
+  const allDates = new Set([...Object.keys(local), ...Object.keys(remote)]);
+  for (const date of allDates) {
+    const l = local[date]  || {};
+    const r = remote[date] || {};
+    const day = {};
+    const allEntries = new Set([...Object.keys(l), ...Object.keys(r)]);
+    for (const id of allEntries) {
+      const lt = l[id] || 0;
+      const rt = r[id] || 0;
+      // Latest timestamp wins. If neither device has the entry it isn't here.
+      day[id] = Math.max(lt, rt);
+    }
+    if (Object.keys(day).length > 0) merged[date] = day;
+  }
+  return merged;
+}
+
+// dailyLogs are mostly LWW-safe (sleep/HRV/weight overwrites are fine), BUT
+// dailyLogs[date].fitActivities is append-only — a FIT file uploaded on one
+// device must never be silently dropped because the other device wrote HC
+// data 5 seconds later. This merger is LWW for the per-day record fields
+// AND union-by-id for fitActivities, so every uploaded run survives.
+function mergeDailyLogs(local, remote) {
+  if (!Array.isArray(local))  local = [];
+  if (!Array.isArray(remote)) remote = [];
+  const byDate = new Map();
+  for (const r of remote) { if (r?.date) byDate.set(r.date, { ...r }); }
+  for (const l of local) {
+    if (!l?.date) continue;
+    const remoteEntry = byDate.get(l.date);
+    if (!remoteEntry) {
+      byDate.set(l.date, { ...l });
+      continue;
+    }
+    // Both have an entry for this date — LWW for scalar fields, union for
+    // fitActivities by activity id (or startTime+type fallback).
+    const fitKey = a => a?.id || `${a?.startTime || ''}|${a?.activityType || ''}`;
+    const fitMap = new Map();
+    (remoteEntry.fitActivities || []).forEach(a => { if (a) fitMap.set(fitKey(a), a); });
+    (l.fitActivities || []).forEach(a => {
+      if (!a) return;
+      const k = fitKey(a);
+      if (!fitMap.has(k)) fitMap.set(k, a);
+    });
+    byDate.set(l.date, {
+      ...remoteEntry,
+      fitActivities: [...fitMap.values()],
+    });
+  }
+  return [...byDate.values()].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+// Collections that should be union-merged instead of LWW. Names must match
+// the collection name in storage.js KEYS (not the full key).
+const UNION_MERGERS = {
+  labSnapshots:    unionLabSnapshots,
+  clinicalTests:   unionClinicalTests,
+  dailyLogs:       mergeDailyLogs,
+  supplementsLog:  unionSupplementsLog,  // object-shaped; see merger comment
+};
+
+function applySnapshot(remote, opts = {}) {
   if (!remote || remote.schema !== SNAPSHOT_SCHEMA) {
     throw new Error('unsupported snapshot schema');
   }
+  // Force mode: bypass LWW + array merge entirely. Remote becomes the truth
+  // for every key. Used when local data has drifted and we need to reset
+  // to remote (e.g., bad migration on one device, or a phone whose HC
+  // rewrites bumped local timestamps past a meaningful web push).
+  const force = !!opts.force;
   const localVersions = getVersions();
   const newVersions = { ...localVersions };
   let applied = 0;
@@ -348,13 +493,42 @@ function applySnapshot(remote) {
   setCloudApplying(true);
   try {
     for (const [fullKey, { v: remoteVal, t: remoteT }] of Object.entries(remote.keys || {})) {
-      const localT = localVersions[fullKey] || 0;
-      if (remoteT <= localT) continue; // our copy is newer or equal
       const name = REVERSE_KEYS[fullKey];
       if (!name) continue; // unknown key — ignore
       const localVal = storage.get(name);
-      // LWW: remote wins.  Pass remoteT so mergeArrays can preserve genuinely
-      // new local entries (createdAt > remoteT) while discarding stale ones.
+      const localT = localVersions[fullKey] || 0;
+
+      if (force) {
+        // Direct overwrite — no LWW, no union merge. Whatever's in remote
+        // wins, full stop. This is what the "Force pull" UI button uses.
+        storage.set(name, remoteVal, { skipValidation: true });
+        newVersions[fullKey] = remoteT;
+        applied++;
+        continue;
+      }
+
+      // Union-mergers (labs/clinicalTests/dailyLogs/supplementsLog): always
+      // reconcile so an empty-remote can never erase local entries. Bypass
+      // the LWW gate. Each merger validates its own input shape (array vs
+      // object) — we just delegate.
+      const unionMerge = UNION_MERGERS[name];
+      if (unionMerge && (localVal != null || remoteVal != null)) {
+        const merged = unionMerge(localVal, remoteVal);
+        // Skip the storage.set if nothing changed — avoid pointless writes
+        // and onStorageChange fires that bump versions for no reason.
+        if (JSON.stringify(merged) !== JSON.stringify(localVal)) {
+          storage.set(name, merged, { skipValidation: true });
+          applied++;
+        }
+        // Always advance the version pointer so we don't re-process the same
+        // remote snapshot. Use max(localT, remoteT) — version is just a
+        // bookkeeping number for "we've seen this state".
+        newVersions[fullKey] = Math.max(localT, remoteT);
+        continue;
+      }
+
+      // Default LWW path for everything else
+      if (remoteT <= localT) continue;
       const merged = Array.isArray(remoteVal) ? mergeArrays(localVal, remoteVal, remoteT) : remoteVal;
       storage.set(name, merged, { skipValidation: true });
       newVersions[fullKey] = remoteT;
@@ -405,14 +579,18 @@ async function pushNow() {
   }
 }
 
-async function pullNow() {
+async function pullNow(opts = {}) {
   const cfg = getPairingConfig();
   if (!cfg.paired) return { skipped: 'not_paired' };
   if (!hasPassphrase()) return { skipped: 'no_passphrase' };
 
-  emit('pull:start', {});
+  const force = !!opts.force;
+  emit('pull:start', force ? { force: true } : {});
   try {
-    const lastEtag = localStorage.getItem(CFG_LAST_REMOTE_ETAG) || '';
+    // For force pulls, deliberately skip the If-None-Match header so the
+    // server always returns the body — we want to overwrite local even when
+    // ETag suggests "no change since last pull".
+    const lastEtag = force ? '' : (localStorage.getItem(CFG_LAST_REMOTE_ETAG) || '');
     const res = await fetch(`${cfg.endpoint}/s/${cfg.pairId}`, {
       method: 'GET',
       headers: {
@@ -437,11 +615,11 @@ async function pullNow() {
     if (!passphrase) throw new Error('passphrase not set');
     const { json } = await decryptBlob(buf, passphrase);
     const snapshot = JSON.parse(json);
-    const applied = applySnapshot(snapshot);
+    const applied = applySnapshot(snapshot, { force });
     localStorage.setItem(CFG_LAST_REMOTE_ETAG, updatedAt);
     localStorage.setItem(CFG_LAST_PULL, String(now()));
-    emit('pull:ok', { applied, bytes: buf.byteLength, updatedAt });
-    return { ok: true, applied, bytes: buf.byteLength };
+    emit('pull:ok', { applied, bytes: buf.byteLength, updatedAt, force });
+    return { ok: true, applied, bytes: buf.byteLength, force };
   } catch (err) {
     const msg = (err && (err.message || err.name || String(err))) || 'unknown';
     console.error('[cloud-sync] pull failed:', err);
@@ -452,6 +630,9 @@ async function pullNow() {
 
 export async function push() { return _inFlight ? _inFlight : (_inFlight = pushNow().finally(() => _inFlight = null)); }
 export async function pull() { return pullNow(); }
+// Force pull — bypasses LWW, overwrites local entirely with remote.
+// Use when devices have drifted and you want to reset one to match remote.
+export async function forcePull() { return pullNow({ force: true }); }
 
 // ── Debounced push on local writes ──────────────────────────────────────────
 

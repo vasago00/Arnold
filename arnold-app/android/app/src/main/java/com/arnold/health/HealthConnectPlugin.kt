@@ -9,14 +9,11 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.*
-import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import kotlinx.coroutines.*
 import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.Period
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -43,19 +40,19 @@ class HealthConnectPlugin : Plugin() {
         call.resolve(result)
     }
 
+    // Arnold is a one-way READER of Health Connect. This set MUST stay in sync
+    // with the <uses-permission> entries in AndroidManifest.xml — anything in
+    // here that the manifest doesn't declare can never be granted, which makes
+    // requestPermissions() permanently return granted=false and silently breaks
+    // every periodic sync. Removed in this pass: ExerciseSession (FIT uploads
+    // are authoritative for activities), Nutrition (Cronometer is authoritative),
+    // Hydration (no consumer), Distance (derived from Steps).
     private val allPermissions = setOf(
-        HealthPermission.getReadPermission(ExerciseSessionRecord::class),
         HealthPermission.getReadPermission(SleepSessionRecord::class),
         HealthPermission.getReadPermission(WeightRecord::class),
         HealthPermission.getReadPermission(HeartRateRecord::class),
-        HealthPermission.getReadPermission(NutritionRecord::class),
-        HealthPermission.getReadPermission(HydrationRecord::class),
-        HealthPermission.getWritePermission(NutritionRecord::class),
-        HealthPermission.getWritePermission(HydrationRecord::class),
-        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(DistanceRecord::class),
-        // Phase 4a: daily-wellness Tier 1 inputs for tdee()
         HealthPermission.getReadPermission(StepsRecord::class),
+        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
         HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
     )
 
@@ -284,66 +281,31 @@ class HealthConnectPlugin : Plugin() {
         }
     }
 
+    // Phase 4a bug fix — write methods disabled. Arnold is a one-way reader.
+    // The WRITE permissions were also removed from AndroidManifest.xml, so
+    // even if these were ever called, the OS would reject the insert.
+    // Kept as inert stubs so the JS bridge's existing call signatures don't
+    // break if some legacy caller still references them.
+
     @PluginMethod
     fun writeNutrition(call: PluginCall) {
-        val client = healthConnectClient ?: run { call.reject("Health Connect not available"); return }
-        val recordObj = call.getObject("record") ?: run { call.reject("record required"); return }
-        scope.launch {
-            try {
-                val startTime = Instant.parse(recordObj.getString("startTime"))
-                val endTime = Instant.parse(recordObj.getString("endTime"))
-                val zoneOffset = ZoneId.systemDefault().rules.getOffset(startTime)
-                val record = NutritionRecord(
-                    startTime = startTime, startZoneOffset = zoneOffset,
-                    endTime = endTime, endZoneOffset = zoneOffset,
-                    name = recordObj.optString("name", ""),
-                    mealType = recordObj.optInt("mealType", 0),
-                    energy = if (recordObj.has("calories")) androidx.health.connect.client.units.Energy.kilocalories(recordObj.getDouble("calories")) else null,
-                    protein = if (recordObj.has("protein")) androidx.health.connect.client.units.Mass.grams(recordObj.getDouble("protein")) else null,
-                    totalCarbohydrate = if (recordObj.has("carbs")) androidx.health.connect.client.units.Mass.grams(recordObj.getDouble("carbs")) else null,
-                    totalFat = if (recordObj.has("fat")) androidx.health.connect.client.units.Mass.grams(recordObj.getDouble("fat")) else null,
-                )
-                val insertResult = client.insertRecords(listOf(record))
-                val resp = JSObject()
-                resp.put("success", true)
-                if (insertResult.recordIdsList.isNotEmpty()) resp.put("id", insertResult.recordIdsList[0])
-                call.resolve(resp)
-            } catch (e: Exception) { call.reject("Failed to write nutrition: ${e.message}") }
-        }
+        call.reject("Disabled: Arnold is a one-way reader of Health Connect. Cronometer owns nutrition writes.")
     }
 
     @PluginMethod
     fun writeHydration(call: PluginCall) {
-        val client = healthConnectClient ?: run { call.reject("Health Connect not available"); return }
-        val recordObj = call.getObject("record") ?: run { call.reject("record required"); return }
-        scope.launch {
-            try {
-                val startTime = Instant.parse(recordObj.getString("startTime"))
-                val endTime = Instant.parse(recordObj.getString("endTime"))
-                val zoneOffset = ZoneId.systemDefault().rules.getOffset(startTime)
-                val record = HydrationRecord(
-                    startTime = startTime, startZoneOffset = zoneOffset,
-                    endTime = endTime, endZoneOffset = zoneOffset,
-                    volume = androidx.health.connect.client.units.Volume.milliliters(recordObj.getDouble("volumeMl")),
-                )
-                client.insertRecords(listOf(record))
-                call.resolve(JSObject().apply { put("success", true) })
-            } catch (e: Exception) { call.reject("Failed to write hydration: ${e.message}") }
-        }
+        call.reject("Disabled: Arnold is a one-way reader of Health Connect. Cronometer owns hydration writes.")
     }
 
-    // ─── Phase 4a: Daily-wellness aggregate readers ─────────────────────────
-    // These three methods back TDEE Tier 1: they return one row per calendar
-    // day in the user's local timezone, so downstream JS can upsert into
-    // dailyLogs without any timezone math. We use aggregateGroupByPeriod
-    // with Period.ofDays(1) rather than summing raw samples — HC does the
-    // rollup server-side and handles overlapping records correctly (e.g.,
-    // Garmin + Samsung Health writing to the same day).
+    // ─── Phase 4a: Daily-wellness readers ───────────────────────────────────
+    // These three return one row per calendar day in the user's local
+    // timezone. We READ raw records and aggregate in Kotlin — the
+    // aggregateGroupByPeriod API silently returned empty in alpha10 even
+    // when records existed in HC, so readRecords + manual sum is the
+    // version-safe path (matches the pattern of readExerciseSessions).
 
-    private fun dayRangeLocal(startDate: String, endDate: String): Pair<LocalDateTime, LocalDateTime> {
-        val start = LocalDate.parse(startDate, DateTimeFormatter.ISO_LOCAL_DATE).atStartOfDay()
-        val end   = LocalDate.parse(endDate,   DateTimeFormatter.ISO_LOCAL_DATE).plusDays(1).atStartOfDay()
-        return Pair(start, end)
+    private fun localDateOf(instant: Instant): String {
+        return instant.atZone(ZoneId.systemDefault()).toLocalDate().toString()
     }
 
     @PluginMethod
@@ -353,20 +315,21 @@ class HealthConnectPlugin : Plugin() {
         val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
         scope.launch {
             try {
-                val (start, end) = dayRangeLocal(startDate, endDate)
-                val buckets = client.aggregateGroupByPeriod(
-                    AggregateGroupByPeriodRequest(
-                        metrics = setOf(StepsRecord.COUNT_TOTAL),
-                        timeRangeFilter = TimeRangeFilter.between(start, end),
-                        timeRangeSlicer = Period.ofDays(1),
-                    )
+                val start = parseDate(startDate)
+                val end   = parseDateEnd(endDate)
+                val response = client.readRecords(
+                    ReadRecordsRequest(StepsRecord::class, TimeRangeFilter.between(start, end))
                 )
+                val byDate = mutableMapOf<String, Long>()
+                for (record in response.records) {
+                    val date = localDateOf(record.startTime)
+                    byDate[date] = (byDate[date] ?: 0L) + record.count
+                }
                 val records = JSArray()
-                for (bucket in buckets) {
-                    val steps = bucket.result[StepsRecord.COUNT_TOTAL] ?: 0L
-                    if (steps <= 0L) continue // skip empty days
+                for ((date, steps) in byDate.toSortedMap().toList().asReversed()) {
+                    if (steps <= 0L) continue
                     val obj = JSObject()
-                    obj.put("date", bucket.startTime.toLocalDate().toString())
+                    obj.put("date", date)
                     obj.put("steps", steps)
                     records.put(obj)
                 }
@@ -382,21 +345,21 @@ class HealthConnectPlugin : Plugin() {
         val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
         scope.launch {
             try {
-                val (start, end) = dayRangeLocal(startDate, endDate)
-                val buckets = client.aggregateGroupByPeriod(
-                    AggregateGroupByPeriodRequest(
-                        metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
-                        timeRangeFilter = TimeRangeFilter.between(start, end),
-                        timeRangeSlicer = Period.ofDays(1),
-                    )
+                val start = parseDate(startDate)
+                val end   = parseDateEnd(endDate)
+                val response = client.readRecords(
+                    ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, TimeRangeFilter.between(start, end))
                 )
+                val byDate = mutableMapOf<String, Double>()
+                for (record in response.records) {
+                    val date = localDateOf(record.startTime)
+                    byDate[date] = (byDate[date] ?: 0.0) + record.energy.inKilocalories
+                }
                 val records = JSArray()
-                for (bucket in buckets) {
-                    val energy = bucket.result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]
-                    val kcal = energy?.inKilocalories ?: 0.0
+                for ((date, kcal) in byDate.toSortedMap().toList().asReversed()) {
                     if (kcal <= 0.0) continue
                     val obj = JSObject()
-                    obj.put("date", bucket.startTime.toLocalDate().toString())
+                    obj.put("date", date)
                     obj.put("kcal", kcal)
                     records.put(obj)
                 }
@@ -412,21 +375,21 @@ class HealthConnectPlugin : Plugin() {
         val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
         scope.launch {
             try {
-                val (start, end) = dayRangeLocal(startDate, endDate)
-                val buckets = client.aggregateGroupByPeriod(
-                    AggregateGroupByPeriodRequest(
-                        metrics = setOf(TotalCaloriesBurnedRecord.ENERGY_TOTAL),
-                        timeRangeFilter = TimeRangeFilter.between(start, end),
-                        timeRangeSlicer = Period.ofDays(1),
-                    )
+                val start = parseDate(startDate)
+                val end   = parseDateEnd(endDate)
+                val response = client.readRecords(
+                    ReadRecordsRequest(TotalCaloriesBurnedRecord::class, TimeRangeFilter.between(start, end))
                 )
+                val byDate = mutableMapOf<String, Double>()
+                for (record in response.records) {
+                    val date = localDateOf(record.startTime)
+                    byDate[date] = (byDate[date] ?: 0.0) + record.energy.inKilocalories
+                }
                 val records = JSArray()
-                for (bucket in buckets) {
-                    val energy = bucket.result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]
-                    val kcal = energy?.inKilocalories ?: 0.0
+                for ((date, kcal) in byDate.toSortedMap().toList().asReversed()) {
                     if (kcal <= 0.0) continue
                     val obj = JSObject()
-                    obj.put("date", bucket.startTime.toLocalDate().toString())
+                    obj.put("date", date)
                     obj.put("kcal", kcal)
                     records.put(obj)
                 }

@@ -45,10 +45,29 @@ function getNativePlugin() {
 const nativeBridge = {
   /**
    * Request Health Connect permissions for the specified data types.
-   * @param {string[]} dataTypes - e.g. ['ExerciseSession','SleepSession','Weight','HeartRate','Nutrition']
+   *
+   * Defaults match the streams hc-sync.syncAll() actually consumes:
+   *   - SleepSession, Weight, HeartRate (used by syncSleep/Weight/HeartRate)
+   *   - Steps, ActiveCaloriesBurned, TotalCaloriesBurned (used by syncDailyEnergy)
+   *
+   * Explicitly excluded:
+   *   - ExerciseSession — disabled in syncAll(); FIT uploads via Cloud Sync are
+   *     the authoritative source for activities (see hc-sync.js policy header).
+   *   - Nutrition       — disabled; Cronometer live pull is authoritative.
+   *   - Hydration       — no consumer in the app right now.
+   *   - Distance        — derived from Steps + stride; no direct consumer.
+   *
+   * @param {string[]} dataTypes
    * @returns {Promise<{granted: boolean, denied: string[]}>}
    */
-  async requestPermissions(dataTypes = ['ExerciseSession', 'SleepSession', 'Weight', 'HeartRate', 'Nutrition', 'Hydration']) {
+  async requestPermissions(dataTypes = [
+    'SleepSession',
+    'Weight',
+    'HeartRate',
+    'Steps',
+    'ActiveCaloriesBurned',
+    'TotalCaloriesBurned',
+  ]) {
     const plugin = getNativePlugin();
     if (!plugin) return { granted: false, denied: dataTypes };
     return plugin.requestPermissions({ dataTypes });

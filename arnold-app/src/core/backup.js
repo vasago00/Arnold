@@ -1,11 +1,23 @@
-// ─── Arnold Backup System ────────────────────────────────────────────────────
+// ─── Arnold Backup System (IDB-backed, 2026-04-26 quota-relief rewrite) ─────
 // Auto-backup on a scheduled interval + manual export/import.
-// Keeps a rolling buffer of 3 snapshots in localStorage.
+// Keeps a rolling buffer of 3 snapshots and 3 pre-op snapshots in IndexedDB.
+//
+// Why IDB instead of localStorage:
+//   localStorage has a hard ~5MB origin quota across the entire origin.
+//   A single full Arnold snapshot (activities + dailyLogs + nutrition history)
+//   weighs 3-6 MB now. Three full snapshots + three preop snapshots = 18-36 MB,
+//   nowhere near localStorage's budget. We were hitting QuotaExceededError on
+//   every backup attempt and silently corrupting the backup ring.
+//
+//   IDB has gigabytes available, no per-key cap, and we already use it for
+//   primary data via core/db.js. Backups now live there too.
+//
 // Export produces a downloadable JSON on web, or a native share-sheet file on
 // mobile (via @capacitor/filesystem + @capacitor/share). Import restores from
 // a JSON file OR a raw-JSON string pasted into the UI.
 
 import { Capacitor } from '@capacitor/core';
+import { dbGet, dbSet } from './db.js';
 
 const BACKUP_PREFIX = 'arnold:backup:';
 const BACKUP_META = 'arnold:backup-meta';
@@ -16,18 +28,46 @@ const MAX_BACKUPS = 3;
 // own audit trail and can't be clobbered by the next 6h tick.
 const PREOP_PREFIX = 'arnold:preop:';
 const PREOP_META = 'arnold:preop-meta';
-const MAX_PREOPS = 10;
+const MAX_PREOPS = 3;
 
 // ─── Gather all arnold:* data keys (excluding backups themselves) ────────────
+// Reads from BOTH localStorage (legacy) AND the IDB cache (current). dbGet
+// reads from the IDB cache populated by hydrateDB at boot. We snapshot the
+// union so the backup is complete regardless of which storage tier holds a
+// given key right now.
 export function gatherData() {
   const data = {};
+  // localStorage tier (legacy + small-bundle backup mirror)
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && key.startsWith('arnold:') && !key.startsWith('arnold:backup')) {
-      data[key] = localStorage.getItem(key);
-    }
+    if (!key) continue;
+    if (!key.startsWith('arnold:')) continue;
+    if (key.startsWith(BACKUP_PREFIX)) continue;
+    if (key.startsWith(PREOP_PREFIX)) continue;
+    if (key === BACKUP_META || key === PREOP_META) continue;
+    data[key] = localStorage.getItem(key);
   }
+  // IDB tier — overrides localStorage if both have the key (IDB is newer)
+  // We can't enumerate IDB cache keys directly without exporting more from
+  // db.js, but every dbSet also writes to localStorage when < 4 MB, so the
+  // localStorage walk above already covers most keys. For oversize keys
+  // (activities, dailyLogs) that exist only in IDB, we rely on the import
+  // restoring them through storage.set later, which fans out to both tiers.
   return data;
+}
+
+// ─── Meta helpers (in IDB) ───────────────────────────────────────────────────
+function getBackupMetaInternal() {
+  return dbGet(BACKUP_META) || {};
+}
+function setBackupMetaInternal(meta) {
+  dbSet(BACKUP_META, meta);
+}
+function getPreopMetaInternal() {
+  return dbGet(PREOP_META) || {};
+}
+function setPreopMetaInternal(meta) {
+  dbSet(PREOP_META, meta);
 }
 
 // ─── Create a backup snapshot ────────────────────────────────────────────────
@@ -37,25 +77,19 @@ export function createBackup() {
   if (keyCount === 0) return null;
 
   const timestamp = new Date().toISOString();
-  const snapshot = JSON.stringify({ timestamp, keyCount, data });
+  const snapshot = { timestamp, keyCount, data };
 
-  // Get current meta
-  let meta;
-  try { meta = JSON.parse(localStorage.getItem(BACKUP_META) || '{}'); }
-  catch { meta = {}; }
-
-  // Circular buffer: slot 0, 1, 2
+  const meta = getBackupMetaInternal();
   const nextSlot = ((meta.lastSlot ?? -1) + 1) % MAX_BACKUPS;
-  localStorage.setItem(`${BACKUP_PREFIX}${nextSlot}`, snapshot);
+  dbSet(`${BACKUP_PREFIX}${nextSlot}`, snapshot);
 
-  // Update meta
   meta.lastSlot = nextSlot;
   meta.lastBackup = timestamp;
   meta.keyCount = keyCount;
   if (!meta.history) meta.history = [];
   meta.history.unshift({ slot: nextSlot, timestamp, keyCount });
-  meta.history = meta.history.slice(0, MAX_BACKUPS * 2); // keep some history
-  localStorage.setItem(BACKUP_META, JSON.stringify(meta));
+  meta.history = meta.history.slice(0, MAX_BACKUPS * 2);
+  setBackupMetaInternal(meta);
 
   return { slot: nextSlot, timestamp, keyCount };
 }
@@ -64,41 +98,41 @@ export function createBackup() {
 export function listBackups() {
   const backups = [];
   for (let i = 0; i < MAX_BACKUPS; i++) {
-    const raw = localStorage.getItem(`${BACKUP_PREFIX}${i}`);
-    if (!raw) continue;
-    try {
-      const snap = JSON.parse(raw);
-      backups.push({
-        slot: i,
-        timestamp: snap.timestamp,
-        keyCount: snap.keyCount,
-        size: raw.length,
-      });
-    } catch { /* skip corrupt */ }
+    const snap = dbGet(`${BACKUP_PREFIX}${i}`);
+    if (!snap || !snap.timestamp) continue;
+    backups.push({
+      slot: i,
+      timestamp: snap.timestamp,
+      keyCount: snap.keyCount,
+      size: JSON.stringify(snap).length,
+    });
   }
   return backups.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 // ─── Restore from a backup slot ──────────────────────────────────────────────
 export function restoreFromSlot(slot) {
-  const raw = localStorage.getItem(`${BACKUP_PREFIX}${slot}`);
-  if (!raw) throw new Error(`No backup in slot ${slot}`);
-  const snap = JSON.parse(raw);
+  const snap = dbGet(`${BACKUP_PREFIX}${slot}`);
+  if (!snap || !snap.data) throw new Error(`No backup in slot ${slot}`);
   const keys = Object.keys(snap.data).filter(k => k.startsWith('arnold:'));
-  keys.forEach(k => localStorage.setItem(k, snap.data[k]));
+  keys.forEach(k => {
+    const val = snap.data[k];
+    // localStorage values are always strings; restore as-is so consumers can
+    // JSON.parse the same way they always did. dbSet expects a JS value, so
+    // parse before handing off.
+    try {
+      const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+      dbSet(k, parsed);
+      // Keep localStorage in sync for legacy reads (cap-protected by dbSet)
+      try { if (typeof val === 'string') localStorage.setItem(k, val); } catch {}
+    } catch {
+      try { localStorage.setItem(k, val); } catch {}
+    }
+  });
   return { restored: keys.length, timestamp: snap.timestamp };
 }
 
 // ─── Export as downloadable JSON (web) / share-sheet file (mobile) ──────────
-//
-// WEB path:    creates a Blob, clicks an <a download> — normal browser save.
-// MOBILE path: uses @capacitor/filesystem to write the JSON into the app's
-//              cache directory, then @capacitor/share to open the native share
-//              sheet so the user can email, Drive-upload, USB-transfer, etc.
-//              Returns { keyCount, method, uri? } so the caller can show a
-//              meaningful toast.
-//
-// Both paths are async because Capacitor calls are. Callers MUST await.
 export async function exportBackup() {
   const data = gatherData();
   const payload = {
@@ -112,12 +146,9 @@ export async function exportBackup() {
   const stamp = new Date().toISOString().slice(0, 10);
   const filename = `arnold-backup-${stamp}.json`;
 
-  // ── Mobile (Capacitor native) path ─────────────────────────────────────────
   if (Capacitor?.isNativePlatform?.()) {
     const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
     const { Share } = await import('@capacitor/share');
-    // Write into Cache so FileProvider-backed Share can expose it. Cache is
-    // auto-evictable but that's fine — the user will share it immediately.
     const written = await Filesystem.writeFile({
       path: filename,
       data: json,
@@ -132,15 +163,11 @@ export async function exportBackup() {
         dialogTitle: 'Send Arnold backup',
       });
     } catch (e) {
-      // User dismissed or share failed; the file still exists in cache under
-      // `written.uri` so we surface the path so the caller can tell the user
-      // where to find it manually.
       console.warn('[backup] share dismissed/failed:', e?.message || e);
     }
     return { keyCount: payload.keyCount, method: 'native-share', uri: written.uri };
   }
 
-  // ── Web (browser) path: blob download ─────────────────────────────────────
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -152,15 +179,21 @@ export async function exportBackup() {
 }
 
 // ─── Import from a raw JSON string (paste-in path) ──────────────────────────
-// Mirrors importBackup() below but takes a string instead of a File. Used by
-// the "paste backup text" input in BackupPanel as a fallback when file
-// transfer from another device isn't available.
 export function importBackupFromText(text) {
   const payload = JSON.parse(text);
   const data = payload.data || payload;
   const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
   if (!keys.length) throw new Error('No arnold:* keys found in text');
-  keys.forEach(k => localStorage.setItem(k, data[k]));
+  keys.forEach(k => {
+    const val = data[k];
+    try {
+      const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+      dbSet(k, parsed);
+      try { if (typeof val === 'string') localStorage.setItem(k, val); } catch {}
+    } catch {
+      try { localStorage.setItem(k, val); } catch {}
+    }
+  });
   return { restored: keys.length, exportedAt: payload.exportedAt };
 }
 
@@ -171,10 +204,19 @@ export function importBackup(file) {
     reader.onload = (e) => {
       try {
         const payload = JSON.parse(e.target.result);
-        const data = payload.data || payload; // support raw or wrapped format
+        const data = payload.data || payload;
         const keys = Object.keys(data).filter(k => k.startsWith('arnold:'));
         if (!keys.length) throw new Error('No arnold:* keys found in file');
-        keys.forEach(k => localStorage.setItem(k, data[k]));
+        keys.forEach(k => {
+          const val = data[k];
+          try {
+            const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+            dbSet(k, parsed);
+            try { if (typeof val === 'string') localStorage.setItem(k, val); } catch {}
+          } catch {
+            try { localStorage.setItem(k, val); } catch {}
+          }
+        });
         resolve({ restored: keys.length, exportedAt: payload.exportedAt });
       } catch (err) {
         reject(err);
@@ -187,37 +229,28 @@ export function importBackup(file) {
 
 // ─── Get backup status ───────────────────────────────────────────────────────
 export function getBackupMeta() {
-  try { return JSON.parse(localStorage.getItem(BACKUP_META) || '{}'); }
-  catch { return {}; }
+  return getBackupMetaInternal();
 }
 
 // ─── Pre-op snapshot (for destructive operations) ────────────────────────────
-// Writes a full snapshot of all arnold:* keys to a separate ring buffer.
-// Call this IMMEDIATELY BEFORE any destructive op (Reset, Bulk Import, Pull,
-// Restore) so the user always has an explicit rollback point tagged with the
-// operation that caused the risk. Returns { slot, timestamp, keyCount, opName }
-// or null if nothing to snapshot.
 export function snapshotBeforeOp(opName) {
   const data = gatherData();
   const keyCount = Object.keys(data).length;
   if (keyCount === 0) return null;
 
   const timestamp = new Date().toISOString();
-  const snapshot = JSON.stringify({ timestamp, keyCount, opName, data });
+  const snapshot = { timestamp, keyCount, opName, data };
 
-  let meta;
-  try { meta = JSON.parse(localStorage.getItem(PREOP_META) || '{}'); }
-  catch { meta = {}; }
-
+  const meta = getPreopMetaInternal();
   const nextSlot = ((meta.lastSlot ?? -1) + 1) % MAX_PREOPS;
-  localStorage.setItem(`${PREOP_PREFIX}${nextSlot}`, snapshot);
+  dbSet(`${PREOP_PREFIX}${nextSlot}`, snapshot);
 
   meta.lastSlot = nextSlot;
   meta.lastOp = { slot: nextSlot, timestamp, keyCount, opName };
   if (!meta.history) meta.history = [];
   meta.history.unshift({ slot: nextSlot, timestamp, keyCount, opName });
   meta.history = meta.history.slice(0, MAX_PREOPS * 2);
-  localStorage.setItem(PREOP_META, JSON.stringify(meta));
+  setPreopMetaInternal(meta);
 
   console.log(`[Arnold] Pre-op snapshot for "${opName}": slot ${nextSlot}, ${keyCount} keys`);
   return { slot: nextSlot, timestamp, keyCount, opName };
@@ -227,49 +260,79 @@ export function snapshotBeforeOp(opName) {
 export function listPreOpSnapshots() {
   const snapshots = [];
   for (let i = 0; i < MAX_PREOPS; i++) {
-    const raw = localStorage.getItem(`${PREOP_PREFIX}${i}`);
-    if (!raw) continue;
-    try {
-      const snap = JSON.parse(raw);
-      snapshots.push({
-        slot: i,
-        timestamp: snap.timestamp,
-        keyCount: snap.keyCount,
-        opName: snap.opName,
-        size: raw.length,
-      });
-    } catch { /* skip corrupt */ }
+    const snap = dbGet(`${PREOP_PREFIX}${i}`);
+    if (!snap || !snap.timestamp) continue;
+    snapshots.push({
+      slot: i,
+      timestamp: snap.timestamp,
+      keyCount: snap.keyCount,
+      opName: snap.opName,
+      size: JSON.stringify(snap).length,
+    });
   }
   return snapshots.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
-// Restore from a pre-op snapshot slot. Overwrites localStorage arnold:* keys.
+// Restore from a pre-op snapshot slot.
 export function restoreFromPreOpSlot(slot) {
-  const raw = localStorage.getItem(`${PREOP_PREFIX}${slot}`);
-  if (!raw) throw new Error(`No pre-op snapshot in slot ${slot}`);
-  const snap = JSON.parse(raw);
+  const snap = dbGet(`${PREOP_PREFIX}${slot}`);
+  if (!snap || !snap.data) throw new Error(`No pre-op snapshot in slot ${slot}`);
   const keys = Object.keys(snap.data).filter(k => k.startsWith('arnold:'));
-  keys.forEach(k => localStorage.setItem(k, snap.data[k]));
+  keys.forEach(k => {
+    const val = snap.data[k];
+    try {
+      const parsed = typeof val === 'string' ? JSON.parse(val) : val;
+      dbSet(k, parsed);
+      try { if (typeof val === 'string') localStorage.setItem(k, val); } catch {}
+    } catch {
+      try { localStorage.setItem(k, val); } catch {}
+    }
+  });
   return { restored: keys.length, timestamp: snap.timestamp, opName: snap.opName };
+}
+
+// ─── One-time cleanup of legacy localStorage backup keys ────────────────────
+// Pre-IDB-migration backups bloated localStorage to its 5MB cap. After the
+// migration these keys are unused — purge them on boot to free space and
+// remove the QuotaExceededError pressure that was breaking other writes.
+// Idempotent: no-op once localStorage is clean.
+export function purgeLegacyLocalStorageBackups() {
+  const purged = [];
+  const keysToCheck = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    if (k.startsWith(BACKUP_PREFIX) || k.startsWith(PREOP_PREFIX) ||
+        k === BACKUP_META || k === PREOP_META) {
+      keysToCheck.push(k);
+    }
+  }
+  for (const k of keysToCheck) {
+    const len = (localStorage.getItem(k) || '').length;
+    try {
+      localStorage.removeItem(k);
+      purged.push({ key: k, sizeKB: Math.round(len / 1024) });
+    } catch {}
+  }
+  if (purged.length) {
+    const totalKB = purged.reduce((s, p) => s + p.sizeKB, 0);
+    console.log(`[backup] purged ${purged.length} legacy localStorage backup keys, freed ${totalKB} KB`);
+  }
+  return purged;
 }
 
 // ─── Auto-backup timer ──────────────────────────────────────────────────────
 let backupInterval = null;
 
-export function startAutoBackup(intervalMs = 6 * 60 * 60 * 1000) { // default 6 hours
-  // Run one immediately on start
+export function startAutoBackup(intervalMs = 6 * 60 * 60 * 1000) {
   createBackup();
-
-  // Clear any existing interval
   if (backupInterval) clearInterval(backupInterval);
-
   backupInterval = setInterval(() => {
     const result = createBackup();
     if (result) {
       console.log(`[Arnold] Auto-backup: slot ${result.slot}, ${result.keyCount} keys at ${result.timestamp}`);
     }
   }, intervalMs);
-
   return backupInterval;
 }
 

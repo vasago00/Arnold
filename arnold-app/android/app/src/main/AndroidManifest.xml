@@ -47,19 +47,21 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Health Connect permissions -->
-    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <!-- Health Connect permissions — Arnold is a one-way reader (see
+         src/core/hc-sync.js header policy). The set below matches exactly the
+         streams syncAll() consumes: sleep, weight, heart rate, and the daily
+         energy trio (steps + active + total calories). Anything not in this
+         list is intentionally NOT requested:
+           READ_EXERCISE   — FIT uploads via Cloud Sync are authoritative.
+           READ_NUTRITION  — Cronometer live pull is authoritative.
+           READ_HYDRATION  — no consumer.
+           READ_DISTANCE   — derived from Steps; no direct consumer.
+         WRITE_* permissions never declared — Arnold never writes to HC. -->
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
     <uses-permission android:name="android.permission.health.READ_WEIGHT" />
     <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
-    <uses-permission android:name="android.permission.health.READ_NUTRITION" />
-    <uses-permission android:name="android.permission.health.READ_HYDRATION" />
-    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
-    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
-    <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
-    <uses-permission android:name="android.permission.health.WRITE_HYDRATION" />
-    <!-- Phase 4a: daily-wellness Tier 1 inputs for tdee() -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
     <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
 
     <!-- Declare Health Connect data types used -->

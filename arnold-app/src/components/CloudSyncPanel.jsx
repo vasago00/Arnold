@@ -10,7 +10,7 @@
 //
 // The panel never displays the passphrase or token in plaintext after entry.
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   getPairingConfig,
   setPairingConfig,
@@ -19,6 +19,7 @@ import {
   hasPassphrase,
   push,
   pull,
+  forcePull,
   getSyncStatus,
   onCloudSyncEvent,
   selfTest,
@@ -31,6 +32,16 @@ import {
   fetchCronometerToday,
   isConfigured as isCronometerConfigured,
 } from '../core/cronometer-client.js';
+import {
+  getGarminAuth,
+  setGarminAuth,
+  clearGarminAuth,
+  fetchGarminToday,
+  isGarminConfigured,
+  getGarminWellnessMeta,
+  backfillRecentBlanks,
+} from '../core/garmin-client.js';
+import { syncRecentActivities, enrichRecentActivitiesWithDetails } from '../core/garmin-activities-client.js';
 import {
   syncAll as hcSyncAll,
   getSyncStatus as getHcSyncStatus,
@@ -52,6 +63,62 @@ function slotEmoji(pairId) {
 function slotFingerprint(pairId) {
   if (!pairId) return '—';
   return `${slotEmoji(pairId)} ${pairId.slice(0, 8)}…`;
+}
+
+// Small row for displaying a sensitive pairing value with a Copy button.
+// Bypasses the swipe-nav touchstart handler that was eating long-press
+// selection on the phone.
+function PairValueRow({ label, value }) {
+  const [copied, setCopied] = React.useState(false);
+  const onCopy = async (e) => {
+    e.stopPropagation();
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value || '');
+      } else {
+        // Fallback for older WebViews without async clipboard
+        const ta = document.createElement('textarea');
+        ta.value = value || ''; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.warn('copy failed', err);
+    }
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+      <span style={{ flexShrink: 0, opacity: 0.8 }}>{label}:</span>
+      <code
+        style={{
+          flex: 1,
+          minWidth: 0,
+          wordBreak: 'break-all',
+          userSelect: 'all',
+          WebkitUserSelect: 'all',
+          fontSize: 11,
+        }}
+      >
+        {value || '—'}
+      </code>
+      <button
+        onClick={onCopy}
+        style={{
+          flexShrink: 0,
+          padding: '3px 8px',
+          fontSize: 11,
+          borderRadius: 4,
+          border: '1px solid rgba(255,255,255,0.15)',
+          background: copied ? 'rgba(107,207,154,0.18)' : 'rgba(255,255,255,0.06)',
+          color: copied ? '#6BCF9A' : '#e2e8f0',
+          cursor: 'pointer',
+        }}
+      >
+        {copied ? '✓ copied' : 'Copy'}
+      </button>
+    </div>
+  );
 }
 
 function fmtTime(ms) {
@@ -151,6 +218,33 @@ export default function CloudSyncPanel() {
     // Same risk as unlock-pull: remote wins per-key where remote.t > local.t.
     try { snapshotBeforeOp('cloud-pull'); } catch (e) { console.warn('pre-op snapshot failed', e); }
     try { await pull(); } finally { setBusy(''); setStatus(getSyncStatus()); }
+  }
+
+  async function handleForcePull() {
+    if (!confirm(
+      'FORCE PULL — overwrite local data with remote\n\n' +
+      'This bypasses the normal "newest wins" merge. Whatever is in the cloud ' +
+      'becomes the truth on this device for every collection. Use this when ' +
+      'devices have drifted (e.g., a bad migration on this device, or your phone ' +
+      'has stale local state that\'s blocking remote updates).\n\n' +
+      'Local-only changes that haven\'t been pushed will be LOST.\n\n' +
+      'A backup snapshot is created automatically before the overwrite. Continue?'
+    )) return;
+    setBusy('forcepull');
+    try { snapshotBeforeOp('cloud-force-pull'); } catch (e) { console.warn('pre-op snapshot failed', e); }
+    try {
+      const r = await forcePull();
+      if (r?.ok) {
+        showToast?.(`Force pulled · applied ${r.applied} keys · ${(r.bytes / 1024).toFixed(1)} KB`);
+      } else if (r?.empty) {
+        showToast?.('Cloud has no data');
+      } else if (r?.error) {
+        showToast?.(`Force pull failed: ${r.error}`);
+      }
+    } finally {
+      setBusy('');
+      setStatus(getSyncStatus());
+    }
   }
 
   async function handleUnpair() {
@@ -275,19 +369,37 @@ export default function CloudSyncPanel() {
       <div style={{ marginBottom: 10 }}>
         <button style={btnStyle} onClick={handlePush} disabled={busy === 'push'}>{busy === 'push' ? 'Pushing…' : 'Push now'}</button>
         <button style={btnStyle} onClick={handlePull} disabled={busy === 'pull'}>{busy === 'pull' ? 'Pulling…' : 'Pull now'}</button>
+        <button
+          style={{
+            ...btnSecondary,
+            color: '#fbbf24',
+            borderColor: '#fbbf24',
+          }}
+          onClick={handleForcePull}
+          disabled={busy === 'forcepull'}
+          title="Bypass LWW — overwrite local data with whatever's in the cloud. Use when this device has drifted from remote (bad migration, stale state, etc).">
+          {busy === 'forcepull' ? 'Force pulling…' : '⚠ Force pull'}
+        </button>
         <button style={btnSecondary} onClick={handleUnpair}>Unpair</button>
       </div>
 
       <CronometerAuthSection />
+      <GarminAuthSection />
 
       <HealthConnectStatusSection />
 
       <details style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>
         <summary>Pair-a-second-device values (copy these to your other device)</summary>
+        {/* Mobile note: long-press text-selection on the values below conflicts
+            with the global swipe-nav handler in Arnold.jsx (which captures every
+            touchstart on <main>). Explicit Copy buttons sidestep the gesture
+            collision entirely — and userSelect:'all' single-tap-selects the
+            value on devices where long-press still works. */}
         <div style={{ marginTop: 8, padding: 8, background: '#0b0d12', borderRadius: 6 }}>
-          <div>Pair ID: <code style={{ wordBreak: 'break-all' }}>{status.pairId}</code></div>
-          <div>Salt: <code style={{ wordBreak: 'break-all' }}>{status.salt}</code></div>
-          <div style={{ marginTop: 6, opacity: 0.7 }}>Use the same bearer token and passphrase.</div>
+          <PairValueRow label="Pair ID" value={status.pairId} />
+          <PairValueRow label="Salt" value={status.salt} />
+          <PairValueRow label="Endpoint" value={status.endpoint} />
+          <div style={{ marginTop: 6, opacity: 0.7 }}>Bearer token and passphrase are not displayed for security — use the same ones from your other device.</div>
         </div>
       </details>
 
@@ -467,6 +579,336 @@ function CronometerAuthSection() {
   );
 }
 
+// ─── Garmin Wellness Section (Phase 4c) ─────────────────────────────────────
+// Same pattern as Cronometer auth: email + password stored in encrypted blob,
+// pulled by the Cloud Sync Worker via /garmin/all. Unlocks the values Health
+// Connect doesn't expose: composite Sleep Score, Body Battery, Stress,
+// Training Readiness, daily summary.
+
+function GarminAuthSection() {
+  const existing = getGarminAuth();
+  const [editing, setEditing] = useState(!existing);
+  const [form, setForm]       = useState({ user: existing?.user || '', pass: '' });
+  const [busy, setBusy]       = useState('');
+  const [msg, setMsg]         = useState(null); // { kind: 'ok'|'err', text }
+  const [meta, setMeta]       = useState(() => getGarminWellnessMeta());
+
+  // Manual VO2Max override — Garmin's API doesn't reliably expose VO2Max
+  // for all accounts (we tried 5 endpoints; activity DTOs may also miss it).
+  // This input lets the user type the value their watch shows. Persists to
+  // profile.watchVO2Max and is read with highest priority by the Start panel.
+  const [vo2State, setVo2State] = useState(() => {
+    try {
+      const profile = storage.get('profile') || {};
+      return {
+        value: profile.watchVO2Max != null ? String(profile.watchVO2Max) : '',
+        savedAt: profile.watchVO2MaxAt || null,
+      };
+    } catch { return { value: '', savedAt: null }; }
+  });
+  function saveVO2() {
+    const num = parseFloat(vo2State.value);
+    if (!Number.isFinite(num) || num < 15 || num > 95) {
+      setMsg({ kind: 'err', text: 'Enter a VO₂Max value between 15 and 95 ml/kg/min' });
+      return;
+    }
+    const profile = storage.get('profile') || {};
+    const ts = Date.now();
+    storage.set('profile', { ...profile, watchVO2Max: num, watchVO2MaxAt: ts }, { skipValidation: true });
+    setVo2State({ value: String(num), savedAt: ts });
+    setMsg({ kind: 'ok', text: `Saved Watch VO₂Max = ${num} ml/kg/min` });
+  }
+
+  function refreshMeta() { setMeta(getGarminWellnessMeta()); }
+
+  function handleSave(e) {
+    e.preventDefault();
+    setMsg(null);
+    try {
+      const pass = form.pass || existing?.pass;
+      if (!form.user || !pass) throw new Error('email + password required');
+      setGarminAuth({ user: form.user.trim(), pass });
+      setMsg({ kind: 'ok', text: 'Saved. Will sync to other paired devices on next push.' });
+      setEditing(false);
+      setForm({ user: form.user.trim(), pass: '' });
+    } catch (err) {
+      setMsg({ kind: 'err', text: err.message || String(err) });
+    }
+  }
+
+  async function handleTest() {
+    setBusy('test');
+    setMsg(null);
+    try {
+      const r = await fetchGarminToday();
+      if (r.ok) {
+        const score = r.sleep?.sleepScore;
+        const bb = r.bb?.bbCharged;
+        const tr = r.readiness?.trainingReadiness;
+        const parts = [];
+        if (score != null) parts.push(`Sleep ${score}`);
+        if (bb != null)    parts.push(`BB +${bb}`);
+        if (tr != null)    parts.push(`Readiness ${tr}`);
+        parts.push(r.cached ? 'cached' : 'fresh');
+        setMsg({ kind: 'ok', text: `✓ ${parts.join(' · ')}` });
+        refreshMeta();
+      } else {
+        setMsg({ kind: 'err', text: `Failed: ${r.error}${r.detail ? ' (' + r.detail + ')' : ''}` });
+      }
+    } catch (err) {
+      setMsg({ kind: 'err', text: String(err?.message || err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleBackfill(force = false) {
+    setBusy(force ? 'force' : 'backfill');
+    setMsg(null);
+    try {
+      const r = await backfillRecentBlanks({ daysBack: 14, force });
+      if (!r.ok) {
+        setMsg({ kind: 'err', text: `Failed: ${r.error}` });
+        return;
+      }
+      const filledSleep = r.results.filter(x => x.ok && x.sleepScore != null).length;
+      const filledBB    = r.results.filter(x => x.ok && x.bodyBatteryStart != null).length;
+      const filledTR    = r.results.filter(x => x.ok && x.trainingReadiness != null).length;
+      setMsg({
+        kind: 'ok',
+        text: `Backfill: ${r.attempted} attempted · ${filledSleep} sleep · ${filledBB} body battery · ${filledTR} readiness. Reload the page to see new tiles in Goals.`,
+      });
+      refreshMeta();
+    } catch (err) {
+      setMsg({ kind: 'err', text: String(err?.message || err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleEnrichActivities() {
+    setBusy('enrich');
+    setMsg(null);
+    try {
+      const r = await enrichRecentActivitiesWithDetails({ daysBack: 30, force: false });
+      if (!r.ok) {
+        setMsg({ kind: 'err', text: `Enrich failed: ${r.error}` });
+        return;
+      }
+      setMsg({
+        kind: 'ok',
+        text: `Enriched ${r.enriched} of ${r.attempted} activities with HR zones + EPOC. Reload to see updated tiles.`,
+      });
+    } catch (err) {
+      setMsg({ kind: 'err', text: String(err?.message || err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleSyncActivities() {
+    setBusy('activities');
+    setMsg(null);
+    try {
+      const r = await syncRecentActivities({ daysBack: 14, limit: 30 });
+      if (!r.ok) {
+        setMsg({ kind: 'err', text: `Activity sync failed: ${r.error}${r.detail ? ' (' + r.detail + ')' : ''}` });
+        return;
+      }
+      const types = {};
+      for (const x of r.results.filter(x => x.ok)) {
+        types[x.type] = (types[x.type] || 0) + 1;
+      }
+      const breakdown = Object.entries(types).map(([t, n]) => `${n} ${t}`).join(', ') || 'none';
+      setMsg({
+        kind: 'ok',
+        text: `Activities: ${r.candidates} found · ${r.skipped} already imported · ${r.successful} new (${breakdown})${r.failed ? ' · ' + r.failed + ' failed' : ''}. Reload to see them.`,
+      });
+      refreshMeta();
+    } catch (err) {
+      setMsg({ kind: 'err', text: String(err?.message || err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function handleClear() {
+    if (!confirm('Remove Garmin credentials from Arnold (on this device and all paired devices)?')) return;
+    clearGarminAuth();
+    setForm({ user: '', pass: '' });
+    setEditing(true);
+    setMsg({ kind: 'ok', text: 'Credentials cleared.' });
+  }
+
+  const configured = isGarminConfigured();
+  const sectionStyle = {
+    marginTop: 16, padding: 12, border: '1px solid #2a2e38', borderRadius: 8, background: '#0f1218',
+  };
+  const labelStyle = { display: 'block', fontSize: 12, opacity: 0.7, marginBottom: 4 };
+  const inputStyle = {
+    width: '100%', padding: '8px 10px', background: '#0b0d12', color: '#e6e8ec',
+    border: '1px solid #2a2e38', borderRadius: 6,
+    fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 13, marginBottom: 8,
+  };
+  const btn = {
+    padding: '6px 12px', background: '#1b6feb', color: 'white', border: 'none',
+    borderRadius: 6, cursor: 'pointer', fontSize: 12, marginRight: 6,
+  };
+  const btnSec = { ...btn, background: '#2a2e38' };
+  const btnDanger = { ...btn, background: '#8a2f2f' };
+
+  const lastSyncTxt = meta.lastSyncAt
+    ? new Date(meta.lastSyncAt).toLocaleString()
+    : 'never';
+  const lastScore = meta.lastSleepScore;
+
+  return (
+    <div style={sectionStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h4 style={{ margin: 0, fontSize: 14 }}>⌚ Garmin Wellness sync</h4>
+        <span style={{
+          fontSize: 11, padding: '2px 8px', borderRadius: 10,
+          background: configured ? '#1f3a1f' : '#3a1f1f',
+          color: configured ? '#a0e0a0' : '#e0a0a0',
+          border: `1px solid ${configured ? '#2f5a2f' : '#5a2f2f'}`,
+        }}>
+          {configured ? '✓ configured' : existing ? 'needs worker' : 'not set'}
+        </span>
+      </div>
+
+      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10, lineHeight: 1.4 }}>
+        Pulls Garmin's composite Sleep Score, Body Battery, Stress, and Training
+        Readiness — the values Health Connect doesn't expose. Garmin 2FA must be
+        OFF for this to work; the Worker bearer token + cloud-sync encryption
+        remain the security boundary.
+      </div>
+
+      {editing || !existing ? (
+        <form onSubmit={handleSave}>
+          <label style={labelStyle}>Garmin email</label>
+          <input
+            style={inputStyle}
+            type="email"
+            autoComplete="off"
+            value={form.user}
+            onChange={e => setForm(f => ({ ...f, user: e.target.value }))}
+            placeholder="you@example.com"
+            required
+          />
+          <label style={labelStyle}>
+            Garmin password {existing && <span style={{ opacity: 0.6 }}>(leave blank to keep current)</span>}
+          </label>
+          <input
+            style={inputStyle}
+            type="password"
+            autoComplete="new-password"
+            value={form.pass}
+            onChange={e => setForm(f => ({ ...f, pass: e.target.value }))}
+            placeholder={existing ? '••••••••' : 'your Garmin Connect password'}
+          />
+          <div>
+            <button style={btn} type="submit">Save</button>
+            {existing && (
+              <button type="button" style={btnSec} onClick={() => { setEditing(false); setForm({ user: existing.user, pass: '' }); setMsg(null); }}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      ) : (
+        <div style={{ fontSize: 13 }}>
+          <div style={{ marginBottom: 6 }}>
+            Signed in as <code>{existing.user}</code>
+          </div>
+          <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8 }}>
+            Last sync: {lastSyncTxt}
+            {lastScore != null && <> · score {lastScore}</>}
+            {meta.lastError && <span style={{ color: '#ffd4d4' }}> · last error: {meta.lastError}</span>}
+          </div>
+          <button style={btn} type="button" onClick={handleTest} disabled={busy === 'test'}>
+            {busy === 'test' ? 'Testing…' : 'Test pull'}
+          </button>
+          <button style={btnSec} type="button" onClick={() => handleBackfill(false)} disabled={busy === 'backfill' || busy === 'force'}>
+            {busy === 'backfill' ? 'Backfilling…' : 'Backfill 14 days'}
+          </button>
+          <button style={btnSec} type="button" onClick={() => handleBackfill(true)} disabled={busy === 'backfill' || busy === 'force'}
+                  title="Re-pull every day in the window even if it appears covered. Use this once after the wellness-collection fix to refill Body Battery / Stress / Readiness on dates the first backfill missed.">
+            {busy === 'force' ? 'Force refilling…' : 'Force refill'}
+          </button>
+          <button style={btnSec} type="button" onClick={handleSyncActivities} disabled={busy === 'activities'}
+                  title="Pull recent Run / Strength / etc. activities from Garmin and parse them into Arnold. Skips activities you already imported manually.">
+            {busy === 'activities' ? 'Syncing activities…' : 'Sync activities'}
+          </button>
+          <button style={btnSec} type="button" onClick={handleEnrichActivities} disabled={busy === 'enrich'}
+                  title="For each activity in the last 30 days that's missing HR zones or training load, fetch Garmin's server-computed details. Unlocks Z2 Weekly / EPOC / Pace:HR tiles when FIT files don't include zone data.">
+            {busy === 'enrich' ? 'Enriching…' : 'Enrich activity data'}
+          </button>
+          {/* Watch VO2Max manual override — Garmin's API doesn't return vO2MaxValue
+              for all accounts (confirmed via 5 endpoints + activity DTO). Until/if
+              that changes, the user types the value their watch shows here. */}
+          <div style={{
+            marginTop: 12, padding: '8px 10px',
+            background: 'rgba(96,165,250,0.06)', borderRadius: 6,
+            borderWidth: '0.5px', borderStyle: 'solid', borderColor: 'rgba(96,165,250,0.25)',
+          }}>
+            <div style={{ fontSize: 11, color: '#a0c0e8', marginBottom: 6, fontWeight: 600 }}>
+              Watch VO₂Max (manual entry)
+            </div>
+            <div style={{ fontSize: 10, color: '#8a9bb0', marginBottom: 8, lineHeight: 1.4 }}>
+              Garmin's API doesn't expose VO₂Max for this account. Type the number your
+              watch shows (Connect → My Day → VO₂Max). Updates whenever you check.
+            </div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="number"
+                step="0.1"
+                min="15"
+                max="95"
+                value={vo2State.value}
+                onChange={e => setVo2State(s => ({ ...s, value: e.target.value }))}
+                placeholder="46"
+                style={{
+                  width: 80, padding: '4px 8px',
+                  background: '#0b0d12', color: '#e6e8ec',
+                  borderWidth: '0.5px', borderStyle: 'solid', borderColor: '#2a2e38',
+                  borderRadius: 4, fontSize: 12,
+                }}
+              />
+              <span style={{ fontSize: 10, color: '#8a9bb0' }}>ml/kg/min</span>
+              <button onClick={saveVO2} style={{
+                padding: '4px 10px', fontSize: 11,
+                background: '#60a5fa', color: '#0b0d12', fontWeight: 500,
+                borderWidth: '0.5px', borderStyle: 'solid', borderColor: '#60a5fa',
+                borderRadius: 4, cursor: 'pointer',
+              }}>Save</button>
+              {vo2State.savedAt && (
+                <span style={{ fontSize: 10, color: '#8a9bb0', marginLeft: 6 }}>
+                  Saved {new Date(vo2State.savedAt).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+          </div>
+          <button style={btnSec} type="button" onClick={() => { setEditing(true); setForm({ user: existing.user, pass: '' }); setMsg(null); }}>
+            Edit
+          </button>
+          <button style={btnDanger} type="button" onClick={handleClear}>Clear</button>
+        </div>
+      )}
+
+      {msg && (
+        <div style={{
+          marginTop: 10, padding: '6px 10px', borderRadius: 6, fontSize: 12,
+          background: msg.kind === 'ok' ? '#1f3a1f' : '#3a1f1f',
+          color: msg.kind === 'ok' ? '#c8e6c9' : '#ffd4d4',
+          border: `1px solid ${msg.kind === 'ok' ? '#2f5a2f' : '#5a2f2f'}`,
+        }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Health Connect Status Section (Phase 4a) ───────────────────────────────
 // Shows HC sync state inside the paired+unlocked Cloud Sync card. Reads data
 // ride Cloud Sync to paired devices automatically — this card is just a
@@ -481,13 +923,14 @@ function HealthConnectStatusSection() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { kind: 'ok'|'err', text }
 
-  // Today's wellness preview from dailyLogs — what syncDailyEnergy wrote.
+  // Today's wellness preview from hcDailyEnergy — what syncDailyEnergy wrote.
+  // (Moved out of dailyLogs in the Phase 4a bug fix.)
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   const todayRow = (() => {
     try {
-      const logs = storage.get('dailyLogs') || [];
-      return logs.find(e => e && e.date === todayStr) || null;
+      const rows = storage.get('hcDailyEnergy') || [];
+      return rows.find(r => r && r.date === todayStr) || null;
     } catch { return null; }
   })();
   const steps = Number(todayRow?.steps) || 0;

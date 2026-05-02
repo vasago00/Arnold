@@ -2,8 +2,7 @@
 // Pure functions over the activities array. All take ISO date strings or
 // Date objects and tolerate missing fields gracefully.
 
-const isRun = a => /running|trail/i.test(a?.activityType || '');
-const isStrength = a => /strength|weight/i.test(a?.activityType || '');
+import { isRun, isStrength } from '../activityClass.js';
 
 // Get the Monday-aligned start of the week containing `date` (default: today).
 export function weekStart(date = new Date()) {

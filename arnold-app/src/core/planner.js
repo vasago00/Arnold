@@ -4,6 +4,7 @@
 
 import { storage } from "./storage.js";
 import { weekStart } from "./derive/volume.js";
+import { isRun, isStrength } from "./activityClass.js";
 
 const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -151,10 +152,12 @@ export function checkTodayCompletion(dateStr, planned) {
     || re.test(l.workout || '')
     || re.test(l.type || '');
 
-  const hasRun = todayActs.some(a => /run/i.test(a.activityType || ''))
+  // Use canonical classifiers — HIIT runs count as runs here so a planned
+  // HIIT slot matches a Garmin Fartlek/interval run.
+  const hasRun = todayActs.some(isRun)
     || todayWkts.some(w => /run/i.test(w.type || ''))
     || todayLogs.some(l => logHasType(l, /run/i));
-  const hasStrength = todayActs.some(a => /strength|weight/i.test(a.activityType || ''))
+  const hasStrength = todayActs.some(isStrength)
     || todayWkts.some(w => /strength/i.test(w.type || ''))
     || todayLogs.some(l => logHasType(l, /strength|weight/i));
 

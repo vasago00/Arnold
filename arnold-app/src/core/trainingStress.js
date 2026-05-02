@@ -8,6 +8,7 @@
 
 import { paceToSecs, secsToFmtPace } from './trainingIntelligence.js';
 import { storage } from './storage.js';
+import { isRun, isStrength } from './activityClass.js';
 
 // Local date helper (avoids UTC rollover — toISOString uses UTC, not local tz)
 const localDate = (d = new Date()) =>
@@ -110,7 +111,7 @@ export function computeAcuteChronicRatio(activities, dateStr, ftpPace) {
   const fmt = d => localDate(d);
 
   const runs = activities.filter(a =>
-    /run/i.test(a.activityType || '') && a.avgPaceRaw && a.durationSecs
+    isRun(a) && a.avgPaceRaw && a.durationSecs
   );
 
   const sumTSS = (start, end) => {
@@ -450,11 +451,11 @@ export function computeDailyScore(dateStr) {
     return days;
   };
 
-  // ─── Identify today's sessions ──
+  // ─── Identify today's sessions — canonical classification ──
   const todayActs = activities.filter(a => a.date === today);
-  const todayRuns = todayActs.filter(a => /run/i.test(a.activityType || ''));
-  const todayStrength = todayActs.filter(a => /strength|weight|gym/i.test(a.activityType || ''));
-  const todayHyrox = todayActs.filter(a => /hyrox|circuit/i.test(a.activityType || a.activityName || ''));
+  const todayRuns = todayActs.filter(isRun);             // includes HIIT runs
+  const todayStrength = todayActs.filter(isStrength);    // excludes HIIT
+  const todayHyrox = todayActs.filter(a => /hyrox|circuit/i.test(`${a.activityType||''} ${a.activityName||''}`));
   const ftpPace = goals.functionalThresholdPace || '8:30';
   const bodyweight = parseFloat(goals.targetWeight) || parseFloat(goals.weight) || 175;
 
@@ -781,5 +782,66 @@ export function computeRolling30d(refDate) {
   return {
     score: count > 0 ? Math.min(Math.round(sum / count), 100) : 0,
     daily,  // [today, yesterday, ..., 29 days ago]
+  };
+}
+
+/**
+ * Average weekly training hours over a rolling window.
+ *
+ * Uses the SAME merged-and-deduplicated activity list that computeDailyScore
+ * uses, so this is the canonical "how much have I trained" metric for any
+ * downstream calculation (nutrient targets, recovery debt, etc).
+ *
+ * Dedup logic:
+ *   - allActivities filtered to drop `source: 'health_connect'` (legacy ghost rows)
+ *   - dailyLogs.fitActivities folded in (handles multi-FIT days and the legacy
+ *     singular `fitData` shape)
+ *
+ * @param {number} [weeks=4] - rolling window in weeks. 4-week average is
+ *   responsive enough to capture training blocks but stable enough to avoid
+ *   the noise of a single bad week.
+ * @param {string} [refDate] - reference date (YYYY-MM-DD), defaults to today.
+ * @returns {{ hoursPerWeek: number, totalSeconds: number, daysWithActivity: number }}
+ */
+export function getAvgWeeklyTrainingHours(weeks = 4, refDate) {
+  const today = refDate || localDate();
+  const days = weeks * 7;
+
+  const allActivities = storage.get('activities') || [];
+  const dailyLogs     = storage.get('dailyLogs')  || [];
+
+  // Build the same merged-and-deduplicated list computeDailyScore uses
+  const fitActs = [];
+  for (const l of dailyLogs) {
+    if (!l?.date) continue;
+    const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
+      ? l.fitActivities
+      : (l.fitData ? [l.fitData] : []);
+    for (const fd of fits) if (fd) fitActs.push({ ...fd, date: l.date });
+  }
+  const merged = [...allActivities.filter(a => a.source !== 'health_connect'), ...fitActs];
+
+  // Window dates
+  const windowDates = new Set();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(today + 'T12:00:00');
+    d.setDate(d.getDate() - i);
+    windowDates.add(localDate(d));
+  }
+
+  let totalSeconds = 0;
+  const dayBuckets = {};
+  for (const a of merged) {
+    if (!windowDates.has(a.date)) continue;
+    const secs = a.durationSecs || (a.durationMins || 0) * 60 || 0;
+    if (!secs) continue;
+    totalSeconds += secs;
+    dayBuckets[a.date] = (dayBuckets[a.date] || 0) + secs;
+  }
+
+  return {
+    hoursPerWeek: (totalSeconds / 3600) / weeks,
+    totalSeconds,
+    daysWithActivity: Object.keys(dayBuckets).length,
   };
 }

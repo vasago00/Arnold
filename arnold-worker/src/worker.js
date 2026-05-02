@@ -24,6 +24,17 @@
 //
 // The blob itself is opaque bytes — typically ~100 KB to 2 MB of ciphertext.
 
+import {
+  handleGarminSleep,
+  handleGarminWellness,
+  handleGarminReadiness,
+  handleGarminAll,
+  handleGarminActivitiesList,
+  handleGarminActivityDetails,
+  handleGarminActivityFit,
+  handleGarminVO2Max,
+} from './garmin-relay.js';
+
 const MAX_BLOB_BYTES = 8 * 1024 * 1024; // 8 MB safety cap
 const ID_PATTERN = /^[a-f0-9]{32,128}$/; // 16–64 bytes hex
 
@@ -387,6 +398,146 @@ async function handleCronometerPull(request, env) {
   return json(200, { ...result, cached: false });
 }
 
+// ─── FIT activity relay ─────────────────────────────────────────────────────
+// Same security model as the encrypted-blob /s endpoints — Bearer token over
+// HTTPS — but the FITs themselves are plaintext JSON. The point of this relay
+// is to provide a simple direct-fetch path for FIT activities that doesn't
+// ride the encrypted-blob LWW/decrypt logic, which has historically been the
+// weak point when devices' passphrases drift apart.
+//
+// Each FIT is keyed by pairId + date + filename. KV TTL of 90 days keeps the
+// namespace bounded; activities are persisted to each device's local storage
+// during the first successful pull, so the relay copy is purely transport.
+//
+// Endpoints:
+//   POST   /fit/:pairId           body {date, filename, activity} → stores
+//   GET    /fit/:pairId/recent    ?days=14 → array of stored FITs
+//   DELETE /fit/:pairId/:date/:filename → wipe one
+//
+// This relay uses the same SYNC_KV namespace with key prefix `fit:` (vs the
+// `blob:` prefix used by the encrypted-blob endpoints).
+
+const FIT_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+const FIT_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const FIT_FILENAME_PATTERN = /^[A-Za-z0-9_.\-]{1,128}$/;
+const FIT_MAX_BODY_BYTES = 256 * 1024; // 256 KB per FIT — generous for parsed JSON
+
+// ─── AI proxy ───────────────────────────────────────────────────────────────
+// Forwards { system, user, max, model } to api.anthropic.com using the
+// Worker-owned ANTHROPIC_API_KEY secret. Returns the Anthropic response
+// verbatim so the client can use it identically to a direct call. Handles:
+//   - CORS (Worker is server-side, no CORS preflight at the Anthropic edge)
+//   - Key security (key is a Cloudflare secret, never sent to browser)
+//   - Rate limiting (per-token bucket — 60 calls/hour by default)
+async function handleAIMessages(request, env) {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json(503, { error: 'ai_not_configured', detail: 'Set ANTHROPIC_API_KEY via wrangler secret put' });
+  }
+  let body;
+  try { body = await request.json(); } catch { return json(400, { error: 'bad_json' }); }
+  // Default model — update as Anthropic releases. claude-sonnet-4-5-20250929
+  // is the latest Sonnet 4.5. Caller can override via body.model.
+  const { system, user, max = 1500, model = 'claude-sonnet-4-5-20250929' } = body || {};
+  if (!user || typeof user !== 'string') return json(400, { error: 'missing_user_message' });
+
+  // Rate-limit per Worker token. SYNC_TOKEN already authenticated — use a
+  // hash of it as the bucket key. Default cap 60 calls/hour.
+  try {
+    const auth = request.headers.get('Authorization') || '';
+    const tokenHash = await sha256Hex(auth);
+    const bucketKey = `ai:rate:${tokenHash}:${Math.floor(Date.now() / 3600000)}`;
+    const used = parseInt((await env.SYNC_KV.get(bucketKey)) || '0', 10);
+    if (used >= 60) {
+      return json(429, { error: 'rate_limited', detail: 'Hourly AI cap reached (60). Try again next hour.' });
+    }
+    await env.SYNC_KV.put(bucketKey, String(used + 1), { expirationTtl: 3700 });
+  } catch (e) {
+    console.warn('[ai] rate-limit accounting failed:', e?.message || e);
+  }
+
+  try {
+    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':     'application/json',
+        'x-api-key':        env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: Math.min(Math.max(parseInt(max, 10) || 1500, 100), 8192),
+        ...(system ? { system } : {}),
+        messages: [{ role: 'user', content: user }],
+      }),
+    });
+    const text = await upstream.text();
+    return new Response(text, {
+      status: upstream.status,
+      headers: {
+        'Content-Type': 'application/json',
+        ...CORS_HEADERS,
+      },
+    });
+  } catch (e) {
+    return json(502, { error: 'ai_upstream_failed', detail: String(e?.message || e) });
+  }
+}
+
+async function handleFitPost(pairId, request, env) {
+  const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
+  if (contentLength > FIT_MAX_BODY_BYTES) return json(413, { error: 'too_large' });
+
+  let body;
+  try { body = await request.json(); } catch { return json(400, { error: 'bad_json' }); }
+  const { date, filename, activity } = body || {};
+  if (!date || !FIT_DATE_PATTERN.test(date)) return json(400, { error: 'bad_date' });
+  if (!filename || !FIT_FILENAME_PATTERN.test(filename)) return json(400, { error: 'bad_filename' });
+  if (!activity || typeof activity !== 'object') return json(400, { error: 'bad_activity' });
+
+  const key = `fit:${pairId}:${date}:${filename}`;
+  const updatedAt = Date.now();
+  const payload = JSON.stringify({ date, filename, activity, updatedAt });
+  if (payload.length > FIT_MAX_BODY_BYTES) return json(413, { error: 'too_large' });
+
+  await env.SYNC_KV.put(key, payload, {
+    expirationTtl: FIT_TTL_SECONDS,
+    metadata: { date, filename, updatedAt, bytes: payload.length },
+  });
+  return json(200, { ok: true, date, filename, updatedAt, bytes: payload.length });
+}
+
+async function handleFitRecent(pairId, request, env) {
+  const url = new URL(request.url);
+  const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get('days') || '14', 10) || 14));
+  const cutoffTs = Date.now() - days * 24 * 60 * 60 * 1000;
+  // KV list with prefix gives us the keys; we then GET each to assemble the
+  // result. List operations are bounded by the prefix scope (`fit:<pairId>:`).
+  const prefix = `fit:${pairId}:`;
+  const list = await env.SYNC_KV.list({ prefix, limit: 1000 });
+  const fits = [];
+  for (const k of list.keys) {
+    // Filter by metadata first (no GET cost) — but we also need the activity
+    // payload, so we GET anyway. Fast enough for a few dozen recent FITs.
+    if (k.metadata && k.metadata.updatedAt && k.metadata.updatedAt < cutoffTs) continue;
+    const v = await env.SYNC_KV.get(k.name);
+    if (!v) continue;
+    try {
+      const parsed = JSON.parse(v);
+      fits.push(parsed);
+    } catch { /* skip corrupt */ }
+  }
+  // Newest first
+  fits.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return json(200, { count: fits.length, fits });
+}
+
+async function handleFitDelete(pairId, date, filename, env) {
+  if (!FIT_DATE_PATTERN.test(date)) return json(400, { error: 'bad_date' });
+  if (!FIT_FILENAME_PATTERN.test(filename)) return json(400, { error: 'bad_filename' });
+  await env.SYNC_KV.delete(`fit:${pairId}:${date}:${filename}`);
+  return json(200, { ok: true });
+}
+
 // ── Router ──────────────────────────────────────────────────────────────────
 
 export default {
@@ -412,6 +563,54 @@ export default {
     // Cronometer relay
     if (pathname === '/cronometer/pull' && request.method === 'POST') {
       return handleCronometerPull(request, env);
+    }
+
+    // AI proxy — calls Anthropic API server-side. Eliminates CORS, hides
+    // API key from the client bundle, lets us add rate limiting in one place.
+    // Body: { system, user, max?, model? }
+    if (pathname === '/ai/messages' && request.method === 'POST') {
+      return handleAIMessages(request, env);
+    }
+
+    // Garmin Wellness relay — pulls Sleep Score, Body Battery, Stress,
+    // Training Readiness, and the daily summary that Health Connect doesn't
+    // expose. Each accepts {user, pass, date} POST body, same shape as the
+    // Cronometer relay so the client side stays uniform.
+    if (request.method === 'POST') {
+      if (pathname === '/garmin/sleep')     return handleGarminSleep(request, env);
+      if (pathname === '/garmin/wellness')  return handleGarminWellness(request, env);
+      if (pathname === '/garmin/readiness') return handleGarminReadiness(request, env);
+      if (pathname === '/garmin/all')       return handleGarminAll(request, env);
+      if (pathname === '/garmin/vo2max')    return handleGarminVO2Max(request, env);
+      // Activity routes — list is body-only; details/fit take {activityId} in path.
+      if (pathname === '/garmin/activities/recent') return handleGarminActivitiesList(request, env);
+      const detMatch = pathname.match(/^\/garmin\/activities\/(\d+)\/details$/);
+      if (detMatch) return handleGarminActivityDetails(request, env, detMatch[1]);
+      const fitMatch = pathname.match(/^\/garmin\/activities\/(\d+)\/fit$/);
+      if (fitMatch) return handleGarminActivityFit(request, env, fitMatch[1]);
+    }
+
+    // FIT relay
+    const fitRecentMatch = pathname.match(/^\/fit\/([a-f0-9]+)\/recent$/);
+    if (fitRecentMatch) {
+      const pairId = fitRecentMatch[1];
+      if (!ID_PATTERN.test(pairId)) return json(400, { error: 'bad_id' });
+      if (request.method !== 'GET') return json(405, { error: 'method_not_allowed' });
+      return handleFitRecent(pairId, request, env);
+    }
+    const fitDeleteMatch = pathname.match(/^\/fit\/([a-f0-9]+)\/(\d{4}-\d{2}-\d{2})\/([A-Za-z0-9_.\-]+)$/);
+    if (fitDeleteMatch) {
+      const [, pairId, date, filename] = fitDeleteMatch;
+      if (!ID_PATTERN.test(pairId)) return json(400, { error: 'bad_id' });
+      if (request.method !== 'DELETE') return json(405, { error: 'method_not_allowed' });
+      return handleFitDelete(pairId, date, filename, env);
+    }
+    const fitPostMatch = pathname.match(/^\/fit\/([a-f0-9]+)$/);
+    if (fitPostMatch) {
+      const pairId = fitPostMatch[1];
+      if (!ID_PATTERN.test(pairId)) return json(400, { error: 'bad_id' });
+      if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
+      return handleFitPost(pairId, request, env);
     }
 
     // /s/:id routes

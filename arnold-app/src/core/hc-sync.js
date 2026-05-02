@@ -2,11 +2,18 @@
 // Reads data from Health Connect via hc-bridge, maps it into Arnold's storage
 // format, merges with existing data (dedup), and persists via storage.js.
 //
+// POLICY — ONE-WAY READER ONLY:
+//   Arnold never writes back to Health Connect. HC is the upstream system of
+//   record for steps, sleep, body comp, and active energy; Arnold consumes
+//   that data, normalizes it, and merges it locally. We do NOT call
+//   writeRecords / insertRecords / any HC mutation API. If a feature ever
+//   needs to publish data outward (e.g. workout completion to HC), it must
+//   go through a separate, opt-in module — not this orchestrator.
+//
 // Sync strategy:
 //   - On app open: syncAll() reads from last sync timestamp → now
 //   - Periodic: every 15 min via setInterval
 //   - Manual: user can trigger from UI
-//   - Write-back: Arnold food logs → Health Connect NutritionRecord
 //
 // Dedup:
 //   - Activities: match by startTime ± 60s + same exercise type
@@ -159,9 +166,16 @@ async function syncSleep() {
   for (const sess of sessions) {
     const date = isoDate(sess.startTime);
 
-    // One sleep record per night — HC record wins if newer
+    // One sleep record per night, with source-priority resolution:
+    //   - garmin-worker (Phase 4c): Worker has Garmin's authoritative composite
+    //     sleep score AND stage durations from the same upstream — do not
+    //     overwrite under any circumstance.
+    //   - health_connect: skip if we already wrote this date in a previous sweep.
+    //   - csv import / other: HC supersedes (we keep iterating through and the
+    //     `existingByDate.set` below replaces it).
     if (existingByDate.has(date)) {
       const ex = existingByDate.get(date);
+      if (ex.source === 'garmin-worker') continue; // Worker is authoritative
       if (ex.source === 'health_connect') continue; // already from HC
     }
 
@@ -179,6 +193,16 @@ async function syncSleep() {
       }
     }
 
+    // Derive local-time HH:MM bedtime / waketime so the Sleep Regularity tile
+    // (which reads `sleepStart`) computes 7-night SD on HC-sourced rows too.
+    const startDate = new Date(sess.startTime);
+    const endDate   = new Date(sess.endTime);
+    const sleepStart = Number.isFinite(startDate.getTime())
+      ? `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`
+      : null;
+    const wakeTime = Number.isFinite(endDate.getTime())
+      ? `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`
+      : null;
     const record = {
       date,
       durationMinutes: Math.round(sess.durationMinutes || ((new Date(sess.endTime) - new Date(sess.startTime)) / 60000)),
@@ -186,26 +210,27 @@ async function syncSleep() {
       remSleepMinutes: Math.round(remMins),
       lightSleepMinutes: Math.round(lightMins),
       awakeMinutes: Math.round(awakeMins),
+      sleepStart,        // local "HH:MM" — used by Sleep Regularity tile
+      wakeTime,          // local "HH:MM"
       restingHR: null, // Populated separately from HeartRate sync
-      sleepScore: null, // Arnold computes this from stages
+      // sleepScore: Health Connect does NOT expose Garmin's proprietary
+      // sleep score — only the stage breakdown. Earlier this code computed
+      // an approximation from stages, which produced values that diverged
+      // significantly from what Garmin Connect/the watch displays (e.g.
+      // 86 from HC stages vs. 75 from Garmin's actual algorithm). The
+      // approximation was misleading users into trusting an Arnold-computed
+      // number as if it were Garmin's official score.
+      //
+      // Garmin's actual sleep score arrives only via the CSV export path
+      // (parseKeyValueSleep() / parseSleepCSV() → 'garmin-kv' source). When
+      // both an HC record and a CSV record exist for the same date, the
+      // merge logic in storage.set('sleep', ...) keeps the most recent
+      // write — so importing the daily Sleep.csv after HC has synced
+      // overrides this null with Garmin's real number.
+      sleepScore: null,
       source: 'health_connect',
       hcId: sess.id,
     };
-
-    // Arnold's sleep scoring: rough formula from stage distribution
-    // Deep 20%+ = good, REM 20%+ = good, awake < 10% = good
-    const total = record.durationMinutes || 1;
-    const deepPct = deepMins / total;
-    const remPct = remMins / total;
-    const awakePct = awakeMins / total;
-    record.sleepScore = Math.round(
-      Math.min(100,
-        (total >= 420 ? 30 : (total / 420) * 30) + // 7h+ = 30 pts
-        (deepPct >= 0.2 ? 25 : (deepPct / 0.2) * 25) + // deep 20%+ = 25 pts
-        (remPct >= 0.2 ? 25 : (remPct / 0.2) * 25) + // REM 20%+ = 25 pts
-        (awakePct <= 0.1 ? 20 : Math.max(0, (1 - awakePct / 0.3) * 20)) // awake <10% = 20 pts
-      )
-    );
 
     existingByDate.set(date, record);
     added++;
@@ -320,18 +345,21 @@ async function syncHeartRate() {
 
 // ── Sync: Daily Energy (Phase 4a — TDEE Tier 1 input) ───────────────────────
 // Reads daily-aggregate Steps, Active Calories, and Total Calories from HC
-// and merges them into dailyLogs[date]. The three HC streams are fetched in
-// parallel, indexed by date, and unioned — a date lands in dailyLogs only
-// if it has at least some movement signal (steps > 0 OR totalCalories > 0),
-// so Garmin-hasn't-synced-yet days don't pollute the log with zero rows.
+// and writes them into the dedicated `hcDailyEnergy` collection (NOT the
+// shared `dailyLogs` collection — that change was a Phase 4a bug fix).
 //
-// CRITICAL merge behavior: we merge into any existing dailyLogs[date] row
-// (which may hold fitActivities[] from FIT uploads, or rpe/notes from the
-// Daily Log UI). We ONLY set the three new fields plus a wellnessSource
-// marker — everything else on the existing row is preserved untouched.
+// Why a separate collection?
+//   FIT uploads (desktop) write to dailyLogs[today].fitActivities[].
+//   HC sync (phone-only) used to write totalCalories/activeCalories/steps
+//   onto the same dailyLogs[today] row. Two devices touching the same row
+//   produced an LWW race: whichever device's snapshot was newer overwrote
+//   the other's contribution, so a FIT uploaded on web could vanish after
+//   the phone's next push. Splitting the writers into disjoint collections
+//   eliminates the race entirely. tdee() Tier 1 reads from hcDailyEnergy.
 //
-// Downstream: tdee() Tier 1 reads dailyLogs[date].totalCalories when set
-// and skips the per-activity burn summation to avoid double-counting.
+// Schema:
+//   hcDailyEnergy : array of { date, steps, activeCalories, totalCalories,
+//                              wellnessSource, wellnessUpdatedAt }, newest first.
 
 async function syncDailyEnergy() {
   const lastSync = hcBridge.getLastSyncTime('dailyEnergy');
@@ -362,8 +390,8 @@ async function syncDailyEnergy() {
     return { synced: 0 };
   }
 
-  // Load current dailyLogs and index by date so we can merge, not replace.
-  const existing = storage.get('dailyLogs') || [];
+  // Load existing hcDailyEnergy rows and index by date so we update in place.
+  const existing = storage.get('hcDailyEnergy') || [];
   const byDate = new Map(existing.map(e => [e.date, e]));
 
   let updated = 0;
@@ -376,10 +404,8 @@ async function syncDailyEnergy() {
     // Small non-zero noise (< 100 steps, no cal totals) also gets skipped.
     if (steps < 100 && totalCalories === 0) continue;
 
-    const current = byDate.get(date) || { date };
     byDate.set(date, {
-      ...current,                         // preserve fitActivities, rpe, notes, etc.
-      date,                               // canonical date key (in case row was undefined)
+      date,
       steps,
       activeCalories,
       totalCalories,
@@ -392,7 +418,7 @@ async function syncDailyEnergy() {
   if (updated > 0) {
     const merged = Array.from(byDate.values())
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    storage.set('dailyLogs', merged);
+    storage.set('hcDailyEnergy', merged, { skipValidation: true });
   }
 
   hcBridge.setLastSyncTime('dailyEnergy', nowISO());
@@ -537,29 +563,22 @@ async function syncNutrition() {
 // ── Write-back: Arnold food log → Health Connect ────────────────────────────
 
 /**
- * Push an Arnold-logged food entry to Health Connect.
- * Call this after user logs food in NutritionInput.
- * @param {Object} entry - { name, calories, protein, carbs, fat, timestamp }
- * @returns {Promise<boolean>} true if write succeeded
+ * DISABLED — Arnold operates as a one-way reader of Health Connect.
+ *
+ * Cronometer is the authoritative source for nutrition / hydration: the
+ * Cronometer app writes directly to HC, and Cronometer's own GWT-RPC
+ * endpoint (Phase 3) is the live data path Arnold uses. Adding a second
+ * Arnold→HC write here would just duplicate what Cronometer already wrote
+ * (or worse — write conflicting values if Arnold's totals drift).
+ *
+ * Kept as a no-op stub so existing call sites keep working without changes.
+ * If you ever want to flip this back on, restore the body and remove this
+ * comment block.
+ *
+ * @returns {Promise<{success: false, disabled: true}>}
  */
-export async function writeBackNutrition(entry) {
-  if (!isNativePlatform()) return false;
-
-  const record = {
-    name: entry.name || entry.food || 'Food entry',
-    mealType: entry.meal === 'breakfast' ? 1 : entry.meal === 'lunch' ? 2 :
-              entry.meal === 'dinner' ? 3 : entry.meal === 'snack' ? 4 : 0,
-    startTime: entry.timestamp || new Date().toISOString(),
-    endTime: entry.timestamp || new Date().toISOString(),
-    energy: { calories: entry.calories || 0 },
-    protein: { grams: entry.protein || 0 },
-    carbs: { grams: entry.carbs || 0 },
-    fat: { grams: entry.fat || 0 },
-    source: 'arnold',
-  };
-
-  const result = await hcBridge.writeNutrition(record);
-  return result?.success || false;
+export async function writeBackNutrition(_entry) {
+  return { success: false, disabled: true };
 }
 
 // ── Master sync ─────────────────────────────────────────────────────────────

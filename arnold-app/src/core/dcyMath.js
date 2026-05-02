@@ -190,30 +190,182 @@ export function sessionStress(activity, ctx) {
   return 0;
 }
 
-// ─── Activity universe (merged stored + daily FIT, matches computeDailyScore)
+// ─── Activity universe — SINGLE SOURCE OF TRUTH for unified activity reads ─
+//
+// Every UI surface that wants a deduplicated, source-prioritized view of
+// the user's workouts calls this function. Previously useMobileData,
+// MobileEdgeIQ, SystemDetailPanel, and Arnold.jsx getUnifiedActivities
+// each had their own parallel implementation; drift between them caused
+// mile/workout-count discrepancies (CSV-imported runs and FIT-uploaded
+// runs of the same physical activity double-counted because their dedup
+// keys were different shapes). Consolidated 2026-04 into this one helper.
+//
+// SOURCE PRIORITY (highest wins):
+//   1. `activities` collection (Garmin CSV imports + manual entries).
+//      The trusted, full-record source.
+//   2. `dailyLogs[date].fitActivities[]` (FIT uploads via Today's
+//      Training UploadPill). Filled in ONLY for (date, canonicalType)
+//      slots that #1 doesn't already cover.
+//
+// EXCLUDED: entries with `source: 'health_connect'` — Phase 4a disabled
+// HC's exercise sync; any remaining HC rows in storage are stale ghosts.
+//
+// DEDUP: by (date, canonicalType). Garmin CSV labels a run as
+// `activityType: 'Running'` with title `'New York - Fartlek 100'`; a
+// FIT upload of the same run uses `activityType: 'Running'`. Both
+// collapse via canonicalize(), so today's run counts once not twice.
+
+function canonicalActivityType(s) {
+  if (!s) return 'workout';
+  const l = String(s).toLowerCase();
+  if (/run/.test(l))                                return 'run';
+  if (/strength|weight|gym|hyrox|circuit/.test(l))  return 'strength';
+  if (/walk/.test(l))                               return 'walk';
+  if (/cycle|bike|cycling/.test(l))                 return 'cycling';
+  if (/swim/.test(l))                               return 'swim';
+  if (/ski/.test(l))                                return 'ski';
+  return l;
+}
+
 let _activityUniverseCache = { hash: null, list: null };
 function activitiesHash() {
   const a = storage.get('activities') || [];
   const d = storage.get('dailyLogs') || [];
-  return `${a.length}:${d.length}:${a[a.length - 1]?.date || ''}:${d[d.length - 1]?.date || ''}`;
+  // Sum fitActivities counts across all dailyLogs so adding a FIT to an
+  // existing day's log invalidates the cache (without this, the dailyLogs
+  // array length stays the same and a stale list is returned forever).
+  let fitCount = 0;
+  for (const log of d) {
+    if (Array.isArray(log?.fitActivities)) fitCount += log.fitActivities.length;
+  }
+  return `${a.length}:${d.length}:${fitCount}:${a[a.length - 1]?.date || ''}:${d[d.length - 1]?.date || ''}`;
 }
+
 export function allActivities() {
   const h = activitiesHash();
   if (_activityUniverseCache.hash === h && _activityUniverseCache.list) return _activityUniverseCache.list;
-  const stored = storage.get('activities') || [];
+
+  const stored = (storage.get('activities') || []).filter(a => a && a.source !== 'health_connect');
   const dailyLogs = storage.get('dailyLogs') || [];
-  const fitActs = [];
-  for (const l of dailyLogs) {
-    if (!l?.date) continue;
-    const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
-      ? l.fitActivities
-      : (l.fitData ? [l.fitData] : []);
-    for (const fd of fits) if (fd) fitActs.push({ ...fd, date: l.date, source: 'daily_fit' });
+
+  // SEMANTICS:
+  //   - CSV is authoritative for SESSION COUNT. Two CSV runs on the same day
+  //     = two distinct sessions (user explicitly added them, e.g. morning +
+  //     evening). They both stay in the unified list.
+  //   - FIT entries fill EMPTY slots (date+canon-type with no CSV) — these
+  //     are runs that haven't been imported via CSV yet (e.g. today's FIT
+  //     before the YTD CSV is re-imported).
+  //   - FIT entries can REPLACE a CSV stub (a CSV row with 0 distance and
+  //     0/very-short duration) when FIT has real data — fixes the case where
+  //     Garmin's batch export pre-creates placeholder rows that block real
+  //     sensor data.
+  //   - FIT entries that match a real CSV entry (same date, same canon-type,
+  //     similar distance) are duplicate sources of the same activity → drop.
+  //
+  // The previous "keep both if both have real distance" heuristic
+  // double-counted runs whenever CSV + FIT covered the same activity, which
+  // happens routinely after a YTD CSV import that includes today's run plus
+  // today's FIT upload. CSV-authoritative semantics is more predictable.
+  const isFit = a => (a?.source === 'fit-daily' || a?.source?.type === 'fit');
+  const naturalKey = a => `${a.date}|${a.title || a.activityType || ''}|${a.startTime || a.time || ''}`;
+  const slotKey = a => `${a.date}|${canonicalActivityType(a.activityType || a.title)}`;
+  const isStub = a => (a?.distanceMi || 0) < 0.1 && (a?.durationSecs || 0) < 60;
+
+  const byNaturalKey = new Map();
+  // Track ALL entries (with full data) per slot so we can find a stub to
+  // replace when FIT comes in.
+  const slotEntries = new Map(); // slotKey -> array of naturalKeys
+
+  // Pass 1: stored CSV/manual activities — every entry kept, multiple per
+  // (date, canon-type) slot allowed.
+  for (const a of stored) {
+    if (!a?.date) continue;
+    const nk = naturalKey(a);
+    if (byNaturalKey.has(nk)) continue; // exact duplicate within CSV — skip
+    byNaturalKey.set(nk, a);
+    const sk = slotKey(a);
+    if (!slotEntries.has(sk)) slotEntries.set(sk, []);
+    slotEntries.get(sk).push(nk);
   }
-  const list = [...stored.filter((a) => a.source !== 'health_connect'), ...fitActs];
+
+  // Pass 2: FIT entries from dailyLogs.fitActivities[]
+  // FIT parser emits activityType labels like "Run (outdoor)" / "Strength" /
+  // "Cycling". Garmin's CSV export uses "Running" / "Strength Training" /
+  // "Cycling". Downstream filters in Arnold.jsx (e.g., the weekly Training
+  // panel's `runs = a => /running|trail/i.test(a.activityType)`) expect the
+  // CSV-style names — so when a FIT entry would surface in the unified list,
+  // we relabel it to the Garmin CSV convention. Without this, FIT-only runs
+  // get classified as "other" and disappear from weekly run counts.
+  const garminStyleType = (rawType) => {
+    const canon = canonicalActivityType(rawType);
+    switch (canon) {
+      case 'run':      return 'Running';
+      case 'strength': return 'Strength Training';
+      case 'walk':     return 'Walking';
+      case 'cycling':  return 'Cycling';
+      case 'swim':     return 'Swimming';
+      case 'ski':      return 'Resort Skiing';
+      default:         return rawType || 'Workout';
+    }
+  };
+  for (const log of dailyLogs) {
+    if (!log?.date) continue;
+    const fits = Array.isArray(log.fitActivities) && log.fitActivities.length
+      ? log.fitActivities
+      : (log.fitData ? [log.fitData] : []);
+    for (const fd of fits) {
+      if (!fd) continue;
+      const rawType = fd.activityType || fd.type || 'workout';
+      const enriched = {
+        date: log.date,
+        activityType: garminStyleType(rawType),
+        title: fd.title || rawType,
+        distanceMi: fd.distanceMi || null,
+        distanceKm: fd.distanceKm || (fd.distanceMi ? +(fd.distanceMi * 1.60934).toFixed(2) : null),
+        durationSecs: fd.durationSecs || (fd.durationMins ? fd.durationMins * 60 : 0),
+        avgPaceRaw: fd.avgPacePerMi || fd.avgPaceRaw || null,
+        avgHR: fd.avgHR || null,
+        maxHR: fd.maxHR || null,
+        calories: fd.calories || null,
+        startTime: fd.startTime || fd.time || null,
+        source: 'fit-daily',
+      };
+      const fitNk = naturalKey(enriched);
+      const fitSk = slotKey(enriched);
+      const fitMi = enriched.distanceMi || 0;
+      // Exact natural-key dedup (re-uploading same FIT)
+      if (byNaturalKey.has(fitNk)) continue;
+      const slotNks = slotEntries.get(fitSk) || [];
+      if (slotNks.length === 0) {
+        // No CSV in this slot — add FIT as a new entry
+        byNaturalKey.set(fitNk, enriched);
+        slotEntries.set(fitSk, [fitNk]);
+        continue;
+      }
+      // CSV exists in slot. Check if any CSV entry is a stub we can replace.
+      const stubNk = slotNks.find(nk => isStub(byNaturalKey.get(nk)));
+      if (stubNk && fitMi >= 0.1) {
+        // Replace the stub with this FIT (richer data, same session count)
+        byNaturalKey.delete(stubNk);
+        byNaturalKey.set(fitNk, enriched);
+        slotEntries.set(fitSk, [...slotNks.filter(k => k !== stubNk), fitNk]);
+        continue;
+      }
+      // Else: CSV claims slot with real data → FIT is duplicate source of an
+      // existing CSV session. Drop it. (User can re-import the YTD CSV if
+      // they want fresher Garmin-side aggregates; otherwise the existing
+      // entry stands.)
+    }
+  }
+
+  const list = [...byNaturalKey.values()].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   _activityUniverseCache = { hash: h, list };
   return list;
 }
+
+// Exported for any consumer that needs the same canonicalization rule
+// (DCY math, planner readers, etc.) — keeps it in one place.
+export { canonicalActivityType };
 
 // ─── Daily stress sum ───────────────────────────────────────────────────────
 export function dailyStress(dateStr) {

@@ -1,6 +1,8 @@
 // ─── ARNOLD Training Intelligence Engine ─────────────────────────────────────
 // Pure deterministic analysis — no AI. Takes parsed Garmin history, returns insights.
 
+import { parseLocalDate } from './dateUtils.js';
+
 const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -231,7 +233,7 @@ export function raceReadiness(activities, raceDistanceKm, raceDateStr) {
   }
 
   const now = new Date();
-  const raceDate = new Date(raceDateStr);
+  const raceDate = parseLocalDate(raceDateStr) || new Date(NaN);
   const daysUntil = Math.round((raceDate - now) / (1000 * 60 * 60 * 24));
   const weeksUntil = Math.max(0, Math.round(daysUntil / 7));
 
@@ -372,7 +374,8 @@ export function buildTrainingContext(activities, races = [], workouts = []) {
   if (upcomingRaces.length) {
     lines.push('Upcoming races:');
     for (const r of upcomingRaces.slice(0, 3)) {
-      const daysLeft = Math.round((new Date(r.date) - new Date()) / (1000 * 60 * 60 * 24));
+      const rd = parseLocalDate(r.date);
+      const daysLeft = rd ? Math.round((rd - new Date()) / (1000 * 60 * 60 * 24)) : 0;
       const readiness = activities.length ? raceReadiness(activities, r.distanceKm || 42.2, r.date) : null;
       lines.push(`- ${r.name || 'Race'} on ${r.date} — ${daysLeft} days away${readiness ? ` — readiness: ${readiness.score}/100` : ''}`);
     }

@@ -12,6 +12,8 @@
 import { getCatalog, getStack, getTodayTaken } from './supplements.js';
 import { getEntriesForDate } from './nutrition.js';
 import { storage } from './storage.js';
+import { getAvgWeeklyTrainingHours } from './trainingStress.js';
+import { getGoals } from './goals.js';
 
 // Local date helper — avoids UTC rollover bug with toISOString()
 const localDate = (d = new Date()) =>
@@ -115,34 +117,34 @@ export function getOptimalTargets(dateStr) {
   }
   const decadesOver30 = Math.max(0, (age - 30) / 10);
 
-  // ── Weekly training hours (last 7 days) ──
-  const activities = storage.get('activities') || [];
-  const dailyLogs  = storage.get('dailyLogs')  || [];
-  const now = dateStr ? new Date(dateStr) : new Date();
-  let trainingSecTotal = 0;
-  for (let d = 0; d < 7; d++) {
-    const dt = new Date(now);
-    dt.setDate(dt.getDate() - d);
-    const ds = localDate(dt);
-    for (const a of activities) {
-      if (a.date === ds) trainingSecTotal += (a.durationSecs || 0);
-    }
-    for (const l of dailyLogs) {
-      if (l.date !== ds) continue;
-      // Sum every FIT activity for the day (not just the legacy singular `fitData`)
-      const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
-        ? l.fitActivities
-        : (l.fitData ? [l.fitData] : []);
-      for (const fd of fits) {
-        if (!fd) continue;
-        trainingSecTotal += (fd.durationSecs || fd.durationMins * 60 || 0);
-      }
-    }
-  }
-  const weeklyTrainingHrs = trainingSecTotal / 3600;
+  // ── Average weekly training hours ──
+  // Use the canonical helper from trainingStress.js, which:
+  //   • Merges activities + dailyLogs.fitActivities the SAME way computeDailyScore does
+  //   • Filters health_connect ghost rows (legacy double-counting source)
+  //   • Averages over a 4-week window — stable enough to avoid the single-week
+  //     noise that produced unrealistic carb targets (529g) when one heavy
+  //     week landed inside the rolling 7-day window
+  const refDate = dateStr || localDate();
+  const { hoursPerWeek: weeklyTrainingHrs } = getAvgWeeklyTrainingHours(4, refDate);
+
+  // ── User-configured goals (canonical source for macros) ──
+  // The Goals UI lets the user set:
+  //   • dailyCalorieTarget — total kcal/day (1750 cut, 2200 maintenance, etc)
+  //   • proteinPct / carbPct / fatPct — split (default 30/40/30)
+  //   • dailyFiberTarget, dailyWaterTarget — explicit
+  // getGoals() derives gram targets from those (kcal × pct ÷ kcal_per_gram).
+  // We respect the user's explicit goal — model-driven macro targets ignore
+  // the calorie ceiling and routinely overshoot it (e.g. 419g carbs alone =
+  // 1676 kcal, which leaves no room for protein/fat in a 1750-kcal day).
+  const goalsObj = getGoals();
+  const goalCalories = parseFloat(goalsObj.dailyCalorieTarget) || 0;
+  const goalProtein  = parseFloat(goalsObj.dailyProteinTarget) || 0;
+  const goalCarbs    = parseFloat(goalsObj.dailyCarbTarget) || 0;
+  const goalFat      = parseFloat(goalsObj.dailyFatTarget) || 0;
+  const goalFiber    = parseFloat(goalsObj.dailyFiberTarget) || 0;
 
   // Cache key to avoid recomputing on every call within the same render cycle
-  const cacheKey = `${weightKg.toFixed(1)}|${age}|${weeklyTrainingHrs.toFixed(1)}`;
+  const cacheKey = `${weightKg.toFixed(1)}|${age}|${weeklyTrainingHrs.toFixed(1)}|${goalCalories}|${goalProtein}|${goalCarbs}|${goalFat}|${goalFiber}`;
   if (_targetCache && _targetCacheKey === cacheKey) return _targetCache;
 
   // ── Build target map ──
@@ -162,6 +164,15 @@ export function getOptimalTargets(dateStr) {
   for (const [name, model] of Object.entries(NUTRIENT_MODELS)) {
     if (model.alias) targets[name] = targets[model.alias] || 100;
   }
+
+  // ── Override macros with user-configured goal-derived targets ──
+  // SYSTEMS weights reference these exact keys (lowercase): calories, protein,
+  // carbs, fat, fiber. The user's calorie split is the authoritative source.
+  if (goalCalories > 0) targets.calories = goalCalories;
+  if (goalProtein  > 0) targets.protein  = goalProtein;
+  if (goalCarbs    > 0) targets.carbs    = goalCarbs;
+  if (goalFat      > 0) targets.fat      = goalFat;
+  if (goalFiber    > 0) targets.fiber    = goalFiber;
 
   _targetCache = targets;
   _targetCacheKey = cacheKey;
@@ -276,6 +287,92 @@ function estimateFoodNutrients(entries) {
   return out;
 }
 
+// ─── Nutrient-name normalization ────────────────────────────────────────────
+// EdgeIQ's SYSTEMS table keys on specific canonical names — many of which
+// INCLUDE parentheses on purpose (e.g. "NMN (Nicotinamide Mononucleotide)",
+// "Thiamin (B1)", "Magnesium L-Threonate (Magtein)"). Stripping parens
+// blindly would break those matches, so normalization is a 3-pass pipeline:
+//   1. Trim + exact alias lookup (handles known mismatches verbatim)
+//   2. Strip ONLY label-form qualifiers — "(as X)" and "(from X)" — which
+//      always describe the chemical form, never the canonical name
+//   3. Re-check alias and exact match
+const NUTRIENT_ALIASES = {
+  // OMRE TMG + B Complex — verbose label forms
+  'Trimethylglycine (TMG)':                          'Trimethylglycine (TMG/Betaine anhydrous)',
+  'Vitamin B2':                                      'Riboflavin (B2)',
+  'Vitamin B3':                                      'Niacin (B3)',
+  'Vitamin B1':                                      'Thiamin (B1)',
+  // Momentous Creatine
+  'Creatine Monohydrate':                            'Creatine',
+  // Generic shorthand variants people sometimes type
+  'Methylcobalamin':                                 'Vitamin B12',
+  'Cyanocobalamin':                                  'Vitamin B12',
+  'Cholecalciferol':                                 'Vitamin D3 (cholecalciferol)',
+  'Vitamin D3':                                      'Vitamin D3 (cholecalciferol)',
+  'Folic Acid':                                      'Folate',
+  'L-5-Methyl Folate':                               'Folate',
+  'Methylfolate':                                    'Folate',
+  'Pantothenic Acid':                                'Pantothenic acid',
+};
+
+function normalizeNutrientName(raw) {
+  if (!raw) return raw;
+  let s = String(raw).trim();
+  // Pass 1: exact alias / canonical match
+  if (NUTRIENT_ALIASES[s]) return NUTRIENT_ALIASES[s];
+  // Pass 2: strip label-form qualifiers ("(as X)", "(from X)") which describe
+  // the chemical form rather than name a different nutrient. Other parens
+  // (B1, KSM-66, Magtein, Nicotinamide Mononucleotide, etc.) are preserved.
+  // Allow leading whitespace inside the parens — some labels write "( as X)"
+  // with a space after the opening paren. Case-insensitive on "as"/"from".
+  const stripped = s.replace(/\s*\(\s*(?:as|from)\s+[^)]*\)/gi, '').trim();
+  if (stripped !== s) {
+    if (NUTRIENT_ALIASES[stripped]) return NUTRIENT_ALIASES[stripped];
+    return stripped;
+  }
+  return s;
+}
+
+// ─── Unit conversion ────────────────────────────────────────────────────────
+// SYSTEMS targets are denominated in a canonical unit per nutrient (mg, mcg,
+// IU, g). Catalog entries can be in any unit ("Creatine Monohydrate" is
+// usually labelled in g, B12 in mcg). Without conversion, "5 g of Creatine"
+// would land in the totals as 5 against a 5000 mg target. This map declares
+// the canonical unit; convertAmount() handles the rescale.
+const CANONICAL_UNITS = {
+  'Vitamin A': 'IU', 'Vitamin C': 'mg', 'Vitamin D3 (cholecalciferol)': 'IU',
+  'Vitamin E': 'IU', 'Vitamin K': 'mcg',
+  'Thiamin (B1)': 'mg', 'Riboflavin (B2)': 'mg', 'Niacin (B3)': 'mg',
+  'Vitamin B6': 'mg', 'Folate': 'mcg', 'Vitamin B12': 'mcg',
+  'Biotin': 'mcg', 'Pantothenic acid': 'mg',
+  'Calcium': 'mg', 'Iron': 'mg', 'Magnesium': 'mg', 'Phosphorus': 'mg',
+  'Potassium': 'mg', 'Sodium': 'mg', 'Zinc': 'mg', 'Copper': 'mg',
+  'Manganese': 'mg', 'Selenium': 'mcg', 'Chromium': 'mcg',
+  'EPA': 'mg', 'DHA': 'mg', 'Fish Oil (total)': 'mg',
+  'NMN (Nicotinamide Mononucleotide)': 'mg', 'Trans-Resveratrol': 'mg',
+  'Spermidine (wheat germ extract)': 'mg', 'Quercetin': 'mg', 'Fisetin': 'mg',
+  'Turmeric (curcumin extract)': 'mg', 'Beetroot powder concentrate': 'mg',
+  'Ashwagandha (KSM-66)': 'mg', 'Magnesium L-Threonate (Magtein)': 'mg',
+  'Apigenin': 'mg', 'Trimethylglycine (TMG/Betaine anhydrous)': 'mg',
+  'Shilajit resin': 'mg', 'Creatine': 'mg',
+};
+
+const MASS_FACTOR = { g: 1000, mg: 1, mcg: 0.001, ug: 0.001, μg: 0.001 };
+
+function convertAmount(amount, fromUnit, canonicalUnit) {
+  if (!amount) return 0;
+  const f = (fromUnit || '').toLowerCase().trim();
+  const c = (canonicalUnit || '').toLowerCase().trim();
+  if (!f || !c || f === c) return amount;
+  // Mass scaling — only between mg/mcg/g
+  if (MASS_FACTOR[f] != null && MASS_FACTOR[c] != null) {
+    return amount * (MASS_FACTOR[f] / MASS_FACTOR[c]);
+  }
+  // IU vs mass: no clean conversion (depends on form). Pass through; the
+  // target is in IU and the catalog should be too for the same nutrient.
+  return amount;
+}
+
 // ─── Add taken-today supplement nutrients ───────────────────────────────────
 function addSupplementNutrients(nutrients, dateStr) {
   const catalog = getCatalog();
@@ -290,7 +387,10 @@ function addSupplementNutrients(nutrients, dateStr) {
     if (!sup) continue;
     const mult = entry.doseMultiplier || 1;
     for (const n of sup.nutrients || []) {
-      add(n.name, (n.amount || 0) * mult);
+      const canonical = normalizeNutrientName(n.name);
+      const targetUnit = CANONICAL_UNITS[canonical] || n.unit;
+      const amt = convertAmount((n.amount || 0) * mult, n.unit, targetUnit);
+      add(canonical, amt);
     }
   }
 }
@@ -298,9 +398,12 @@ function addSupplementNutrients(nutrients, dateStr) {
 // ─── Full daily nutrient totals (food + supplements taken) ──────────────────
 //
 // DATA FLOW:
-//   Priority 1 — Cronometer daily summary (has real lab-grade micronutrients)
+//   Priority 0 — cronometerLive (live Worker pull cache — FRESHEST, what the
+//                Nutrition panel renders). Raw column-name keys. Read this
+//                first; it's updated every 5 minutes when the tab is visible.
+//   Priority 1 — Legacy `cronometer` storage rows (older CSV imports —
+//                normalized field names like vitaminB12, calcium, etc.)
 //   Priority 2 — nutritionLog manual entries (macros + keyword micro estimates)
-//   Priority 3 — Legacy cronometer storage fallback (macros only)
 //
 // Cronometer data is authoritative when present because it carries 15+
 // actual micronutrient values from a curated food database, whereas manual
@@ -310,35 +413,94 @@ export function getDailyNutrients(dateStr) {
   const nutrients = {};
   const add = (k, v) => { if (!v) return; nutrients[k] = (nutrients[k] || 0) + v; };
 
-  // ── Step 1: Check Cronometer for real micronutrient data ───────────────
   let hasCronometer = false;
+
+  // ── Step 0: Live Cronometer pull cache (cronometerLive[date].totals) ───
+  // This is the freshest source — populated by useCronometerToday on every
+  // poll/visibility-change. Keys here are Cronometer's raw column names like
+  // "Energy (kcal)", "Calcium (mg)". Map them into Arnold's nutrient buckets.
   try {
-    const crono = storage.get('cronometer') || [];
-    const dayC = crono.find(c => c.date === dateStr);
-    if (dayC && (parseFloat(dayC.calories) || 0) > 0) {
+    const live = storage.get('cronometerLive') || {};
+    const todayLive = live[dateStr];
+    const totals = todayLive?.totals;
+    if (totals && (parseFloat(totals['Energy (kcal)'] || totals['Energy']) || 0) > 0) {
       hasCronometer = true;
+      const pick = (...keys) => {
+        for (const k of keys) {
+          const v = totals[k];
+          if (v != null && !Number.isNaN(Number(v))) return Number(v);
+        }
+        return 0;
+      };
       // Macros
-      add('calories', parseFloat(dayC.calories) || 0);
-      add('protein',  parseFloat(dayC.protein)  || 0);
-      add('carbs',    parseFloat(dayC.carbs)    || 0);
-      add('fat',      parseFloat(dayC.fat)      || 0);
-      add('fiber',    parseFloat(dayC.fiber)    || 0);
-      // Real micronutrients (from Cronometer's food database)
-      if (dayC.vitaminD)  add('Vitamin D',  parseFloat(dayC.vitaminD)  || 0);
-      if (dayC.vitaminC)  add('Vitamin C',  parseFloat(dayC.vitaminC)  || 0);
-      if (dayC.vitaminA)  add('Vitamin A',  parseFloat(dayC.vitaminA)  || 0);
-      if (dayC.vitaminB12) add('Vitamin B12', parseFloat(dayC.vitaminB12) || 0);
-      if (dayC.folate)    add('Folate',     parseFloat(dayC.folate)    || 0);
-      if (dayC.calcium)   add('Calcium',    parseFloat(dayC.calcium)   || 0);
-      if (dayC.iron)      add('Iron',       parseFloat(dayC.iron)      || 0);
-      if (dayC.magnesium) add('Magnesium',  parseFloat(dayC.magnesium) || 0);
-      if (dayC.zinc)      add('Zinc',       parseFloat(dayC.zinc)      || 0);
-      if (dayC.potassium) add('Potassium',  parseFloat(dayC.potassium) || 0);
-      if (dayC.sodium)    add('Sodium',     parseFloat(dayC.sodium)    || 0);
-      if (dayC.omega3)    { add('EPA', (parseFloat(dayC.omega3) || 0) * 0.5); add('DHA', (parseFloat(dayC.omega3) || 0) * 0.5); }
-      if (dayC.selenium)  add('Selenium',   parseFloat(dayC.selenium)  || 0);
+      add('calories', pick('Energy (kcal)', 'Energy'));
+      add('protein',  pick('Protein (g)', 'Protein'));
+      add('carbs',    pick('Carbs (g)', 'Carbohydrates (g)', 'Net Carbs (g)'));
+      add('fat',      pick('Fat (g)', 'Fat'));
+      add('fiber',    pick('Fiber (g)', 'Fiber'));
+      // Vitamins
+      add('Vitamin A',   pick('Vitamin A (IU)', 'Vitamin A'));
+      add('Vitamin C',   pick('Vitamin C (mg)', 'Vitamin C'));
+      add('Vitamin D',   pick('Vitamin D (IU)', 'Vitamin D'));
+      add('Vitamin E',   pick('Vitamin E (mg)', 'Vitamin E'));
+      add('Vitamin K',   pick('Vitamin K (mcg)', 'Vitamin K'));
+      add('Thiamin (B1)',    pick('Thiamine (B1) (mg)', 'B1 (mg)', 'Thiamin'));
+      add('Riboflavin (B2)', pick('Riboflavin (B2) (mg)', 'B2 (mg)', 'Riboflavin'));
+      add('Niacin (B3)',     pick('Niacin (B3) (mg)', 'B3 (mg)', 'Niacin'));
+      add('Vitamin B6',  pick('Vitamin B6 (mg)', 'B6 (mg)'));
+      add('Folate',      pick('Folate (mcg)', 'Folate, Total (mcg)', 'Folate'));
+      add('Vitamin B12', pick('B12 (mcg)', 'Vitamin B12 (mcg)'));
+      add('Biotin',      pick('Biotin (mcg)'));
+      add('Pantothenic acid', pick('Pantothenic Acid (mg)', 'B5 (mg)'));
+      // Minerals
+      add('Calcium',   pick('Calcium (mg)', 'Calcium'));
+      add('Iron',      pick('Iron (mg)', 'Iron'));
+      add('Magnesium', pick('Magnesium (mg)', 'Magnesium'));
+      add('Phosphorus',pick('Phosphorus (mg)'));
+      add('Potassium', pick('Potassium (mg)', 'Potassium'));
+      add('Sodium',    pick('Sodium (mg)', 'Sodium'));
+      add('Zinc',      pick('Zinc (mg)', 'Zinc'));
+      add('Copper',    pick('Copper (mg)'));
+      add('Manganese', pick('Manganese (mg)'));
+      add('Selenium',  pick('Selenium (mcg)', 'Selenium'));
+      add('Chromium',  pick('Chromium (mcg)'));
+      // Fats
+      const epa = pick('Omega-3 EPA (g)', 'EPA (g)') * 1000; // g→mg
+      const dha = pick('Omega-3 DHA (g)', 'DHA (g)') * 1000;
+      const o3total = pick('Omega-3 (g)') * 1000;
+      if (epa) add('EPA', epa); else if (o3total) add('EPA', o3total * 0.5);
+      if (dha) add('DHA', dha); else if (o3total) add('DHA', o3total * 0.5);
     }
   } catch { /* ignore */ }
+
+  // ── Step 1: Legacy `cronometer` rows (CSV import format) ───────────────
+  if (!hasCronometer) {
+    try {
+      const crono = storage.get('cronometer') || [];
+      const dayC = crono.find(c => c.date === dateStr);
+      if (dayC && (parseFloat(dayC.calories) || 0) > 0) {
+        hasCronometer = true;
+        add('calories', parseFloat(dayC.calories) || 0);
+        add('protein',  parseFloat(dayC.protein)  || 0);
+        add('carbs',    parseFloat(dayC.carbs)    || 0);
+        add('fat',      parseFloat(dayC.fat)      || 0);
+        add('fiber',    parseFloat(dayC.fiber)    || 0);
+        if (dayC.vitaminD)  add('Vitamin D',  parseFloat(dayC.vitaminD)  || 0);
+        if (dayC.vitaminC)  add('Vitamin C',  parseFloat(dayC.vitaminC)  || 0);
+        if (dayC.vitaminA)  add('Vitamin A',  parseFloat(dayC.vitaminA)  || 0);
+        if (dayC.vitaminB12) add('Vitamin B12', parseFloat(dayC.vitaminB12) || 0);
+        if (dayC.folate)    add('Folate',     parseFloat(dayC.folate)    || 0);
+        if (dayC.calcium)   add('Calcium',    parseFloat(dayC.calcium)   || 0);
+        if (dayC.iron)      add('Iron',       parseFloat(dayC.iron)      || 0);
+        if (dayC.magnesium) add('Magnesium',  parseFloat(dayC.magnesium) || 0);
+        if (dayC.zinc)      add('Zinc',       parseFloat(dayC.zinc)      || 0);
+        if (dayC.potassium) add('Potassium',  parseFloat(dayC.potassium) || 0);
+        if (dayC.sodium)    add('Sodium',     parseFloat(dayC.sodium)    || 0);
+        if (dayC.omega3)    { add('EPA', (parseFloat(dayC.omega3) || 0) * 0.5); add('DHA', (parseFloat(dayC.omega3) || 0) * 0.5); }
+        if (dayC.selenium)  add('Selenium',   parseFloat(dayC.selenium)  || 0);
+      }
+    } catch { /* ignore */ }
+  }
 
   // ── Step 2: Fall back to nutritionLog entries (if no Cronometer) ────────
   if (!hasCronometer) {
@@ -672,6 +834,54 @@ export function getSystemsReport(dateStr) {
     };
   });
 }
+
+// ─── EdgeIQ debug helper (window.edgeIQDebug) ──────────────────────────────
+// Prints the full per-system per-nutrient breakdown so you can see exactly
+// which nutrient is dragging a system score down — including raw value,
+// target, pct, and where the value came from. Call from the browser console:
+//   edgeIQDebug()
+// or for a specific date:
+//   edgeIQDebug('2026-04-30')
+export function edgeIQDebug(dateStr) {
+  const d = new Date();
+  const today = dateStr || `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const { nutrients } = findBestNutrientDate(today);
+  const targets = getOptimalTargets(today);
+  console.log('%c=== EdgeIQ DEBUG · ' + today + ' ===', 'color:#6fd4e4;font-weight:700');
+  console.log('Daily nutrients (food + supplements taken):', nutrients);
+  for (const sys of SYSTEMS) {
+    const { pct } = scoreSystem(sys, nutrients, today);
+    console.log(`%c${sys.name} — ${pct}%`, 'color:#9ece6a;font-weight:700');
+    const rows = [];
+    for (const [nutr, w] of Object.entries(sys.weights)) {
+      let value = nutrients[nutr] || 0;
+      if (nutr === 'Vitamin D')   value += nutrients['Vitamin D3 (cholecalciferol)'] || 0;
+      if (nutr === 'Vitamin B12') value += nutrients['Vitamin B12 (methylcobalamin)'] || 0;
+      if (nutr === 'Magnesium')   value += nutrients['Elemental Magnesium'] || 0;
+      const target = targets[nutr] || 100;
+      const npct = Math.round(Math.min(value / target, 1.2) * 100);
+      rows.push({ nutrient: nutr, value: Math.round(value*100)/100, target: Math.round(target), pct: npct, weight: w });
+    }
+    console.table(rows);
+  }
+  // Surface ALL nutrient keys that are NON-ZERO but NOT referenced by any
+  // SYSTEMS weight — these are orphan keys (catalog name didn't normalize
+  // to a SYSTEMS canonical key).
+  const referenced = new Set();
+  for (const sys of SYSTEMS) for (const k of Object.keys(sys.weights)) referenced.add(k);
+  // Implicit aliases scoreSystem checks
+  referenced.add('Vitamin D3 (cholecalciferol)');
+  referenced.add('Vitamin B12 (methylcobalamin)');
+  referenced.add('Elemental Magnesium');
+  const orphans = Object.entries(nutrients)
+    .filter(([k, v]) => v > 0 && !referenced.has(k))
+    .map(([k, v]) => ({ name: k, value: Math.round(v*100)/100 }));
+  if (orphans.length) {
+    console.log('%cORPHAN nutrients (have value but no SYSTEMS weight references them):', 'color:#f87171;font-weight:700');
+    console.table(orphans);
+  }
+}
+if (typeof window !== 'undefined') window.edgeIQDebug = edgeIQDebug;
 
 // ─── Detailed breakdown for a single system ────────────────────────────────
 // Returns per-nutrient scores, targets, and values for the expanded tile view.

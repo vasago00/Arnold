@@ -226,6 +226,149 @@ export function nutritionBaseline(refDate = new Date(), lookbackDays = 14, { min
   return agg;
 }
 
+// ─── Partial-day forecast (Phase 4b.2) ──────────────────────────────────────
+// Two pure helpers that turn an in-progress Cronometer pull into a projection
+// of what the day will total by bedtime:
+//
+//   state      = partialDayState(date, now)      → { isPartial, alpha, … }
+//   projected  = forecastTotals(live, baseline, state)
+//
+// Used by fuelAdequacy() in dcy.js — when state.isPartial, it scores the
+// projected totals instead of the raw live totals, so an 800 kcal breakfast
+// doesn't collapse N to 0.3 at 10 a.m.
+//
+// α(t) schedule (current):
+//   Linear ramp from 0 at wake time → 1 at bedtime. α is the weight on the
+//   "live pace" projection; (1-α) is the weight on the 14-day baseline prior.
+//   So early morning trusts the baseline, late evening trusts live data.
+//
+// Guards:
+//   - fractionElapsed < 0.1 (first ~90 min after wake): live projection is
+//     unstable (divide-by-tiny), fall back to pure baseline.
+//   - baseline.daysWithData < 3: not enough history to blend against,
+//     fall back to live totals only (no forecast).
+//   - Historical date (not today): not a forecast — live totals are final.
+//   - After bedtime: same as historical — day is settled.
+
+const DEFAULT_WAKE_HOUR = 6;
+const DEFAULT_BEDTIME_HOUR = 22;
+
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+function getActiveWindow() {
+  try {
+    const profile = storage.get('profile') || {};
+    const wake = Number(profile.wakeHour);
+    const bed  = Number(profile.bedtimeHour);
+    return {
+      wakeHour:    Number.isFinite(wake) && wake >= 0 && wake < 24 ? wake : DEFAULT_WAKE_HOUR,
+      bedtimeHour: Number.isFinite(bed)  && bed > 0  && bed <= 24  ? bed  : DEFAULT_BEDTIME_HOUR,
+    };
+  } catch {
+    return { wakeHour: DEFAULT_WAKE_HOUR, bedtimeHour: DEFAULT_BEDTIME_HOUR };
+  }
+}
+
+/**
+ * Partial-day state derived from clock time vs the user's active window.
+ * @param {Date|string} [date]  — target date (defaults to today). Historical
+ *                                 dates always return isPartial:false.
+ * @param {Date}        [now]   — current time (injectable for backtest).
+ * @param {object}      [opts]  — override wakeHour / bedtimeHour.
+ * @returns {{
+ *   isPartial: boolean,
+ *   alpha: number,             // confidence in live-pace projection (0–1)
+ *   fractionElapsed: number,   // fraction of active window that's passed
+ *   wakeHour: number,
+ *   bedtimeHour: number,
+ *   hoursSinceWake: number,
+ *   now: Date,
+ * }}
+ */
+export function partialDayState(date = new Date(), now = new Date(), opts = {}) {
+  const win = { ...getActiveWindow(), ...opts };
+  const targetStr = typeof date === 'string' ? date : localDate(date);
+  const nowStr    = localDate(now);
+  const activeHours = win.bedtimeHour - win.wakeHour;
+
+  // Not today → day is final, not a forecast.
+  if (targetStr !== nowStr) {
+    return {
+      isPartial: false,
+      alpha: 1,
+      fractionElapsed: 1,
+      wakeHour: win.wakeHour,
+      bedtimeHour: win.bedtimeHour,
+      hoursSinceWake: activeHours,
+      now: new Date(now),
+    };
+  }
+
+  const hourNow = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const hoursSinceWake = Math.max(0, hourNow - win.wakeHour);
+  const fractionElapsed = clamp01(hoursSinceWake / activeHours);
+
+  // After bedtime → settled day, not a forecast either.
+  if (hourNow >= win.bedtimeHour) {
+    return {
+      isPartial: false,
+      alpha: 1,
+      fractionElapsed: 1,
+      wakeHour: win.wakeHour,
+      bedtimeHour: win.bedtimeHour,
+      hoursSinceWake: activeHours,
+      now: new Date(now),
+    };
+  }
+
+  return {
+    isPartial: true,
+    alpha: fractionElapsed,            // linear schedule for now
+    fractionElapsed,
+    wakeHour: win.wakeHour,
+    bedtimeHour: win.bedtimeHour,
+    hoursSinceWake,
+    now: new Date(now),
+  };
+}
+
+/**
+ * Blend in-progress live totals with a historical baseline to project the
+ * day's final totals.
+ *
+ *   projected = α × (live / fractionElapsed) + (1 − α) × baseline
+ *
+ * @param {object} liveTotals — {calories, protein, carbs, fat, fiber, sugar, water}
+ * @param {object} baseline   — same shape + daysWithData, from nutritionBaseline()
+ * @param {object} state      — from partialDayState()
+ * @returns {object} projected totals in the same shape
+ */
+export function forecastTotals(liveTotals = {}, baseline = {}, state = {}) {
+  const alpha = Number.isFinite(state.alpha) ? state.alpha : 1;
+  const fe    = Number.isFinite(state.fractionElapsed) ? state.fractionElapsed : 1;
+  const baselineDays = Number(baseline.daysWithData) || 0;
+  const out = {};
+
+  // Confidence guard: not enough baseline history to blend → live only.
+  if (baselineDays < 3) {
+    for (const k of MACRO_KEYS) out[k] = Number(liveTotals[k]) || 0;
+    return out;
+  }
+  // Early-morning guard: projection numerically unstable → pure baseline.
+  if (fe < 0.1) {
+    for (const k of MACRO_KEYS) out[k] = Number(baseline[k]) || 0;
+    return out;
+  }
+
+  for (const k of MACRO_KEYS) {
+    const live = Number(liveTotals[k]) || 0;
+    const base = Number(baseline[k]) || 0;
+    const proj = live / fe;
+    out[k] = Math.round(alpha * proj + (1 - alpha) * base);
+  }
+  return out;
+}
+
 // ─── Meal breakdown for a day ───────────────────────────────────────────────
 
 export function mealBreakdown(dateStr) {

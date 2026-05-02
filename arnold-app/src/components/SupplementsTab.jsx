@@ -54,6 +54,116 @@ export function SupplementsTab({ showToast }) {
   const [form, setForm] = useState(emptyForm);
   const [confirmDelete, setConfirmDelete] = useState(null); // supplement id
   const [slotPicker, setSlotPicker] = useState(null); // supplement id — shows slot picker inline
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupMsg, setLookupMsg] = useState(null); // { kind, text }
+
+  // ─── AI label lookup ────────────────────────────────────────────────────
+  // Sends brand + product name to Claude, parses back the Supplement Facts
+  // panel as structured JSON, populates the form fields. User reviews and
+  // edits before saving. Uses VITE_ANTHROPIC_API_KEY (already configured for
+  // other AI features in Arnold).
+  async function lookupSupplement() {
+    setLookupBusy(true);
+    setLookupMsg(null);
+    try {
+      const system = `You are a supplement-label data extractor. Output ONLY valid JSON, no preamble, no markdown fences. Use Supplement Facts panel data from the actual product label. Do not invent values — if you can't verify a nutrient amount, omit that row entirely. Skip proprietary blends without specific amounts.`;
+      const user = `Look up the Supplement Facts panel for: ${form.brand.trim()} ${form.product.trim()}.
+
+Return JSON in this exact shape:
+{
+  "servingSize": "1 capsule",
+  "form": "capsule",
+  "nutrients": [
+    {"name": "Vitamin D3 (cholecalciferol)", "amount": 5000, "unit": "IU"}
+  ],
+  "notes": "optional 1-2 sentence note about the supplement's primary purpose"
+}
+
+Rules:
+- Form must be one of: capsule, gel capsule, powder, liquid, gummy, tablet, lozenge, spray
+- Common units: mg, mcg, g, IU, kcal
+- Include all major vitamins, minerals, and active compounds with quantified amounts
+- For amount, use just the number (no commas, no units in the amount field)
+- If you can't find or verify the product, output {"error": "not_found"}`;
+
+      // Route through Cloud Sync Worker — Anthropic key lives there as a
+      // secret, no CORS, central rate limiting. Falls back to direct-browser
+      // call when Worker is unconfigured.
+      const ep  = (localStorage.getItem('arnold:cloud-sync:endpoint') || '').replace(/\/$/, '');
+      const tok = localStorage.getItem('arnold:cloud-sync:token') || '';
+      let res, data;
+      if (ep && tok) {
+        res = await fetch(`${ep}/ai/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${tok}` },
+          body: JSON.stringify({ system, user, max: 1500, model: 'claude-sonnet-4-5-20250929' }),
+        });
+      } else {
+        const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY || '';
+        if (!apiKey) {
+          setLookupMsg({ kind: 'err', text: 'AI not configured — set ANTHROPIC_API_KEY on Worker or add VITE_ANTHROPIC_API_KEY to .env' });
+          return;
+        }
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+            'anthropic-dangerous-allow-browser': 'true',
+          },
+          body: JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1500, system, messages: [{ role: 'user', content: user }] }),
+        });
+      }
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        // Fallback: if Worker says not configured, try direct
+        if (e?.error === 'ai_not_configured' && import.meta.env.VITE_ANTHROPIC_API_KEY) {
+          setLookupMsg({ kind: 'err', text: 'Worker AI not configured. Run: wrangler secret put ANTHROPIC_API_KEY' });
+        } else {
+          setLookupMsg({ kind: 'err', text: `API error ${res.status}: ${e.error?.message || e?.detail || ''}` });
+        }
+        return;
+      }
+      data = await res.json();
+      const text = data.content?.[0]?.text || '';
+      // Strip code fences if Claude added any
+      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      let parsed;
+      try { parsed = JSON.parse(cleaned); }
+      catch {
+        setLookupMsg({ kind: 'err', text: 'Could not parse AI response — try again or fill manually' });
+        return;
+      }
+      if (parsed.error === 'not_found') {
+        setLookupMsg({ kind: 'err', text: 'Product not found — fill manually' });
+        return;
+      }
+      // Populate the form. Don't overwrite brand/product (user typed those).
+      setForm(f => ({
+        ...f,
+        servingSize: parsed.servingSize || f.servingSize,
+        form: ['capsule','gel capsule','powder','liquid','gummy','tablet','lozenge','spray'].includes(parsed.form) ? parsed.form : f.form,
+        notes: parsed.notes || f.notes,
+        nutrients: Array.isArray(parsed.nutrients) && parsed.nutrients.length
+          ? parsed.nutrients.map(n => ({
+              name: String(n.name || '').trim(),
+              amount: String(n.amount ?? ''),
+              unit: String(n.unit || 'mg').trim(),
+            })).filter(n => n.name && n.amount)
+          : f.nutrients,
+      }));
+      setLookupMsg({
+        kind: 'ok',
+        text: `Filled ${parsed.nutrients?.length || 0} nutrients — verify against the actual label`,
+      });
+    } catch (err) {
+      setLookupMsg({ kind: 'err', text: String(err?.message || err) });
+    } finally {
+      setLookupBusy(false);
+    }
+  }
 
   const byId = Object.fromEntries(catalog.map(s => [s.id, s]));
   const adherence = getAdherence(7);
@@ -296,6 +406,32 @@ export function SupplementsTab({ showToast }) {
                 onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} />
               <input style={inputStyle} placeholder="Product name *" value={form.product}
                 onChange={e => onProductChange(e.target.value)} />
+            </div>
+
+            {/* AI lookup — fills serving size, form, nutrients, notes from
+                brand+product. Useful for new supplements with long ingredient
+                lists. User can edit any field after lookup before saving. */}
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <button
+                type="button"
+                onClick={lookupSupplement}
+                disabled={lookupBusy || !form.brand.trim() || !form.product.trim()}
+                style={{
+                  padding:'5px 12px', fontSize:11, fontWeight:500,
+                  background: lookupBusy ? 'rgba(168,139,250,0.2)' : 'rgba(168,139,250,0.15)',
+                  color: '#a78bfa',
+                  borderWidth:'0.5px', borderStyle:'solid', borderColor:'rgba(168,139,250,0.4)',
+                  borderRadius:4, cursor: lookupBusy ? 'wait' : 'pointer',
+                  opacity: (!form.brand.trim() || !form.product.trim()) ? 0.5 : 1,
+                }}
+                title="Auto-fill nutrients from the supplement label using AI lookup. Verify against the actual product before saving.">
+                {lookupBusy ? '✦ Looking up…' : '✦ Look up label'}
+              </button>
+              {lookupMsg && (
+                <span style={{ fontSize:10, color: lookupMsg.kind === 'ok' ? '#4ade80' : '#fbbf24' }}>
+                  {lookupMsg.text}
+                </span>
+              )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>

@@ -39,6 +39,7 @@ const ENCRYPTED_PREFIX = 'enc:'; // marks ciphertext values in localStorage
 const ENCRYPTED_COLLECTIONS = new Set([
   'hrv', 'sleep', 'weight', 'dailyLogs', 'profile',  // HIGH
   'cronometerAuth',                                   // CRITICAL — stores password
+  'garminAuth',                                       // CRITICAL — stores Garmin password
 ]);
 // Backup slots are handled separately (they use raw localStorage keys)
 const ENCRYPTED_RAW_KEYS = new Set([
@@ -222,7 +223,15 @@ export const KEYS = {
   cronometer:    'arnold:cronometer',
   cronometerAuth: 'arnold:cronometer-auth',    // { user, pass } — encrypted at rest, syncs via cloud-sync blob
   cronometerLive: 'arnold:cronometer-live',    // worker response cache: { date → { totals, rows, fetchedAt } }
+  garminAuth:    'arnold:garmin-auth',         // { user, pass } — encrypted at rest, syncs via cloud-sync blob (Phase 4c: Wellness Worker)
+  garminLive:    'arnold:garmin-live',         // worker response cache: { date → { sleep, stress, body, readiness, summary, fetchedAt } }
+  garminWellnessMeta: 'arnold:garmin-wellness-meta', // { lastSyncAt, lastError, lastDate } — UI staleness indicator
+  wellness:      'arnold:wellness',            // Phase 4c: per-date Garmin wellness rows { date, bodyBatteryStart/End/Min/Max, avgStress/maxStress, trainingReadiness, recoveryHours, ... } — read by tile registry's recovery/body metrics
   hcSyncMeta:    'arnold:hc-sync-meta',        // Phase 4a: { dataType → ISO timestamp } last successful HC sync per stream, syncs to all paired devices
+  hcDailyEnergy: 'arnold:hc-daily-energy',     // Phase 4a Bug fix: array of {date, steps, activeCalories, totalCalories, wellnessSource, wellnessUpdatedAt} — owned exclusively by syncDailyEnergy. Separated from dailyLogs to avoid LWW race when phone-only HC writes collide with desktop-only FIT uploads on the same row.
+  labSnapshots:  'arnold:lab-snapshots',       // Lab/blood panel results — previously only inside the vitals-v4 blob (not synced). Now in KEYS so cloud-sync propagates labs entered on web to paired devices.
+  clinicalTests: 'arnold:clinical-tests',      // Clinical test records (RMR, DEXA, etc.) — same migration as labSnapshots.
+  startTilePrefs: 'arnold:start-tile-prefs',  // Phase 4b: user's chosen Start-screen tiles per category (run/strength/recovery/body). Shape: { run: ['avgHR','cadence',...], strength: [...], recovery: [...], body: [...] }. Min 2, max 4 per category. Syncs cross-device via LWW.
 
   // User-owned
   workouts:      'arnold:workouts',
