@@ -9,6 +9,11 @@
 import { paceToSecs, secsToFmtPace } from './trainingIntelligence.js';
 import { storage } from './storage.js';
 import { isRun, isStrength } from './activityClass.js';
+// Phase 4r.energy.3 — pulled from dcyMath via dynamic getter to avoid
+// the circular module-load issue (dcyMath imports from this file).
+// Wrapper function evaluates the import at call time, not load time.
+import * as _dcyMathModule from './dcyMath.js';
+const _allActivitiesDeduped = () => _dcyMathModule.allActivities();
 
 // Local date helper (avoids UTC rollover — toISOString uses UTC, not local tz)
 const localDate = (d = new Date()) =>
@@ -72,24 +77,113 @@ function parseReps(repStr) {
  * @param {string} opts.ftpPace      - functional threshold pace "mm:ss" per mile
  * @returns {{ rTSS, ngpPace, intensityFactor, efficiencyFactor }}
  */
-export function computeRTSS({ durationSecs, avgPaceRaw, avgHR, ftpPace }) {
+/**
+ * Lifetime max-HR estimate with a sane fallback ladder. Same logic
+ * everywhere so hrTSS / IF_hr / ACWR computations don't disagree across
+ * panels (Phase 4o.daily.22).
+ *
+ * Ladder:
+ *   1. profile.maxHR              (user-set; canonical)
+ *   2. Lifetime peak across acts  (highest maxHR observed in FIT history)
+ *   3. 220 − profile.age          (when age is known)
+ *   4. 185 bpm                    (sensible adult default)
+ *
+ * IMPORTANT: never fall back to a single session's maxHR. Strength
+ * sessions naturally cap below true threshold, so using fd.maxHR makes
+ * the same workout score higher in some panels than others.
+ *
+ * @param {object} profile  e.g. { maxHR, age }
+ * @param {Array}  activities  array of activity rows with .maxHR field
+ * @returns {number}
+ */
+export function getEffectiveMaxHR(profile, activities) {
+  let mhr = parseFloat(profile?.maxHR) || null;
+  if (!mhr && Array.isArray(activities)) {
+    const peaks = activities
+      .map(a => parseFloat(a?.maxHR) || 0)
+      .filter(v => v > 100 && v < 220);
+    if (peaks.length) mhr = Math.max(...peaks);
+  }
+  if (!mhr && profile?.age) mhr = 220 - parseFloat(profile.age);
+  if (!mhr) mhr = 185;
+  return mhr;
+}
+
+/**
+ * HR-anchored Training Stress Score — for sessions without pace or power.
+ * Used as the fallback "load" metric on strength / circuit / general
+ * cardio days where rTSS (pace-based) and Tonnage (template-based) can't
+ * be computed. Mirrors TrainingPeaks' hrTSS formula:
+ *
+ *   hrTSS = (durationSecs / 3600) × IF² × 100
+ *   IF    = avgHR / thresholdHR        (threshold defaults to 0.88 × maxHR)
+ *
+ * Returns null when avgHR or duration is missing, or no maxHR/thresholdHR
+ * is known. The 0-200 scale matches rTSS so a single gauge can render
+ * either without rescaling (1 hr at threshold = 100).
+ *
+ * @param {{durationSecs:number, avgHR:number, maxHR?:number, thresholdHR?:number}} args
+ * @returns {{hrTSS:number, intensityFactor:number}|{hrTSS:null}}
+ */
+export function computeHrTSS({ durationSecs, avgHR, maxHR, thresholdHR }) {
+  if (!durationSecs || !avgHR) return { hrTSS: null };
+  const tHR = thresholdHR || (maxHR ? maxHR * 0.88 : null);
+  if (!tHR) return { hrTSS: null };
+  const IF = avgHR / tHR;
+  const hrTSS = (durationSecs / 3600) * IF * IF * 100;
+  return {
+    hrTSS: Math.round(hrTSS * 10) / 10,
+    intensityFactor: Math.round(IF * 100) / 100,
+  };
+}
+
+export function computeRTSS({ durationSecs, avgPaceRaw, avgHR, ftpPace, maxHR, thresholdHR }) {
   const ngpSpeed = paceToSpeed(avgPaceRaw); // NGP ≈ avg pace (no elevation data)
   const ftpSpeed = paceToSpeed(ftpPace);
   if (!ngpSpeed || !ftpSpeed || !durationSecs) {
-    return { rTSS: null, ngpPace: avgPaceRaw, intensityFactor: null, efficiencyFactor: null };
+    return { rTSS: null, ngpPace: avgPaceRaw, intensityFactor: null, efficiencyFactor: null, ifSource: null };
   }
 
-  const IF = ngpSpeed / ftpSpeed; // Intensity Factor
-  const rTSS = (durationSecs * ngpSpeed * IF) / (ftpSpeed * 3600) * 100;
+  // ── Pace-based IF (the legacy formula) ──
+  const IF_pace = ngpSpeed / ftpSpeed;
 
-  // Efficiency Factor: speed / HR (higher = more efficient)
+  // ── HR-based IF (Joel Friel's hrTSS approach) ──
+  // Threshold HR ≈ 88% of maxHR if not set explicitly. If we don't have
+  // either piece, IF_hr stays null and we fall back to pace-only.
+  const tHR = thresholdHR || (maxHR ? maxHR * 0.88 : null);
+  const IF_hr = (avgHR && tHR) ? avgHR / tHR : null;
+
+  // Take the LOWER of the two when both are available. Rationale:
+  // a well-trained runner cruising in Z2 can hit a "fast" absolute pace
+  // (high IF_pace) while their HR sits much lower than threshold
+  // (low IF_hr). The metabolic load is the bottleneck — HR. Conversely,
+  // intervals with tired legs can have HR drift higher than pace
+  // suggests; pace becomes the bottleneck. min() honours whichever is
+  // limiting and stops pace-only IF from overstating long-aerobic runs.
+  let IF, ifSource;
+  if (IF_hr != null) {
+    if (IF_hr < IF_pace) { IF = IF_hr;   ifSource = 'hr'; }
+    else                 { IF = IF_pace; ifSource = 'pace'; }
+  } else {
+    IF = IF_pace;
+    ifSource = 'pace';
+  }
+
+  // rTSS = duration_hours × IF² × 100 (= 100 for 1 hr at threshold).
+  const rTSS = (durationSecs / 3600) * IF * IF * 100;
+
+  // Efficiency Factor: speed / HR (higher = more efficient).
+  // ngpSpeed is mi/sec; multiply by 3600 to get mi/hr per BPM.
   const ef = avgHR && avgHR > 0 ? (ngpSpeed * 3600 / avgHR) : null;
 
   return {
     rTSS: Math.round(rTSS * 10) / 10,
     ngpPace: avgPaceRaw,
-    intensityFactor: Math.round(IF * 100) / 100,
-    efficiencyFactor: ef ? Math.round(ef * 100) / 100 : null,
+    intensityFactor:    Math.round(IF      * 100) / 100,
+    intensityFactorPace:Math.round(IF_pace * 100) / 100,
+    intensityFactorHR:  IF_hr != null ? Math.round(IF_hr * 100) / 100 : null,
+    efficiencyFactor:   ef ? Math.round(ef * 100) / 100 : null,
+    ifSource,
   };
 }
 
@@ -100,7 +194,7 @@ export function computeRTSS({ durationSecs, avgPaceRaw, avgHR, ftpPace }) {
  * @param {string} ftpPace - FTP pace "mm:ss"
  * @returns {{ acuteLoad, chronicLoad, ratio, zone }}
  */
-export function computeAcuteChronicRatio(activities, dateStr, ftpPace) {
+export function computeAcuteChronicRatio(activities, dateStr, ftpPace, maxHR) {
   if (!activities?.length || !ftpPace) {
     return { acuteLoad: 0, chronicLoad: 0, ratio: null, zone: 'no_data' };
   }
@@ -121,7 +215,9 @@ export function computeAcuteChronicRatio(activities, dateStr, ftpPace) {
         const { rTSS } = computeRTSS({
           durationSecs: r.durationSecs,
           avgPaceRaw: r.avgPaceRaw,
+          avgHR: r.avgHeartRate || r.avgHR,
           ftpPace,
+          maxHR,
         });
         return sum + (rTSS || 0);
       }, 0);
@@ -423,20 +519,20 @@ export function computeDailyScore(dateStr) {
   const nutritionLog = storage.get('nutritionLog') || [];
   const today = dateStr || localDate();
 
-  // Merge CSV activities + daily FIT uploads into one list.
-  // A day can have multiple FIT uploads (`fitActivities` array); fall back to legacy
-  // singular `fitData` for older rows so both shapes are handled.
-  const fitActs = [];
-  for (const l of dailyLogs) {
-    if (!l?.date) continue;
-    const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
-      ? l.fitActivities
-      : (l.fitData ? [l.fitData] : []);
-    for (const fd of fits) {
-      if (fd) fitActs.push({ ...fd, date: l.date, source: 'daily_fit' });
-    }
-  }
-  const activities = [...allActivities.filter(a => a.source !== 'health_connect'), ...fitActs];
+  // Phase 4r.energy.3 — route through the canonical deduped activity
+  // universe instead of concatenating sources raw. The old code
+  //   const activities = [...allActivities..., ...fitActs];
+  // counted the same physical workout up to 3 times when Garmin worker
+  // import + FIT daily upload + CSV stub all carried it. Today's
+  // 12.4mi run produced 443 rTSS (3 × ~150) and flipped the gauge to
+  // OVERREACHING. With dedup, real rTSS lands around 130-150 SOLID.
+  //
+  // dcyMath.js imports computeRTSS/computeTonnage from this file, so
+  // there's a circular dependency between the two modules. ES modules
+  // handle this fine as long as we don't access the imported symbol
+  // at module top-level — calling it inside this function body is
+  // safe because both modules are fully loaded by then.
+  const activities = _allActivitiesDeduped();
 
   const buckets = { activity: [], nutrition: [], body: [] };
   const factors = [];
@@ -457,6 +553,10 @@ export function computeDailyScore(dateStr) {
   const todayStrength = todayActs.filter(isStrength);    // excludes HIIT
   const todayHyrox = todayActs.filter(a => /hyrox|circuit/i.test(`${a.activityType||''} ${a.activityName||''}`));
   const ftpPace = goals.functionalThresholdPace || '8:30';
+  // Unified maxHR ladder (Phase 4o.daily.22) — same logic in every panel
+  // so hrTSS doesn't disagree between Daily / EdgeIQ / Activity tile.
+  const maxHR = getEffectiveMaxHR(goals, activities);
+  const thresholdHR = parseFloat(goals.thresholdHR) || null;
   const bodyweight = parseFloat(goals.targetWeight) || parseFloat(goals.weight) || 175;
 
   // Track session type and primary metric for the label
@@ -474,7 +574,7 @@ export function computeDailyScore(dateStr) {
         durationSecs: run.durationSecs,
         avgPaceRaw: run.avgPaceRaw,
         avgHR: run.avgHeartRate || run.avgHR,
-        ftpPace,
+        ftpPace, maxHR, thresholdHR,
       });
       totalRTSS += (rTSS || 0);
     }
@@ -516,6 +616,37 @@ export function computeDailyScore(dateStr) {
       // Primary metric: tonnage for strength, rTSS takes priority for mixed
       if (!sessionMetric) {
         sessionMetric = { label: 'Tonnage', value: `${totalTonnage.toLocaleString()}` };
+      }
+    } else {
+      // ── hrTSS fallback (Phase 4o.daily.20) ─────────────────────────
+      // No matching strength template → no tonnage. But the FIT file
+      // still carries duration + avgHR for these strength sessions, so
+      // we derive an hrTSS-style "Load" so the day registers in the
+      // score engine and the hero gauge instead of reading REST.
+      let totalLoad = 0;
+      for (const act of strengthOrHyrox) {
+        const { hrTSS } = computeHrTSS({
+          durationSecs: act.durationSecs,
+          avgHR:        act.avgHR || act.avgHeartRate,
+          maxHR, thresholdHR,
+        });
+        if (hrTSS) totalLoad += hrTSS;
+      }
+      if (totalLoad > 0) {
+        // Scale Load against the rTSS benchmark (100 = 1 hr at threshold).
+        // Same denominator as rTSS so the score domain stays consistent
+        // across run/strength sessions.
+        const val = Math.min(totalLoad / RTSS_BENCHMARK, 1.2);
+        buckets.activity.push({ val, w: FACTOR_W.rTSS });
+        factors.push({
+          label: 'Load', value: `${Math.round(totalLoad)}`, domain: 'activity',
+          status: val >= 0.8 ? 'good' : val >= 0.5 ? 'warning' : 'poor',
+        });
+        if (sessionType === 'run') sessionType = 'mixed';
+        else sessionType = 'strength';
+        if (!sessionMetric) {
+          sessionMetric = { label: 'Load', value: Math.round(totalLoad) };
+        }
       }
     }
   }
@@ -807,19 +938,10 @@ export function getAvgWeeklyTrainingHours(weeks = 4, refDate) {
   const today = refDate || localDate();
   const days = weeks * 7;
 
-  const allActivities = storage.get('activities') || [];
-  const dailyLogs     = storage.get('dailyLogs')  || [];
-
-  // Build the same merged-and-deduplicated list computeDailyScore uses
-  const fitActs = [];
-  for (const l of dailyLogs) {
-    if (!l?.date) continue;
-    const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
-      ? l.fitActivities
-      : (l.fitData ? [l.fitData] : []);
-    for (const fd of fits) if (fd) fitActs.push({ ...fd, date: l.date });
-  }
-  const merged = [...allActivities.filter(a => a.source !== 'health_connect'), ...fitActs];
+  // Phase 4r.energy.3 — use the canonical deduped list so weekly hours
+  // don't triple-count any session that came in through multiple
+  // sources (worker + FIT upload + CSV stub).
+  const merged = _allActivitiesDeduped();
 
   // Window dates
   const windowDates = new Set();

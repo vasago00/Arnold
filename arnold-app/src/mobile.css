@@ -56,9 +56,13 @@
 
   /* ═══════════════════════════════════════════════════════════════════════════
      MAIN CONTENT — glassmorphic background
-     ═══════════════════════════════════════════════════════════════════════════ */
+     ═══════════════════════════════════════════════════════════════════════════
+     Phase 4q.frame.2 — top padding removed so the ARNOLD mark sits at the
+     same vertical offset as on Start/EdgeIQ. Each tab's header brings its
+     own top spacing (~10px) — we don't need an extra 12px band above it.
+   */
   .arnold-main {
-    padding: 12px !important;
+    padding: 0 12px !important;
     padding-bottom: 100px !important;  /* extra room for bottom nav bar */
     min-height: 100vh !important;
   }

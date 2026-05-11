@@ -403,33 +403,41 @@ export function tdeeWithTier(dateStr) {
  * Pre-data fallback: if NO macro is logged (intake totals all zero), returns
  * 1 so dcy() collapses to F − 0.1·G — the "assume normal" posture.
  */
-// Resolve the macro numerator for N. On a finished day (historical, or after
-// bedtime today), that's just the live totals from dailyTotals(). On a day
-// still in progress, we project: α × (live / fractionElapsed) + (1-α) × baseline.
-// When baseline history is thin (< 3 logged days), we skip the forecast and
-// use live totals so a new user doesn't see an unreliable projection.
-// Shared by fuelAdequacy() and fuelBreakdown() so both sides see the same math.
+// Resolve the macro numerator for N. The fuel pillar now uses ACTUAL
+// logged intake — what the user has eaten so far today — not a forward
+// projection.
+//
+// Phase 4r.dcy.1 — previously, on a partial day with ≥ 3 days of baseline
+// history, we projected today's totals via
+//   α × (live / fractionElapsed) + (1−α) × baseline
+// and fed that into N. The intent was charitable ("don't drag DCY down
+// just because the user hasn't eaten breakfast yet"), but it broke the
+// score's ability to *flag* under-fueling: by mid-afternoon it would
+// assume the user would eat the rest of their typical day's intake, so
+// fuel-N stayed near 1.0 even when calories were genuinely behind.
+//
+// User feedback: the DCY needs to surface "you need to eat" — i.e. the
+// score should reflect what's actually been logged, not what we expect
+// the user to log. Switched to live-only.
+//
+// `projected` is still computed when partial-day + baseline allow, and
+// returned alongside `live` so the UI can keep showing a "Projected
+// finish" diagnostic line; it just no longer drives the score.
 function effectiveIntake(dateStr) {
   const date = dateStr || localDate();
   const liveTotals = dailyTotals(date) || {};
   const state = partialDayState(date);
   const baseline = state.isPartial ? nutritionBaseline(date) : null;
   const hasBaseline = !!baseline && (baseline.daysWithData || 0) >= 3;
-  if (state.isPartial && hasBaseline) {
-    return {
-      date,
-      intake:        forecastTotals(liveTotals, baseline, state),
-      live:          liveTotals,
-      forecastMode:  'projected',
-      forecastState: state,
-      baseline,
-    };
-  }
+  const projected = (state.isPartial && hasBaseline)
+    ? forecastTotals(liveTotals, baseline, state)
+    : liveTotals;
   return {
     date,
-    intake:        liveTotals,
+    intake:        liveTotals,                          // ← scoring numerator (was projected)
     live:          liveTotals,
-    forecastMode:  'final',
+    projected,                                          // ← diagnostic only (UI badge / "projected finish" line)
+    forecastMode:  state.isPartial ? 'partial' : 'final',
     forecastState: state,
     baseline,
   };
@@ -502,15 +510,20 @@ export function fuelBreakdown(dateStr) {
     tdeeInputs: tdeeInfo.inputs,
     activityBurn: burn,  // shown for context; NOT part of TDEE when tdeeTier === 1
     tef: Math.round(tef),
-    intake: {
+    intake: {  // Phase 4r.dcy.1 — now identical to live; kept for back-compat.
       calories: Math.round(intakeCal),
       protein:  Math.round(intakeProtein),
       waterL:   +intakeWaterL.toFixed(2),
     },
-    live: {  // raw live totals BEFORE any forecast blending
+    live: {  // raw logged totals (same as intake post-Phase-4r.dcy.1)
       calories: Math.round(liveCal),
       protein:  Math.round(liveProtein),
       waterL:   +liveWaterL.toFixed(2),
+    },
+    projected: {  // diagnostic-only forecast end-of-day; NOT part of N
+      calories: Math.round(Number(eff.projected.calories) || 0),
+      protein:  Math.round(Number(eff.projected.protein)  || 0),
+      waterL:   +(((Number(eff.projected.water) || 0) / 1000)).toFixed(2),
     },
     targets: {
       calories: totalTdee,
@@ -836,11 +849,12 @@ export function dcy(dateStr) {
         tdeeInputs: fBreak.tdeeInputs,
         activityBurn: fBreak.activityBurn,
         tef: fBreak.tef,
-        intake: fBreak.intake,
-        live:   fBreak.live,              // pre-forecast raw totals
-        targets: fBreak.targets,
-        sub: fBreak.sub,
-        // Phase 4b forecast metadata — UI shows "Projected" badge when 'projected'
+        intake:    fBreak.intake,
+        live:      fBreak.live,           // = intake post-Phase-4r.dcy.1
+        projected: fBreak.projected,      // diagnostic-only end-of-day forecast
+        targets:   fBreak.targets,
+        sub:       fBreak.sub,
+        // Forecast metadata — UI shows "In progress" badge when 'partial'
         forecastMode:    fBreak.forecastMode,
         forecastAlpha:   fBreak.forecastAlpha,
         forecastElapsed: fBreak.forecastElapsed,

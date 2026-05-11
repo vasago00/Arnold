@@ -22,7 +22,7 @@
 //   - Mobile: Start screen "Customize" link at the bottom
 //   - Desktop: Goals tab "Start tile preferences" section (Phase 5)
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { storage } from "../core/storage.js";
 import {
   TILE_METRICS,
@@ -136,9 +136,13 @@ export function StartTilePickerInner({ ctx, onClose, layout = 'stacked' }) {
     return cleaned;
   });
 
-  useEffect(() => {
-    debouncedSave(prefs);
-  }, [prefs]);
+  // Phase 4o.cloudsync.8 — REMOVED the always-firing `useEffect → save`.
+  // That effect was writing to storage on every mount + every prefs
+  // change, which bumped the LWW timestamp on startTilePrefs even when
+  // the user hadn't actually changed anything. The result: opening the
+  // Goals tab would silently re-publish a "no-op" snapshot, and that
+  // could clobber a real cross-device change in flight. Saves now happen
+  // ONLY inside togglePref / movePref, after a real user gesture.
 
   const togglePref = useCallback((category, metricId) => {
     setPrefs(prev => {
@@ -152,7 +156,9 @@ export function StartTilePickerInner({ ctx, onClose, layout = 'stacked' }) {
         if (current.length >= MAX_PER_CATEGORY) return prev;
         next = [...current, metricId];
       }
-      return { ...prev, [category]: next };
+      const newPrefs = { ...prev, [category]: next };
+      debouncedSave(newPrefs);
+      return newPrefs;
     });
   }, []);
 
@@ -167,7 +173,9 @@ export function StartTilePickerInner({ ctx, onClose, layout = 'stacked' }) {
       if (targetIdx < 0 || targetIdx >= current.length) return prev;
       const next = [...current];
       [next[idx], next[targetIdx]] = [next[targetIdx], next[idx]];
-      return { ...prev, [category]: next };
+      const newPrefs = { ...prev, [category]: next };
+      debouncedSave(newPrefs);
+      return newPrefs;
     });
   }, []);
 

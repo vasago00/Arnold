@@ -147,6 +147,235 @@ function extractFromDetails(details) {
   return out;
 }
 
+// ── HR zone bpm boundaries (user profile setting) ───────────────────────────
+// Phase 4r.zones.2 — fetch the user's configured Garmin Connect HR zones
+// (bpm-based boundaries set in Connect → User Settings → Heart Rate).
+// We cache these into `profile.hrZoneBpm` so the rest of Arnold (post-
+// workout zone bar synthesis, AI annotation single-zone labels, any
+// future zone aggregations) can bin against the SAME boundaries that
+// Garmin Connect uses. Without this, %HRmax thresholds drift away from
+// the user's customized zones — e.g. 133 bpm at maxHR 165 is %HRmax
+// Z4 but Garmin-bpm Z2.
+//
+// REQUIRES Worker endpoint:
+//
+//   POST  /garmin/user/hr-zones
+//   body  { user, pass }
+//   200   { zones: [
+//             { zoneNumber: 1, bpmHigh: 122 },
+//             { zoneNumber: 2, bpmHigh: 136 },
+//             { zoneNumber: 3, bpmHigh: 150 },
+//             { zoneNumber: 4, bpmHigh: 162 },
+//             { zoneNumber: 5, bpmHigh: 999 }   // optional / sentinel
+//           ] }
+//
+// The Worker proxies Garmin's authenticated
+//   GET  https://connect.garmin.com/userprofile-service/userprofile/heart-rate-zones
+// (uses the same login/cookie-jar pattern as the existing /activities endpoints).
+//
+// If the endpoint is missing (Worker not yet updated), this function
+// fails silently and the rest of Arnold falls back to %HRmax. No UX
+// breakage, no console error.
+const HR_ZONES_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // re-fetch weekly
+
+export async function fetchAndCacheHrZones({ force = false } = {}) {
+  if (!isGarminConfigured()) return { ok: false, error: 'not_configured' };
+  const profile = storage.get('profile') || {};
+  const cached  = profile?.hrZoneBpm;
+  // TTL gate — skip when fresh, unless force=true.
+  if (!force && cached?.fetchedAt && (Date.now() - cached.fetchedAt) < HR_ZONES_TTL_MS) {
+    return { ok: true, cached: true, hrZoneBpm: cached };
+  }
+  const auth = getGarminAuth();
+  const { endpoint, token } = getWorkerConfig();
+  if (!auth || !endpoint || !token) return { ok: false, error: 'no_config' };
+
+  let res;
+  try {
+    res = await fetch(`${endpoint}/garmin/user/hr-zones`, {
+      method: 'POST',
+      headers: {
+        'authorization': `Bearer ${token}`,
+        'content-type':  'application/json',
+      },
+      body: JSON.stringify({ user: auth.user, pass: auth.pass }),
+    });
+  } catch (e) {
+    return { ok: false, error: 'network_error', detail: String(e?.message || e) };
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    return { ok: false, error: `http_${res.status}`, detail: t.slice(0, 200) };
+  }
+  let body;
+  try { body = await res.json(); } catch { body = null; }
+  const zones = Array.isArray(body?.zones) ? body.zones : null;
+  if (!zones || zones.length < 4) return { ok: false, error: 'malformed_response' };
+
+  // Sort by zoneNumber so we always extract Z1..Z4 high-bpm in order,
+  // regardless of how the upstream payload is ordered. We only need
+  // Z1..Z4 — Z5 is implicit (>Z4 high).
+  const sorted = [...zones].sort((a, b) => (a.zoneNumber || 0) - (b.zoneNumber || 0));
+  const z1Max = Number(sorted[0]?.bpmHigh ?? sorted[0]?.zoneHighBoundary ?? sorted[0]?.high);
+  const z2Max = Number(sorted[1]?.bpmHigh ?? sorted[1]?.zoneHighBoundary ?? sorted[1]?.high);
+  const z3Max = Number(sorted[2]?.bpmHigh ?? sorted[2]?.zoneHighBoundary ?? sorted[2]?.high);
+  const z4Max = Number(sorted[3]?.bpmHigh ?? sorted[3]?.zoneHighBoundary ?? sorted[3]?.high);
+  if (![z1Max, z2Max, z3Max, z4Max].every(n => Number.isFinite(n) && n > 0)
+      || !(z1Max < z2Max && z2Max < z3Max && z3Max < z4Max)) {
+    return { ok: false, error: 'invalid_boundaries', boundaries: [z1Max, z2Max, z3Max, z4Max] };
+  }
+
+  const next = {
+    source: 'garmin',
+    fetchedAt: Date.now(),
+    z1Max, z2Max, z3Max, z4Max,
+  };
+  storage.set('profile', { ...profile, hrZoneBpm: next });
+  return { ok: true, cached: false, hrZoneBpm: next };
+}
+
+// Phase 4r.zones.4 — adaptive Karvonen-zone refresh.
+// When the user has opted in by setting profile.hrZoneBpm.source = 'karvonen',
+// this recomputes zones from current maxHR + 28-day trimmed-mean RHR on a
+// weekly cadence. If any boundary has drifted ≥3 bpm vs the cached value
+// (typical signal: fitness improvement → RHR drop → HRR widens → zones
+// shift up), persist the new boundaries and clear the rebin flag so
+// historical activities re-bucket against the updated zones.
+//
+// Manual or Garmin-synced zones (source: 'manual' / 'garmin') are LEFT
+// ALONE — those reflect a deliberate choice, and silently overwriting
+// them would be the wrong move. The user opts in/out via the source field.
+import { recommendedZones } from './derive/hr.js';
+
+const ZONE_DRIFT_BPM = 3;
+const ZONE_RECOMPUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // weekly
+
+// Hoisted here (used by adaptive zones AND by reBinActivitiesWithBpmZones
+// further down) so adaptive recompute can clear the flag when zones drift.
+const REBIN_FLAG = 'arnold:zones:rebin-against-bpm-2026-05-09';
+
+export async function applyAdaptiveZonesIfDue() {
+  const profile = storage.get('profile') || {};
+  const current = profile.hrZoneBpm;
+  if (current?.source !== 'karvonen') {
+    return { ok: true, updated: false, reason: 'not_karvonen' };
+  }
+  // TTL gate — don't recompute more than weekly.
+  if (current?.fetchedAt && (Date.now() - current.fetchedAt) < ZONE_RECOMPUTE_TTL_MS) {
+    return { ok: true, updated: false, reason: 'fresh' };
+  }
+  const sleepHistory = storage.get('sleep') || [];
+  const rec = recommendedZones({ profile, sleepHistory });
+  if (!rec) return { ok: true, updated: false, reason: 'insufficient_data' };
+
+  const KEYS = ['z1Max', 'z2Max', 'z3Max', 'z4Max'];
+  const drifts = KEYS.map(k => ({
+    zone: k,
+    old: current[k],
+    next: rec[k],
+    delta: rec[k] - (current[k] || 0),
+  }));
+  const maxDrift = Math.max(...drifts.map(d => Math.abs(d.delta)));
+
+  if (maxDrift < ZONE_DRIFT_BPM) {
+    // Within tolerance — refresh fetchedAt so we don't re-evaluate every
+    // boot, but don't disturb the existing values.
+    storage.set('profile', { ...profile, hrZoneBpm: { ...current, fetchedAt: Date.now() } });
+    return { ok: true, updated: false, reason: 'within_threshold', maxDrift, restingHR: rec.computedFrom.restingHR };
+  }
+
+  // Drift exceeds threshold — adopt the new zones.
+  const next = {
+    source: 'karvonen',
+    fetchedAt: Date.now(),
+    computedFrom: rec.computedFrom,
+    z1Max: rec.z1Max,
+    z2Max: rec.z2Max,
+    z3Max: rec.z3Max,
+    z4Max: rec.z4Max,
+  };
+  storage.set('profile', { ...profile, hrZoneBpm: next });
+  // Force the rebin pass to re-run so existing activities re-bucket
+  // against the new boundaries.
+  try { localStorage.removeItem(REBIN_FLAG); } catch {}
+  return { ok: true, updated: true, before: current, after: next, drifts, maxDrift };
+}
+
+// Phase 4r.zones.3 — re-bin hrZones for existing worker-imported activities
+// using the user's custom bpm boundaries from profile.hrZoneBpm. Re-downloads
+// each activity's FIT, parses it with zoneBpm so Path 0 (raw record bin)
+// runs, and persists the new hrZones array. Triggered once after the bpm
+// boundaries land in profile (via fetchAndCacheHrZones), and re-runs after
+// adaptive Karvonen recompute (Phase 4r.zones.4) clears the flag on drift.
+//
+// Idempotent: skipped automatically when profile.hrZoneBpm is missing.
+// Marker `hrZonesScheme: 'bpm-custom'` is set on each rebinned activity so
+// future calls can skip already-correct ones (unless force=true).
+
+export async function reBinActivitiesWithBpmZones({ daysBack = 30, onProgress, force = false } = {}) {
+  if (!isGarminConfigured()) return { ok: false, error: 'not_configured' };
+  const profile = storage.get('profile') || {};
+  const z = profile?.hrZoneBpm;
+  if (!z) return { ok: false, error: 'no_zone_bpm' };
+  const arr = [z.z1Max, z.z2Max, z.z3Max, z.z4Max].map(Number);
+  if (!arr.every(n => Number.isFinite(n) && n > 0) || !(arr[0] < arr[1] && arr[1] < arr[2] && arr[2] < arr[3])) {
+    return { ok: false, error: 'invalid_zone_bpm' };
+  }
+  const zoneBpm = { z1Max: arr[0], z2Max: arr[1], z3Max: arr[2], z4Max: arr[3] };
+
+  const all = storage.get('activities') || [];
+  const cutoffMs = Date.now() - daysBack * 86400 * 1000;
+  // Re-bin: any worker-imported activity in the window whose hrZones
+  // wasn't already produced by the bpm-custom binner.
+  const targets = all.filter(a => {
+    if (!a?.source?.activityId) return false;     // only worker-imported re-fetchable
+    if (!a?.date) return false;
+    if (new Date(a.date).getTime() < cutoffMs) return false;
+    if (force) return true;
+    return a.hrZonesScheme !== 'bpm-custom';
+  });
+  if (!targets.length) return { ok: true, attempted: 0, rebinned: 0 };
+
+  let rebinned = 0;
+  const errors = [];
+  for (const a of targets) {
+    onProgress?.({ activityId: a.source.activityId, date: a.date });
+    try {
+      const { bytes, filename } = await downloadActivityFitBytes(a.source.activityId);
+      const fakeFile = {
+        name: filename,
+        size: bytes.byteLength,
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      };
+      const reparsed = await parseFITFile(fakeFile, { zoneBpm });
+      if (Array.isArray(reparsed.hrZones) && reparsed.hrZones.length === 5) {
+        a.hrZones = reparsed.hrZones;
+        a.hrZonesScheme = 'bpm-custom';
+        rebinned++;
+      } else {
+        // FIT had no usable record stream; clear stale hrZones so the
+        // synth fallback (which uses bpm boundaries) takes over at display.
+        delete a.hrZones;
+        a.hrZonesScheme = 'unavailable';
+      }
+      await new Promise(r => setTimeout(r, 400));  // throttle
+    } catch (e) {
+      errors.push({ id: a.source.activityId, date: a.date, error: String(e?.message || e) });
+    }
+  }
+  if (rebinned > 0 || errors.length === 0) {
+    storage.set('activities', all, { skipValidation: true });
+  }
+  if (rebinned > 0) {
+    try { localStorage.setItem(REBIN_FLAG, '1'); } catch {}
+  }
+  return { ok: true, attempted: targets.length, rebinned, errors };
+}
+
+export function hasRebinnedAgainstBpm() {
+  try { return localStorage.getItem(REBIN_FLAG) === '1'; } catch { return false; }
+}
+
 // Public: enrich a list of stored activities with details. Idempotent — only
 // re-fetches when hrZones or totalTrainingLoad is null. Returns count of
 // activities updated.
@@ -257,6 +486,21 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
   const existing = storage.get('activities') || [];
   const newOnes = candidates.filter(a => !isAlreadyImported(existing, a));
 
+  // Phase 4r.zones.3 — pass the user's cached bpm zone boundaries to
+  // the FIT parser so raw HR records are re-binned against THEM rather
+  // than trusting the watch's pre-computed time-in-zone (which uses
+  // whatever zone scheme the watch is set to — typically %HRmax — and
+  // diverges from Connect's UI when the user customizes zones).
+  const profile = storage.get('profile') || {};
+  const zoneBpm = (() => {
+    const z = profile?.hrZoneBpm;
+    if (!z) return null;
+    const arr = [z.z1Max, z.z2Max, z.z3Max, z.z4Max].map(Number);
+    if (!arr.every(n => Number.isFinite(n) && n > 0)) return null;
+    if (!(arr[0] < arr[1] && arr[1] < arr[2] && arr[2] < arr[3])) return null;
+    return { z1Max: arr[0], z2Max: arr[1], z3Max: arr[2], z4Max: arr[3] };
+  })();
+
   // 3. Download + parse each new activity
   const results = [];
   for (const ga of newOnes) {
@@ -269,7 +513,7 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
         size: bytes.byteLength,
         arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
       };
-      const parsed = await parseFITFile(fakeFile);
+      const parsed = await parseFITFile(fakeFile, { zoneBpm });
       // Tag the source so future syncs dedup by activityId
       parsed.source = {
         type: 'garmin-worker',
@@ -277,13 +521,19 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
         activityName: ga.activityName || null,
         downloadedAt: Date.now(),
       };
-      // If FIT didn't yield hrZones / totalTrainingLoad, fetch the activity
-      // DTO from /garmin/activities/{id}/details — Garmin computes those
-      // server-side and they're missing from the FIT for many watch models.
-      if (parsed.hrZones == null || parsed.totalTrainingLoad == null) {
+      // Phase 4r.zones.3 — when zoneBpm is set, hrZones from the FIT
+      // (Path 0 = our custom bin) is authoritative. Fetch DTO only for
+      // totalTrainingLoad in that case — never for hrZones, which would
+      // overwrite the bpm-binned values with the DTO's %HRmax bins.
+      const needsZones = !zoneBpm && parsed.hrZones == null;
+      const needsLoad  = parsed.totalTrainingLoad == null;
+      if (needsZones || needsLoad) {
         try {
           const details = await fetchActivityDetails(ga.activityId);
           const extra = extractFromDetails(details);
+          // Strip hrZones from the DTO extras if we have zoneBpm — DTO
+          // bins use %HRmax, not the user's custom bpm boundaries.
+          if (zoneBpm) delete extra.hrZones;
           Object.assign(parsed, extra);
         } catch (e) {
           // Non-fatal — the activity still imports, just without enrichment.

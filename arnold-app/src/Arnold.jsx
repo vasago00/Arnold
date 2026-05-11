@@ -33,11 +33,14 @@ import { isNativePlatform } from "./core/hc-bridge.js";
 import { ImportDiagnostics } from "./components/ImportDiagnostics.jsx";
 import { GoalsHub } from "./components/GoalsHub.jsx";
 import { StartTilePicker, StartTilePickerInner } from "./components/StartTilePicker.jsx";
-import { buildTileContext } from "./core/derive/tileMetrics.js";
+import { buildTileContext, TILE_METRICS, deriveStatus } from "./core/derive/tileMetrics.js";
+import { resolveAllStartTiles } from "./core/derive/autoPromote.js";
+import { KRITile, InlineKRIStat } from "./components/KRITile.jsx";
+import { normalizeTilePrefs } from "./core/derive/tileMetrics.js";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
-import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar, DcyDetails } from "./components/MobileHome.jsx";
+import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar, DcyDetails, NavIconForTab, TAB_LABEL, TAB_ACTIVE_COLOR, TAB_ACCENT_COLOR } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
@@ -59,11 +62,11 @@ import { MiniBar } from "./components/MiniBar.jsx";
 import { FocusCard } from "./components/FocusCard.jsx";
 import { NutritionInput as NutritionInputPanel } from "./components/NutritionInput.jsx";
 import { createEntry as createNutEntry, saveEntry as saveNutEntry, getEntriesForDate as getNutEntries, deleteEntry as deleteNutEntry, dailyTotals as nutDailyTotals } from "./core/nutrition.js";
-import { getSystemsReport } from "./core/healthSystems.js";
+import { getSystemsReport, getSystemDetail, getSystemWeekly } from "./core/healthSystems.js";
 import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
 import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
 import { getTopCoachingPrompts, getPromptsByPillar } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
-import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget } from "./core/energyBalance.js";
+import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget, getCurrentBodyComp, computeRMR } from "./core/energyBalance.js";
 // Health system iconography — Gemini-generated line-art PNGs at 256×256 with
 // dark #0b0d12 background and the system's accent color baked in. Vite
 // resolves these to hashed asset URLs at build time.
@@ -91,9 +94,9 @@ import {
   trainingMonotony, raceReadiness, trainingConsistency, buildTrainingContext,
 } from "./core/trainingIntelligence.js";
 import {
-  computeRTSS, computeAcuteChronicRatio, computeTonnage, computeDensity,
+  computeRTSS, computeHrTSS, computeAcuteChronicRatio, computeTonnage, computeDensity,
   computeHyroxDensity, matchTemplate, computeDailyScore,
-  computeRolling7d, computeRolling30d,
+  computeRolling7d, computeRolling30d, getEffectiveMaxHR,
 } from "./core/trainingStress.js";
 
 // ─── Unified Activities: merge CSV imports + daily FIT uploads ───────────────
@@ -276,50 +279,79 @@ async function aiStream(system,user,max=1800,onChunk){
 }
 
 // ─── Blood Panel Reference Ranges ────────────────────────────────────────────
+// ─── BM · Blood-marker registry ──────────────────────────────────────────────
+// Each entry carries `desc` (Phase 4o.labs.4) — a one-line plain-English
+// explainer rendered inline on the lab tile. Keep descriptions ≤ ~90
+// chars so they fit two short lines without crowding the sparkline.
 const BM={
-  "Glucose (mg/dL)":{cat:"Metabolic",opt:[72,90],warn:[90,100],unit:"mg/dL",dir:"low",lbl:"Fasting Glucose"},
-  "HbA1c (%)":{cat:"Metabolic",opt:[4.6,5.3],warn:[5.3,5.7],unit:"%",dir:"low",lbl:"HbA1c"},
-  "Insulin (µIU/mL)":{cat:"Metabolic",opt:[2,6],warn:[6,10],unit:"µIU/mL",dir:"low",lbl:"Fasting Insulin"},
-  "LDL Cholesterol (mg/dL)":{cat:"Lipids",opt:[40,99],warn:[99,130],unit:"mg/dL",dir:"low",lbl:"LDL"},
-  "HDL Cholesterol (mg/dL)":{cat:"Lipids",opt:[60,100],warn:[50,60],unit:"mg/dL",dir:"high",lbl:"HDL"},
-  "Triglycerides (mg/dL)":{cat:"Lipids",opt:[40,100],warn:[100,150],unit:"mg/dL",dir:"low",lbl:"Triglycerides"},
-  "Total Cholesterol (mg/dL)":{cat:"Lipids",opt:[140,180],warn:[180,200],unit:"mg/dL",dir:"low",lbl:"Total Chol"},
-  "ApoB (mg/dL)":{cat:"Lipids",opt:[40,80],warn:[80,100],unit:"mg/dL",dir:"low",lbl:"ApoB"},
-  "hsCRP (mg/L)":{cat:"Inflammation",opt:[0,0.5],warn:[0.5,1.0],unit:"mg/L",dir:"low",lbl:"hsCRP"},
-  "Ferritin (ng/mL)":{cat:"Inflammation",opt:[50,150],warn:[150,200],unit:"ng/mL",dir:"mid",lbl:"Ferritin"},
-  "Testosterone (ng/dL)":{cat:"Hormones",opt:[600,900],warn:[450,600],unit:"ng/dL",dir:"high",lbl:"Testosterone"},
-  "Free testosterone (ng/dL)":{cat:"Hormones",opt:[8,15],warn:[6,8],unit:"ng/dL",dir:"high",lbl:"Free T"},
-  "Cortisol (µg/dL)":{cat:"Hormones",opt:[8,18],warn:[18,22],unit:"µg/dL",dir:"mid",lbl:"Cortisol"},
-  "TSH (µIU/L)":{cat:"Hormones",opt:[1.0,2.5],warn:[2.5,3.5],unit:"µIU/L",dir:"mid",lbl:"TSH"},
-  "SHBG (nmol/L)":{cat:"Hormones",opt:[20,55],warn:[55,70],unit:"nmol/L",dir:"mid",lbl:"SHBG"},
-  "Testosterone:Cortisol Ratio (Units)":{cat:"Hormones",opt:[50,100],warn:[40,50],unit:"",dir:"high",lbl:"T:C Ratio"},
-  "Vitamin D (ng/mL)":{cat:"Nutrients",opt:[50,80],warn:[30,50],unit:"ng/mL",dir:"high",lbl:"Vitamin D"},
-  "Vitamin B12 (pg/mL)":{cat:"Nutrients",opt:[500,900],warn:[300,500],unit:"pg/mL",dir:"high",lbl:"B12"},
-  "Folate (ng/mL)":{cat:"Nutrients",opt:[10,24],warn:[7,10],unit:"ng/mL",dir:"high",lbl:"Folate"},
-  "Magnesium (mg/dL)":{cat:"Nutrients",opt:[2.0,2.5],warn:[1.8,2.0],unit:"mg/dL",dir:"high",lbl:"Magnesium"},
-  "RBC Magnesium (mg/dL)":{cat:"Nutrients",opt:[4.2,6.0],warn:[3.5,4.2],unit:"mg/dL",dir:"high",lbl:"RBC Mg"},
-  "Iron (ug/dL)":{cat:"Nutrients",opt:[70,140],warn:[50,70],unit:"µg/dL",dir:"mid",lbl:"Iron"},
-  "ALT (U/L)":{cat:"Liver",opt:[7,25],warn:[25,40],unit:"U/L",dir:"low",lbl:"ALT"},
-  "AST (U/L)":{cat:"Liver",opt:[10,30],warn:[30,40],unit:"U/L",dir:"low",lbl:"AST"},
-  "GGT (U/L)":{cat:"Liver",opt:[8,25],warn:[25,40],unit:"U/L",dir:"low",lbl:"GGT"},
-  "Albumin (g/dL)":{cat:"Liver",opt:[4.3,5.0],warn:[4.0,4.3],unit:"g/dL",dir:"high",lbl:"Albumin"},
-  "Hemoglobin (g/dL)":{cat:"Blood",opt:[13.5,17],warn:[12,13.5],unit:"g/dL",dir:"high",lbl:"Hemoglobin"},
-  "Hematocrit (%)":{cat:"Blood",opt:[40,50],warn:[38,40],unit:"%",dir:"mid",lbl:"Hematocrit"},
-  "White blood cells (thousands/uL)":{cat:"Blood",opt:[4.0,7.0],warn:[3.5,4.0],unit:"K/µL",dir:"mid",lbl:"WBC"},
-  "Platelets (thousands/uL)":{cat:"Blood",opt:[150,300],warn:[130,150],unit:"K/µL",dir:"mid",lbl:"Platelets"},
-  "Calcium (mg/dL)":{cat:"Electrolytes",opt:[9.2,10.2],warn:[8.8,9.2],unit:"mg/dL",dir:"mid",lbl:"Calcium"},
-  "Potassium (mmol/L)":{cat:"Electrolytes",opt:[3.8,4.5],warn:[3.5,3.8],unit:"mmol/L",dir:"mid",lbl:"Potassium"},
-  "Sodium (mmol/L)":{cat:"Electrolytes",opt:[136,142],warn:[134,136],unit:"mmol/L",dir:"mid",lbl:"Sodium"},
-  "Creatine kinase (U/L)":{cat:"Inflammation",opt:[30,200],warn:[200,400],unit:"U/L",dir:"low",lbl:"CK"},
-  "TIBC (ug/dL)":{cat:"Nutrients",opt:[250,400],warn:[220,250],unit:"µg/dL",dir:"mid",lbl:"TIBC"},
-  "Transferrin saturation (%)":{cat:"Nutrients",opt:[20,45],warn:[15,20],unit:"%",dir:"mid",lbl:"Trans Sat"},
-  "RBC (x10E6/µL)":{cat:"Blood",opt:[4.5,5.5],warn:[4.0,4.5],unit:"M/µL",dir:"mid",lbl:"RBC"},
-  "eGFR (mL/min)":{cat:"Kidney",opt:[90,120],warn:[60,90],unit:"mL/min",dir:"high",lbl:"eGFR"},
-  "Creatinine (mg/dL)":{cat:"Kidney",opt:[0.7,1.2],warn:[1.2,1.4],unit:"mg/dL",dir:"low",lbl:"Creatinine"},
+  "Glucose (mg/dL)":{cat:"Metabolic",opt:[72,90],warn:[90,100],unit:"mg/dL",dir:"low",lbl:"Fasting Glucose",desc:"Fasting blood sugar — high signals insulin resistance trending toward diabetes."},
+  "HbA1c (%)":{cat:"Metabolic",opt:[4.6,5.3],warn:[5.3,5.7],unit:"%",dir:"low",lbl:"HbA1c",desc:"Average blood sugar over ~3 months — the long-arc glucose-control marker."},
+  "Insulin (µIU/mL)":{cat:"Metabolic",opt:[2,6],warn:[6,10],unit:"µIU/mL",dir:"low",lbl:"Fasting Insulin",desc:"How hard the pancreas is working to manage glucose. High = insulin resistance."},
+  "LDL Cholesterol (mg/dL)":{cat:"Lipids",opt:[40,99],warn:[99,130],unit:"mg/dL",dir:"low",lbl:"LDL",desc:"\"Bad\" cholesterol — particles that drive arterial plaque buildup."},
+  "HDL Cholesterol (mg/dL)":{cat:"Lipids",opt:[60,100],warn:[50,60],unit:"mg/dL",dir:"high",lbl:"HDL",desc:"\"Good\" cholesterol — clears excess lipids back to the liver."},
+  "Triglycerides (mg/dL)":{cat:"Lipids",opt:[40,100],warn:[100,150],unit:"mg/dL",dir:"low",lbl:"Triglycerides",desc:"Stored fat in blood. High = metabolic stress, often from sugar or alcohol."},
+  "Total Cholesterol (mg/dL)":{cat:"Lipids",opt:[140,180],warn:[180,200],unit:"mg/dL",dir:"low",lbl:"Total Chol",desc:"Sum of all blood lipids. Less informative than LDL/HDL/ApoB on their own."},
+  "ApoB (mg/dL)":{cat:"Lipids",opt:[40,80],warn:[80,100],unit:"mg/dL",dir:"low",lbl:"ApoB",desc:"Count of atherogenic particles. Best single predictor of cardiac risk."},
+  "hsCRP (mg/L)":{cat:"Inflammation",opt:[0,0.5],warn:[0.5,1.0],unit:"mg/L",dir:"low",lbl:"hsCRP",desc:"Systemic inflammation marker. Tracks infection, injury, and chronic stress."},
+  "Ferritin (ng/mL)":{cat:"Inflammation",opt:[50,150],warn:[150,200],unit:"ng/mL",dir:"mid",lbl:"Ferritin",desc:"Iron storage. Low = iron deficiency. High = inflammation or iron overload."},
+  "Testosterone (ng/dL)":{cat:"Hormones",opt:[600,900],warn:[450,600],unit:"ng/dL",dir:"high",lbl:"Testosterone",desc:"Anabolic hormone — drives muscle, bone, libido, energy, and mood."},
+  "Free testosterone (ng/dL)":{cat:"Hormones",opt:[8,15],warn:[6,8],unit:"ng/dL",dir:"high",lbl:"Free T",desc:"Bioavailable testosterone (not bound to SHBG). The active fraction."},
+  "Cortisol (µg/dL)":{cat:"Hormones",opt:[8,18],warn:[18,22],unit:"µg/dL",dir:"mid",lbl:"Cortisol",desc:"Stress hormone. Chronic high = wear; chronic low = adrenal fatigue."},
+  "TSH (µIU/L)":{cat:"Hormones",opt:[1.0,2.5],warn:[2.5,3.5],unit:"µIU/L",dir:"mid",lbl:"TSH",desc:"Pituitary signal to the thyroid. High TSH = thyroid under-active."},
+  "SHBG (nmol/L)":{cat:"Hormones",opt:[20,55],warn:[55,70],unit:"nmol/L",dir:"mid",lbl:"SHBG",desc:"Binds sex hormones. High SHBG = less free testosterone available."},
+  "Testosterone:Cortisol Ratio (Units)":{cat:"Hormones",opt:[50,100],warn:[40,50],unit:"",dir:"high",lbl:"T:C Ratio",desc:"Anabolic-to-catabolic balance. Drops during overtraining or chronic stress."},
+  "Vitamin D (ng/mL)":{cat:"Nutrients",opt:[50,80],warn:[30,50],unit:"ng/mL",dir:"high",lbl:"Vitamin D",desc:"Bone, immune, mood. Low → bone loss, mood dips, weaker immunity."},
+  "Vitamin B12 (pg/mL)":{cat:"Nutrients",opt:[500,900],warn:[300,500],unit:"pg/mL",dir:"high",lbl:"B12",desc:"Nerve function and red-cell synthesis. Low → fatigue, numbness, anemia."},
+  "Folate (ng/mL)":{cat:"Nutrients",opt:[10,24],warn:[7,10],unit:"ng/mL",dir:"high",lbl:"Folate",desc:"DNA synthesis and red-cell maturation. Pairs with B12 for blood + nerve."},
+  "Magnesium (mg/dL)":{cat:"Nutrients",opt:[2.0,2.5],warn:[1.8,2.0],unit:"mg/dL",dir:"high",lbl:"Magnesium",desc:"300+ enzyme reactions — muscle, sleep, energy. Often deficient in athletes."},
+  "RBC Magnesium (mg/dL)":{cat:"Nutrients",opt:[4.2,6.0],warn:[3.5,4.2],unit:"mg/dL",dir:"high",lbl:"RBC Mg",desc:"Intracellular magnesium — better deficiency marker than serum Mg."},
+  "Iron (ug/dL)":{cat:"Nutrients",opt:[70,140],warn:[50,70],unit:"µg/dL",dir:"mid",lbl:"Iron",desc:"Oxygen transport. Endurance training drains iron; low → persistent fatigue."},
+  "ALT (U/L)":{cat:"Liver",opt:[7,25],warn:[25,40],unit:"U/L",dir:"low",lbl:"ALT",desc:"Liver-specific cell damage marker. Sensitive to fatty liver and alcohol."},
+  "AST (U/L)":{cat:"Liver",opt:[10,30],warn:[30,40],unit:"U/L",dir:"low",lbl:"AST",desc:"Liver and muscle damage. Rises with hard training too — context matters."},
+  "GGT (U/L)":{cat:"Liver",opt:[8,25],warn:[25,40],unit:"U/L",dir:"low",lbl:"GGT",desc:"Liver detox stress. Sensitive to alcohol, medications, oxidative load."},
+  "Albumin (g/dL)":{cat:"Liver",opt:[4.3,5.0],warn:[4.0,4.3],unit:"g/dL",dir:"high",lbl:"Albumin",desc:"Liver-synthesised protein. Reflects nutrition status and hydration."},
+  "Hemoglobin (g/dL)":{cat:"Blood",opt:[13.5,17],warn:[12,13.5],unit:"g/dL",dir:"high",lbl:"Hemoglobin",desc:"Oxygen-carrying protein in red blood cells. Low → anemia, fatigue."},
+  "Hematocrit (%)":{cat:"Blood",opt:[40,50],warn:[38,40],unit:"%",dir:"mid",lbl:"Hematocrit",desc:"Percentage of blood made up of red cells. Reflects oxygen-carrying capacity."},
+  "White blood cells (thousands/uL)":{cat:"Blood",opt:[4.0,7.0],warn:[3.5,4.0],unit:"K/µL",dir:"mid",lbl:"WBC",desc:"Total immune-cell count. Big shifts signal infection or immune stress."},
+  "Platelets (thousands/uL)":{cat:"Blood",opt:[150,300],warn:[130,150],unit:"K/µL",dir:"mid",lbl:"Platelets",desc:"Clotting cells. Also signal repair processes and chronic inflammation."},
+  "Calcium (mg/dL)":{cat:"Electrolytes",opt:[9.2,10.2],warn:[8.8,9.2],unit:"mg/dL",dir:"mid",lbl:"Calcium",desc:"Bone, muscle contraction, nerve signaling. Tightly regulated by the body."},
+  "Potassium (mmol/L)":{cat:"Electrolytes",opt:[3.8,4.5],warn:[3.5,3.8],unit:"mmol/L",dir:"mid",lbl:"Potassium",desc:"Muscle, heart rhythm, nerve. Critical electrolyte for athletes."},
+  "Sodium (mmol/L)":{cat:"Electrolytes",opt:[136,142],warn:[134,136],unit:"mmol/L",dir:"mid",lbl:"Sodium",desc:"Hydration and blood volume. Endurance athletes lose this through sweat."},
+  "Creatine kinase (U/L)":{cat:"Inflammation",opt:[30,200],warn:[200,400],unit:"U/L",dir:"low",lbl:"CK",desc:"Muscle-damage marker. Spikes after hard training; chronic high = poor recovery."},
+  "TIBC (ug/dL)":{cat:"Nutrients",opt:[250,400],warn:[220,250],unit:"µg/dL",dir:"mid",lbl:"TIBC",desc:"Iron-binding capacity. High TIBC = body upregulating carriers (iron deficient)."},
+  "Transferrin saturation (%)":{cat:"Nutrients",opt:[20,45],warn:[15,20],unit:"%",dir:"mid",lbl:"Trans Sat",desc:"Percent of transferrin carrying iron. Ratio of available vs stored iron."},
+  "RBC (x10E6/µL)":{cat:"Blood",opt:[4.5,5.5],warn:[4.0,4.5],unit:"M/µL",dir:"mid",lbl:"RBC",desc:"Red blood cell count — your oxygen-delivery infrastructure."},
+  "eGFR (mL/min)":{cat:"Kidney",opt:[90,120],warn:[60,90],unit:"mL/min",dir:"high",lbl:"eGFR",desc:"Estimated kidney filtration rate. Lower = reduced kidney function."},
+  "Creatinine (mg/dL)":{cat:"Kidney",opt:[0.7,1.2],warn:[1.2,1.4],unit:"mg/dL",dir:"low",lbl:"Creatinine",desc:"Muscle-breakdown waste cleared by kidneys. High = filtration falling behind."},
+  // ── CBC differential — counts + percentages (Phase 4o.labs.3) ──────
+  // All filed under "Blood" since they're part of the complete blood
+  // count. Reference ranges match InsideTracker's PDF; opt is a
+  // clinically reasonable sub-window inside the reference range.
+  "Neutrophil count (cells/µL)":   {cat:"Blood",opt:[2500,5000],warn:[1500,7800],unit:"cells/µL",dir:"mid",lbl:"Neutrophils", desc:"Front-line bacterial-defense cells. Spike with infection or acute stress."},
+  "Lymphocyte count (cells/µL)":   {cat:"Blood",opt:[1500,3000],warn:[850,3900], unit:"cells/µL",dir:"mid",lbl:"Lymphocytes", desc:"T and B cells — viral defense and long-term immune memory."},
+  "Monocyte count (cells/µL)":     {cat:"Blood",opt:[300,700],  warn:[200,950],  unit:"cells/µL",dir:"mid",lbl:"Monocytes",   desc:"Tissue-cleanup immune cells. Chronic high = ongoing inflammation."},
+  "Eosinophil count (cells/µL)":   {cat:"Blood",opt:[15,200],   warn:[15,500],   unit:"cells/µL",dir:"low",lbl:"Eosinophils", desc:"Allergy and parasite responders. Elevated = allergic activity."},
+  "Basophil count (cells/µL)":     {cat:"Blood",opt:[0,50],     warn:[0,200],    unit:"cells/µL",dir:"low",lbl:"Basophils",   desc:"Histamine release in allergic and inflammatory reactions."},
+  "Neutrophil percentage (%)":     {cat:"Blood",opt:[45,65],    warn:[39,75],    unit:"%",       dir:"mid",lbl:"Neut %",      desc:"Neutrophils as fraction of WBC. High = bacterial or acute stress."},
+  "Lymphocyte percentage (%)":     {cat:"Blood",opt:[25,40],    warn:[16,47],    unit:"%",       dir:"mid",lbl:"Lymph %",     desc:"Lymphocytes as fraction of WBC. High = viral or chronic immune activity."},
+  "Monocyte percentage (%)":       {cat:"Blood",opt:[5,9],      warn:[4,12],     unit:"%",       dir:"mid",lbl:"Mono %",      desc:"Monocytes as fraction of WBC. Tracks chronic inflammation."},
+  "Eosinophil percentage (%)":     {cat:"Blood",opt:[0,3],      warn:[0,7],      unit:"%",       dir:"low",lbl:"Eos %",       desc:"Eosinophils as fraction of WBC. High = allergies, asthma, parasites."},
+  "Basophil percentage (%)":       {cat:"Blood",opt:[0,1],      warn:[0,2],      unit:"%",       dir:"low",lbl:"Baso %",      desc:"Basophils as fraction of WBC. High = allergies or rare blood disorders."},
+  // ── CBC red cell + platelet indices ──
+  // MCV/MCH/MCHC characterise red-cell size and hemoglobin packing
+  // (low = microcytic anemia, high = macrocytic). RDW captures size
+  // dispersion (high = anisocytosis, an early anemia/inflammation
+  // signal). MPV reflects platelet size — drift can flag immune or
+  // marrow-stimulus changes.
+  "MCV (fL)":                      {cat:"Blood",opt:[85,95],    warn:[80,100],   unit:"fL",      dir:"mid",lbl:"MCV",         desc:"Avg red-cell size. Low = microcytic (iron-def), high = macrocytic (B12/folate)."},
+  "MCH (pg)":                      {cat:"Blood",opt:[28,32],    warn:[27,33],    unit:"pg",      dir:"mid",lbl:"MCH",         desc:"Average hemoglobin per red cell — pairs with MCV for anemia typing."},
+  "MCHC (g/dL)":                   {cat:"Blood",opt:[33,35],    warn:[32,36],    unit:"g/dL",    dir:"mid",lbl:"MCHC",        desc:"Hemoglobin concentration in red cells (density). Stable in most cases."},
+  "RDW (%)":                       {cat:"Blood",opt:[11,13],    warn:[11,15],    unit:"%",       dir:"low",lbl:"RDW",         desc:"Red-cell size variability. Rises early in anemia or chronic inflammation."},
+  "MPV (fL)":                      {cat:"Blood",opt:[9,11],     warn:[7.5,12.5], unit:"fL",      dir:"mid",lbl:"MPV",         desc:"Average platelet size. Drift signals marrow activity or inflammation."},
 };
 const BCATS=["Metabolic","Lipids","Inflammation","Hormones","Nutrients","Liver","Blood","Electrolytes","Kidney"];
-const BCAT_CLR={Metabolic:"#60a5fa",Lipids:"#f59e0b",Inflammation:"#f87171",Hormones:"#a78bfa",Nutrients:"#4ade80",Liver:"#fb923c",Blood:"#e879f9",Electrolytes:"#38bdf8",Kidney:"#94a3b8"};
-const BCAT_ICO={Metabolic:"◈",Lipids:"◉",Inflammation:"⚡",Hormones:"∿",Nutrients:"◆",Liver:"⊕",Blood:"○",Electrolytes:"⚛",Kidney:"◎"};
+const BCAT_CLR={Metabolic:"#60a5fa",Lipids:"#f59e0b",Inflammation:"#f87171",Hormones:"#a78bfa",Nutrients:"#4ade80",Liver:"#fb923c",Blood:"#e879f9",Electrolytes:"#38bdf8",Kidney:"#94a3b8",Other:"#94a3b8"};
+const BCAT_ICO={Metabolic:"◈",Lipids:"◉",Inflammation:"⚡",Hormones:"∿",Nutrients:"◆",Liver:"⊕",Blood:"○",Electrolytes:"⚛",Kidney:"◎",Other:"?"};
 
 function bStatus(name,val){
   const m=BM[name]; if(!m||val==null)return"unknown";
@@ -330,7 +362,12 @@ function bStatus(name,val){
   if(v<wL||v>wH)return"flag"; if(v<oL||v>oH)return"warn"; return"optimal";
 }
 const SC={optimal:"var(--status-ok)",warn:"var(--status-warn)",flag:"var(--status-danger)",unknown:"var(--text-muted)"};
-const SL={optimal:"Optimal",warn:"Monitor",flag:"Review",unknown:"—"};
+// Status labels (Phase 4o.labs.5) — "warn" was previously labelled
+// "Monitor", which sounded alarming for values that are actually within
+// the lab's reference range, just outside the user-set optimal sub-window.
+// "Normal" reflects the truth: in range, not optimal. The yellow colour
+// stays so the visual distinction from green/red is preserved.
+const SL={optimal:"Optimal",warn:"Normal",flag:"Review",unknown:"—"};
 const SC_BG={optimal:"var(--status-ok-bg)",warn:"var(--status-warn-bg)",flag:"var(--status-danger-bg)",unknown:"transparent"};
 const SC_BORDER={optimal:"rgba(74,222,128,0.2)",warn:"rgba(245,158,11,0.2)",flag:"rgba(248,113,113,0.2)",unknown:"transparent"};
 
@@ -761,12 +798,116 @@ export default function App(){
           localStorage.setItem(sleepStartFlag, '1');
         }
       } catch (e) { console.warn('[migrate] sleepStart backfill failed:', e); }
+
+      // ── One-time migration: clear locally-binned hrZones (Phase 4r.zones.1) ──
+      // FIT parser used to fall back to %HRmax binning when the session
+      // didn't ship a time-in-zone array. That ignored the user's
+      // custom bpm zone boundaries from Garmin Connect (most users
+      // have these), producing displays 1-2 zones too high. The bad
+      // hrZones values then blocked the Garmin worker from re-fetching
+      // authoritative ones (it skips activities where hrZones != null).
+      //
+      // FIT activities live in TWO places: the activities collection
+      // (rare — only when an upstream pipeline pushed them there) and
+      // dailyLogs[].fitActivities[] (the standard upload path via the
+      // Today's Training UploadPill). Clean both. The Garmin worker
+      // path uses source.activityId to fetch the activity DTO, which
+      // re-populates hrZones from Garmin's authoritative bpm zones.
+      try {
+        const zoneFlag = 'arnold:migration:fit-hrzones-cleared-2026-05-09';
+        if (!localStorage.getItem(zoneFlag)) {
+          let cleared = 0;
+          // 1) activities collection
+          const acts = storage.get('activities') || [];
+          const cleanedActs = acts.map(a => {
+            if (!a) return a;
+            const isFitSource = a.source === 'fit-daily'
+              || (a.source && typeof a.source === 'object' && a.source.type === 'fit');
+            if (isFitSource && Array.isArray(a.hrZones)) {
+              cleared++;
+              const { hrZones, ...rest } = a;
+              return rest;
+            }
+            return a;
+          });
+          if (cleared > 0) {
+            storage.set('activities', cleanedActs, { skipValidation: true });
+          }
+          // 2) dailyLogs[].fitActivities[]
+          const logs = storage.get('dailyLogs') || [];
+          let logsTouched = 0;
+          const cleanedLogs = logs.map(log => {
+            if (!log) return log;
+            const fits = Array.isArray(log.fitActivities) ? log.fitActivities : null;
+            if (!fits || fits.length === 0) return log;
+            let logChanged = false;
+            const cleanedFits = fits.map(fd => {
+              if (fd && Array.isArray(fd.hrZones)) {
+                cleared++;
+                logChanged = true;
+                const { hrZones, ...rest } = fd;
+                return rest;
+              }
+              return fd;
+            });
+            if (logChanged) {
+              logsTouched++;
+              return { ...log, fitActivities: cleanedFits };
+            }
+            return log;
+          });
+          if (logsTouched > 0) {
+            storage.set('dailyLogs', cleanedLogs, { skipValidation: true });
+          }
+          if (cleared > 0) {
+            console.log(`[migrate] cleared locally-binned hrZones from ${cleared} FIT activities — Garmin worker will re-populate authoritative bpm zones on next sync`);
+          }
+          localStorage.setItem(zoneFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] hrZones cleanup failed:', e); }
+
+      // ── One-time migration: scrub bogus BMI from HC weight rows
+      //    + force HC weight re-sync to pull intra-day weigh-ins
+      //    (Phase 4r.energy.2). Old HC sync wrote bmi = weight/feet²×703
+      //    which produced ~5300 instead of ~27. Tile filter masked it
+      //    in the UI, but any code reading bmi directly would have
+      //    blown up. Reset bmi to null where impossible, and clear the
+      //    HC weight sync flag so next sync pulls all readings (the
+      //    new path dedupes by (date,time) so AM + PM both persist).
+      try {
+        const wFlag = 'arnold:migration:hc-weight-bmi-cleared-2026-05-10';
+        if (!localStorage.getItem(wFlag)) {
+          const rows = storage.get('weight') || [];
+          let cleaned = 0;
+          const fixed = rows.map(r => {
+            if (!r) return r;
+            const b = Number(r.bmi);
+            if (Number.isFinite(b) && (b < 10 || b > 60)) {
+              cleaned++;
+              return { ...r, bmi: null };
+            }
+            return r;
+          });
+          if (cleaned > 0) {
+            storage.set('weight', fixed, { skipValidation: true });
+            console.log(`[migrate] nulled ${cleaned} bogus BMI values on weight rows`);
+          }
+          // Reset HC weight sync timestamp so a backfill re-pulls all
+          // intra-day weigh-ins from Health Connect.
+          try {
+            localStorage.removeItem('hcSyncLastTime_weight');
+            localStorage.removeItem('arnold:hc-sync:weight:lastTime');
+          } catch {}
+          localStorage.setItem(wFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] HC weight BMI cleanup failed:', e); }
+
       // ── Build version stamp ──
       // Bump the suffix every time you change code that affects sync semantics
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4l · trend-reorder-annual-dcy-2026-05-01','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.adapt.3 · rebound-debt-advisory-2026-05-11','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
 
       // ── Garmin Wellness backfill (Phase 4c) ──
       // If the user has configured Garmin credentials + the Cloud Sync Worker,
@@ -829,6 +970,90 @@ export default function App(){
           });
         }
       } catch (e) { console.warn('[garmin-activities] init failed:', e); }
+
+      // ── Garmin weight direct sync (Phase 4r.energy.4) ────────────────────
+      // Pull body-composition readings (weight, BF%, muscle mass, bone mass,
+      // body water %, with sample timestamps) straight from Garmin via the
+      // Cloud Sync Worker. Replaces the Health Connect path, which was
+      // collapsing same-day weigh-ins and stripping body-comp fields.
+      //
+      // Requires Worker endpoint POST /garmin/weight (see
+      // garmin-weight-client.js for the contract). Fails silently when the
+      // endpoint isn't deployed — HC sync continues as the fallback.
+      try {
+        const wFlag = `arnold:garmin-weight-sync:${new Date().toISOString().slice(0,10)}`;
+        if (!localStorage.getItem(wFlag)) {
+          import('./core/garmin-weight-client.js').then(({ syncRecentWeight }) => {
+            return syncRecentWeight({ daysBack: 30 })
+              .then(r => {
+                if (r?.ok) {
+                  console.log(`[garmin-weight] fetched=${r.fetched} added=${r.added} replaced=${r.replaced || 0} skipped=${r.skipped}`);
+                  localStorage.setItem(wFlag, '1');
+                } else if (r?.error && r.error !== 'not_configured' && r.error !== 'no_config') {
+                  // 404 / http_404 = worker endpoint not deployed yet — silent
+                  if (!String(r.error).startsWith('http_404')) {
+                    console.warn('[garmin-weight] sync:', r.error, r.detail || '');
+                  }
+                }
+              })
+              .catch(e => console.warn('[garmin-weight] sync failed:', e));
+          });
+        }
+      } catch (e) { console.warn('[garmin-weight] init failed:', e); }
+
+      // ── HR zone bpm boundaries (Phase 4r.zones.2) ───────────────────────
+      // Cache the user's Garmin Connect HR zone configuration into
+      // profile.hrZoneBpm so derive/hr.js zoneForHr() can bin against
+      // the same bpm boundaries Garmin uses. TTL'd weekly; fails silently
+      // if the worker endpoint isn't deployed yet — Arnold will simply
+      // fall back to %HRmax until /garmin/user/hr-zones lands.
+      //
+      // After cache lands (or if we already have it), Phase 4r.zones.3
+      // re-bins recent activities' hrZones against those boundaries by
+      // re-fetching their FIT files. Garmin's API hrTimeInZone uses
+      // %HRmax — different from Connect UI's bpm zones — so the only
+      // way to actually MATCH Connect is to bin raw records ourselves.
+      try {
+        import('./core/garmin-activities-client.js').then((mod) => {
+          const { fetchAndCacheHrZones, applyAdaptiveZonesIfDue, reBinActivitiesWithBpmZones, hasRebinnedAgainstBpm } = mod;
+          return fetchAndCacheHrZones().then(r => {
+            if (r?.ok && !r.cached) {
+              console.log('[arnold] cached Garmin HR zones', r.hrZoneBpm);
+            } else if (r && r.error && r.error !== 'not_configured') {
+              console.warn('[arnold] HR zone fetch:', r.error, r.detail || '');
+            }
+            // Phase 4r.zones.4 — adaptive Karvonen recompute (only fires
+            // when source: 'karvonen' is set on profile.hrZoneBpm; the
+            // user opts in by manually selecting Karvonen, after which
+            // zones track RHR drift on a weekly cadence).
+            return applyAdaptiveZonesIfDue();
+          }).then(adapt => {
+            if (adapt?.updated) {
+              const cf = adapt.after?.computedFrom || {};
+              console.log(
+                `[arnold] Karvonen zones updated (RHR=${cf.restingHR}, maxHR=${cf.maxHR}, drift=${adapt.maxDrift}bpm)`,
+                adapt.drifts.map(d => `${d.zone}: ${d.old}→${d.next}`).join('  ')
+              );
+            } else if (adapt?.reason === 'within_threshold') {
+              console.log(`[arnold] zones checked — within ${adapt.maxDrift}bpm of cached, no update (RHR=${adapt.restingHR})`);
+            }
+            // Re-bin trigger: runs if we have bpm boundaries cached AND
+            // either we've never rebinned, OR the adaptive update just
+            // cleared the flag because zones drifted.
+            const profile = window.__arnoldStorage?.get('profile') || {};
+            if (profile.hrZoneBpm && !hasRebinnedAgainstBpm()) {
+              console.log('[arnold] re-binning recent activities against custom bpm zones…');
+              return reBinActivitiesWithBpmZones({ daysBack: 30 }).then(rb => {
+                if (rb?.ok && rb.rebinned > 0) {
+                  console.log(`[arnold] re-binned ${rb.rebinned}/${rb.attempted} activities to bpm-custom zones`);
+                } else if (rb && rb.error) {
+                  console.warn('[arnold] re-bin:', rb.error);
+                }
+              });
+            }
+          });
+        });
+      } catch (e) { console.warn('[arnold] HR zone fetch init failed:', e); }
 
 
       // ── One-time migration: labSnapshots + clinicalTests → storage layer ──
@@ -1039,6 +1264,36 @@ export default function App(){
           loadData().then(d2=>setData(d2));
         }
       });
+
+      // Full-sync orchestrator (Phase 4o.fullsync.1) — pulls Cloud Sync
+      // + Garmin Activities + Garmin Wellness + Cronometer + FIT relay
+      // in parallel on every app open and visibility-resume. Each
+      // source is throttled by its own staleness threshold so opening
+      // the app twice in a row doesn't hammer the workers.
+      import('./core/full-sync.js').then(({ syncEverything }) => {
+        // Boot sync — auto mode honors thresholds.
+        syncEverything().then(r => {
+          if (r.ranSources.length > 0) {
+            console.log('[full-sync] boot ran:', r.ranSources, 'skipped fresh:', r.skippedFresh, 'in', r.durationMs, 'ms');
+          }
+        }).catch(e => console.warn('[full-sync] boot failed:', e));
+
+        // Foreground resume (mobile background→foreground, web tab refocus)
+        if (typeof document !== 'undefined') {
+          let lastBoot = Date.now();
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') return;
+            // Debounce: only re-sync if > 60s since last visibility-driven sync
+            if (Date.now() - lastBoot < 60_000) return;
+            lastBoot = Date.now();
+            syncEverything().then(r => {
+              if (r.ranSources.length > 0) {
+                console.log('[full-sync] resume ran:', r.ranSources, 'skipped fresh:', r.skippedFresh);
+              }
+            }).catch(e => console.warn('[full-sync] resume failed:', e));
+          });
+        }
+      });
     });
   },[]);
 
@@ -1074,19 +1329,61 @@ export default function App(){
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
       </nav>
       <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{}),...(isMobileApp?{touchAction:'pan-y'}:{})}} className="arnold-main" {...(isMobileApp?mobileSwipe:{})}>
-        {/* ── Mobile compact header for drill-down tabs (matches Start/EdgeIQ) ── */}
+        {/* ── Phase 4q.header.2 — Unified mobile page header ──
+            Every drill-down tab (NOT Start) gets the same shape:
+              [A] ARNOLD                                          date
+              [colored nav icon] Tab Name
+            The ARNOLD brand mark sits on top as a quiet identifier (same
+            "A" badge + uppercase wordmark used on Start), then the page
+            title row shows the bottom-nav icon tinted in that tab's
+            accent color (bolt yellow on Play, pulse red on Core, gem
+            purple on EdgeIQ, etc.) so each page reads thematically.
+            Padding is uniform across every tab. Date chip on the right
+            only on day-anchored tabs (Play / Fuel / Daily). */}
         {isMobileApp&&!mobileHomeActive&&(()=>{
-          const tabLabels={activity:'Play',nutrition_mobile:'Fuel',daily:'Daily Log',labs:'Labs',clinical:'Core',races:'Races',goals:'Goals',supplements:'Stack',settings:'Settings',weekly:'EdgeIQ'};
-          const label=tabLabels[tab]||tab;
-          return(<div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'10px 10px 8px'}}>
-            <div>
-              <div style={{display:'flex',alignItems:'center',gap:5}}>
-                <div style={{width:22,height:22,borderRadius:6,background:'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',border:'1px solid rgba(91,155,213,0.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'#5b9bd5',fontWeight:800}}>A</div>
-                <span style={{fontSize:9,fontWeight:700,color:'rgba(255,255,255,0.35)',letterSpacing:'0.14em'}}>ARNOLD</span>
+          const label = TAB_LABEL[tab] || tab;
+          const accentColor = TAB_ACCENT_COLOR[tab] || TAB_ACTIVE_COLOR;
+          // Date persists on every drill-down tab (Phase 4q.header.5) so
+          // the top-right anchor is consistent across Play/Fuel/Core/Labs/etc.
+          const today=(()=>{const d=new Date();return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});})();
+          // Header has zero horizontal padding — sits inside <main> which
+          // mobile.css already gives 12px so the page frame is uniform.
+          return(
+            <div style={{padding:'10px 0 8px'}}>
+              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:10}}>
+                <div style={{minWidth:0}}>
+                  {/* ARNOLD brand mark — same treatment as Start screen */}
+                  <div style={{display:'flex',alignItems:'center',gap:5}}>
+                    <div style={{
+                      width:22,height:22,borderRadius:6,
+                      background:'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.10))',
+                      border:'1px solid rgba(91,155,213,0.12)',
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                      fontSize:10,color:'#6babdf',fontWeight:800,
+                    }}>A</div>
+                    <span style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.65)',letterSpacing:'0.14em'}}>ARNOLD</span>
+                  </div>
+                  {/* Page title row — colored nav icon + tab name */}
+                  <div style={{display:'flex',alignItems:'center',gap:7,marginTop:5,minWidth:0}}>
+                    <NavIconForTab tabId={tab} color={accentColor} size={18}/>
+                    <span style={{
+                      fontSize:16,fontWeight:600,
+                      color:'var(--text-primary)',
+                      letterSpacing:'0.01em',
+                      whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',
+                    }}>{label}</span>
+                  </div>
+                </div>
+                <span style={{
+                  fontSize:11,fontWeight:500,
+                  color:'var(--text-muted)',
+                  letterSpacing:'0.04em',
+                  whiteSpace:'nowrap',
+                  marginTop:4,
+                }}>{today}</span>
               </div>
-              <div style={{fontSize:14,fontWeight:600,color:'rgba(255,255,255,0.6)',marginTop:3}}>{label}</div>
             </div>
-          </div>);
+          );
         })()}
         {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} mobileInitView={mobileInitView} onAiSum={async()=>{
           if(aiSummLoad)return;
@@ -1104,7 +1401,7 @@ export default function App(){
         {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></div>}
         {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></div>}
         {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
-        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}><div style={S.st}>Goals</div><WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/><StartTilePickerSection data={data}/></div></div>}
+        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}>{!isMobileApp && <div style={S.st}>Goals</div>}<WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/><StartTilePickerSection data={data}/></div></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
         {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
       </main>
@@ -1326,9 +1623,13 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
     setPdfPreview(null);
   }
 
+  // Phase 4q.frame.3 — hide the "Body & Fitness" subhead on mobile so
+  // the unified page header (Core) is the only top label and the tab
+  // bar (Overview/DEXA/VO2 Max/RMR) sits closer to the page top.
+  const _isMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
   return(
     <div style={S.sec}>
-      <div style={S.st}>◉ Body & Fitness</div>
+      {!_isMobile && <div style={S.st}>◉ Body & Fitness</div>}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}}>
         <div style={S.labNav}>
           {[["overview","Overview"],["dexa","DEXA"],["vo2","VO₂ Max"],["rmr","RMR"]].map(([id,lbl])=>(
@@ -1803,6 +2104,17 @@ function LabsModule({data,persist,showToast}){
   const [uploading,setUploading]=useState(false);
   const [aiTxt,setAiTxt]=useState("");
   const [aiRun,setAiRun]=useState(false);
+  // Viewport tracking (Phase 4o.labs.6) — flips the marker grid from a
+  // 3-up desktop layout to a 2-up mobile layout so marker names like
+  // "Triglycerides" or "Magnesium" fit without truncating.
+  const [isMobile,setIsMobile]=useState(()=>typeof window!=='undefined'&&window.innerWidth<=600);
+  useEffect(()=>{
+    if (typeof window==='undefined') return;
+    const mq=window.matchMedia('(max-width: 600px)');
+    const h=e=>setIsMobile(e.matches);
+    mq.addEventListener('change',h);
+    return ()=>mq.removeEventListener('change',h);
+  },[]);
   const fileRef=useRef();
   // Swipe between blood categories (contained — doesn't bubble to outer tab swipe)
   const catSwipeRef=useRef({x:0,y:0});
@@ -1812,9 +2124,12 @@ function LabsModule({data,persist,showToast}){
     const dy=e.changedTouches[0].clientY-catSwipeRef.current.y;
     if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.4){
       e.stopPropagation();
-      const idx=BCATS.indexOf(selCat);
-      if(dx<0&&idx<BCATS.length-1)setSelCat(BCATS[idx+1]);
-      if(dx>0&&idx>0)setSelCat(BCATS[idx-1]);
+      // Honour the dynamic `cats` list (BCATS + Other when present) so
+      // swiping reaches the Other tab too.
+      const list = (typeof cats !== 'undefined' && cats?.length) ? cats : BCATS;
+      const idx=list.indexOf(selCat);
+      if(dx<0&&idx<list.length-1)setSelCat(list[idx+1]);
+      if(dx>0&&idx>0)setSelCat(list[idx-1]);
     }
   };
 
@@ -1823,6 +2138,19 @@ function LabsModule({data,persist,showToast}){
 
   const sCounts={optimal:0,warn:0,flag:0};
   if(latest)Object.entries(latest.markers).forEach(([n,v])=>{const s=bStatus(n,v);if(sCounts[s]!==undefined)sCounts[s]++;});
+
+  // ── Unmapped markers (Phase 4o.labs.2) ──────────────────────────────
+  // Imported keys that don't match the BM registry. They live in storage
+  // and feed AI analysis but had no UI surface until now. Sorted A→Z so
+  // the Other tab is browsable. The header chip lets the user click
+  // straight to it so the count discrepancy is no longer mysterious.
+  const unmappedKeys = latest
+    ? Object.keys(latest.markers).filter(k => !BM[k]).sort((a,b)=>a.localeCompare(b))
+    : [];
+  const totalCount  = latest ? Object.keys(latest.markers).length : 0;
+  const mappedCount = totalCount - unmappedKeys.length;
+  // Tabs: include Other only when there's something to put in it.
+  const cats = unmappedKeys.length > 0 ? [...BCATS, 'Other'] : BCATS;
 
   const doImport=async()=>{
     if(!upText.trim()){showToast("⚠ No data");return;}
@@ -1851,9 +2179,13 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
   // Build sparkline data with dates for tooltips
   const sparkData=(name,n=7)=>snaps.slice(0,n).reverse().map(s=>({val:parseFloat(s.markers[name]),date:s.date,raw:s.markers[name]})).filter(p=>!isNaN(p.val));
 
+  // Phase 4q.frame.3 — hide "Blood Panel" subhead on mobile so the
+  // Labs page header is the only top label and the Overview/Upload tabs
+  // sit closer to the page top (matches how Core/Play/Fuel render).
+  const _isMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
   return(
     <div style={S.sec}>
-      <div style={S.st}>⬡ Blood Panel</div>
+      {!_isMobile && <div style={S.st}>⬡ Blood Panel</div>}
       <div style={S.labNav}>
         {[["overview","Overview"],["upload","Upload"]].map(([id,lbl])=>(
           <button key={id} onClick={()=>setView(id)} style={{...S.lnb,...(view===id?S.lnba:{})}}>{lbl}</button>
@@ -1864,48 +2196,125 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
         {!latest&&<div style={S.empty}>No lab data. Upload a blood panel CSV.</div>}
         {latest&&<>
           <div style={S.snap}>
-            <div><div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,color:C.acc}}>{latest.date}</div><div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,marginTop:1}}>{Object.keys(latest.markers).length} markers</div></div>
+            <div>
+              <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,color:C.acc}}>{latest.date}</div>
+              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,marginTop:1,display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap'}}>
+                <span>{mappedCount} of {totalCount} markers</span>
+                {unmappedKeys.length > 0 && (
+                  <button
+                    onClick={()=>setSelCat('Other')}
+                    title={`Click to view: ${unmappedKeys.join(', ')}`}
+                    style={{
+                      background:'rgba(148,163,184,0.12)',
+                      border:'0.5px solid rgba(148,163,184,0.3)',
+                      borderRadius:10,
+                      padding:'1px 8px',
+                      color:'#94a3b8',
+                      fontSize:'inherit',
+                      fontFamily:'inherit',
+                      cursor:'pointer',
+                      letterSpacing:'0.04em',
+                    }}>
+                    {unmappedKeys.length} unmapped →
+                  </button>
+                )}
+              </div>
+            </div>
             <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-              {[["optimal","#4ade80"],[" warn","#facc15"],["flag","#f87171"]].map(([k,clr])=>(
-                <div key={k} style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",padding:"2px 7px",borderRadius:10,background:`${clr}18`,border:`0.5px solid ${clr}40`,color:clr}}>{sCounts[k.trim()]} {k.trim()}</div>
+              {/* Phase 4o.labs.5 — display labels separated from status
+                  keys so "warn" shows as "normal" (in-range, not-optimal)
+                  and "flag" as "review" (out-of-range), matching the
+                  per-tile badges. */}
+              {[
+                {key:'optimal', label:'optimal', clr:'#4ade80'},
+                {key:'warn',    label:'normal',  clr:'#facc15'},
+                {key:'flag',    label:'review',  clr:'#f87171'},
+              ].map(({key,label,clr})=>(
+                <div key={key} style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",padding:"2px 7px",borderRadius:10,background:`${clr}18`,border:`0.5px solid ${clr}40`,color:clr}}>{sCounts[key]} {label}</div>
               ))}
             </div>
           </div>
           <div style={{display:"flex",gap:0,overflowX:"auto",borderBottom:`0.5px solid ${C.b}`}}>
-            {BCATS.map(cat=>(
+            {cats.map(cat=>(
               <button key={cat} onClick={()=>setSelCat(cat)} style={{background:"none",border:"none",borderBottom:`2px solid ${selCat===cat?BCAT_CLR[cat]:"transparent"}`,color:selCat===cat?BCAT_CLR[cat]:C.m,padding:"6px 9px",cursor:"pointer",fontFamily:"inherit",fontSize:"clamp(10px,0.3vw + 9px,11px)",letterSpacing:"0.06em",whiteSpace:"nowrap",display:"flex",gap:3,alignItems:"center"}}>
-                {BCAT_ICO[cat]} {cat}
+                {BCAT_ICO[cat]} {cat}{cat==='Other' && unmappedKeys.length>0 ? ` (${unmappedKeys.length})` : ''}
               </button>
             ))}
           </div>
-          <div onTouchStart={onCatTouchStart} onTouchEnd={onCatTouchEnd} style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0, 1fr))",gap:7,touchAction:"pan-y"}}>
-            {Object.entries(BM).filter(([,m])=>m.cat===selCat).map(([name,meta])=>{
-              const val=latest.markers[name];
-              const pv=prev?.markers[name];
-              const stat=bStatus(name,val);
-              const delta=val!=null&&pv!=null?parseFloat(val)-parseFloat(pv):null;
-              const has=val!=null&&!isNaN(val);
-              const sd=sparkData(name);
-              const tooltip=sd.map(p=>`${p.date}: ${p.raw} ${meta.unit}`).join('\n');
-              return(
-                <div key={name} style={{background:C.surf,border:`0.5px solid ${has?SC[stat]+"40":C.b}`,borderRadius:"var(--radius-md)",padding:"12px 14px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                    <div style={{fontSize:10,fontWeight:500,color:C.m,letterSpacing:"0.06em",textTransform:"uppercase",lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,marginRight:6}}>{meta.lbl}</div>
-                    <div style={{fontSize:10,fontWeight:500,padding:"1px 6px",borderRadius:4,background:SC_BG[stat],color:SC[stat],border:`0.5px solid ${SC_BORDER[stat]}`,letterSpacing:"0.05em",flexShrink:0,whiteSpace:"nowrap"}}>{SL[stat]}</div>
+          <div onTouchStart={onCatTouchStart} onTouchEnd={onCatTouchEnd} style={{display:"grid",gridTemplateColumns:isMobile?"repeat(2, minmax(0, 1fr))":"repeat(3, minmax(0, 1fr))",gap:7,touchAction:"pan-y"}}>
+            {selCat === 'Other' ? (
+              /* ── Other tab — markers imported from CSV but not in the BM
+                 registry. No status colour (no thresholds defined), no
+                 reference range — just the raw value, optional sparkline,
+                 and a "no threshold" badge. The label is derived from the
+                 raw key by stripping the trailing "(unit)" suffix. */
+              unmappedKeys.map(name => {
+                const val = latest.markers[name];
+                const pv  = prev?.markers[name];
+                const has = val != null && !isNaN(val);
+                const delta = val != null && pv != null ? parseFloat(val) - parseFloat(pv) : null;
+                const unitMatch = name.match(/\(([^)]+)\)\s*$/);
+                const unit = unitMatch ? unitMatch[1] : '';
+                const lbl  = unitMatch ? name.replace(/\s*\([^)]+\)\s*$/, '').trim() : name;
+                const sd = sparkData(name);
+                const tooltip = sd.map(p => `${p.date}: ${p.raw}${unit ? ' ' + unit : ''}`).join('\n');
+                return (
+                  <div key={name}
+                    title={`${name} — not in BM registry. Add a definition to BM (Arnold.jsx:281) to enable thresholds, range, and category placement.`}
+                    style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <div style={{fontSize:10,fontWeight:600,color:'var(--text-secondary, var(--text-primary))',letterSpacing:"0.06em",textTransform:"uppercase",lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,marginRight:6}}>{lbl}</div>
+                      <div style={{fontSize:10,fontWeight:500,padding:"1px 6px",borderRadius:4,background:'rgba(148,163,184,0.12)',color:'#94a3b8',border:'0.5px solid rgba(148,163,184,0.3)',letterSpacing:"0.05em",flexShrink:0,whiteSpace:"nowrap"}}>UNMAPPED</div>
+                    </div>
+                    <div style={{fontSize:"clamp(18px,1.5vw + 12px,24px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em",lineHeight:1.2}}>{has?val:"—"}<span style={{fontSize:11,color:C.m,fontWeight:400,marginLeft:3}}>{has?unit:""}</span></div>
+                    <div style={{fontSize:11,color:C.m,marginTop:3,display:"flex",alignItems:"baseline",gap:6,flexWrap:"wrap"}}>
+                      <span style={{fontStyle:'italic',opacity:0.75}}>no threshold defined</span>
+                      {delta!==null&&<span>{delta>0?"▲":"▼"}{Math.abs(delta).toFixed(2)} from prev</span>}
+                    </div>
+                    <LabSparkline data={sd} color={'#94a3b8'} tooltip={tooltip}/>
                   </div>
-                  <div style={{fontSize:"clamp(18px,1.5vw + 12px,24px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em",lineHeight:1.2}}>{has?val:"—"}<span style={{fontSize:11,color:C.m,fontWeight:400,marginLeft:3}}>{has?meta.unit:""}</span></div>
-                  <div style={{fontSize:11,color:C.m,marginTop:3,display:"flex",alignItems:"baseline",gap:6,flexWrap:"wrap"}}>
-                    <span>{meta.opt[0]}–{meta.opt[1]} {meta.unit}</span>
-                    {delta!==null&&<span style={{color:dc(name,delta)}}>{delta>0?"▲":"▼"}{Math.abs(delta).toFixed(1)} from prev</span>}
+                );
+              })
+            ) : (
+              Object.entries(BM).filter(([,m])=>m.cat===selCat).map(([name,meta])=>{
+                const val=latest.markers[name];
+                const pv=prev?.markers[name];
+                const stat=bStatus(name,val);
+                const delta=val!=null&&pv!=null?parseFloat(val)-parseFloat(pv):null;
+                const has=val!=null&&!isNaN(val);
+                const sd=sparkData(name);
+                const tooltip=sd.map(p=>`${p.date}: ${p.raw} ${meta.unit}`).join('\n');
+                return(
+                  <div key={name} style={{background:C.surf,border:`0.5px solid ${has?SC[stat]+"40":C.b}`,borderRadius:"var(--radius-md)",padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <div style={{fontSize:10,fontWeight:600,color:'var(--text-secondary, var(--text-primary))',letterSpacing:"0.06em",textTransform:"uppercase",lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,marginRight:6}}>{meta.lbl}</div>
+                      <div style={{fontSize:10,fontWeight:500,padding:"1px 6px",borderRadius:4,background:SC_BG[stat],color:SC[stat],border:`0.5px solid ${SC_BORDER[stat]}`,letterSpacing:"0.05em",flexShrink:0,whiteSpace:"nowrap"}}>{SL[stat]}</div>
+                    </div>
+                    <div style={{fontSize:"clamp(18px,1.5vw + 12px,24px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em",lineHeight:1.2}}>{has?val:"—"}<span style={{fontSize:11,color:C.m,fontWeight:400,marginLeft:3}}>{has?meta.unit:""}</span></div>
+                    <div style={{fontSize:11,color:C.m,marginTop:3,display:"flex",alignItems:"baseline",gap:6,flexWrap:"wrap"}}>
+                      <span>{meta.opt[0]}–{meta.opt[1]} {meta.unit}</span>
+                      {delta!==null&&<span style={{color:dc(name,delta)}}>{delta>0?"▲":"▼"}{Math.abs(delta).toFixed(1)} from prev</span>}
+                    </div>
+                    {/* Inline description (Phase 4o.labs.4) — explains
+                        what the marker measures and what shifts mean.
+                        Italic + slightly muted so it reads as caption,
+                        not headline. Hidden when a description hasn't
+                        been written yet so legacy entries don't render
+                        an empty caption row. */}
+                    {meta.desc && (
+                      <div style={{fontSize:9.5,color:C.m,fontStyle:'italic',lineHeight:1.35,marginTop:4,opacity:0.85}}>
+                        {meta.desc}
+                      </div>
+                    )}
+                    <LabSparkline data={sd} color={SC[stat]} tooltip={tooltip}/>
                   </div>
-                  <LabSparkline data={sd} color={SC[stat]} tooltip={tooltip}/>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
           {/* Swipe hint */}
           <div style={{display:"flex",justifyContent:"center",gap:4,padding:"6px 0"}}>
-            {BCATS.map((cat,i)=><div key={cat} style={{width:selCat===cat?16:5,height:5,borderRadius:3,background:selCat===cat?BCAT_CLR[cat]:'rgba(255,255,255,0.12)',transition:'all 0.2s'}}/>)}
+            {cats.map((cat,i)=><div key={cat} style={{width:selCat===cat?16:5,height:5,borderRadius:3,background:selCat===cat?BCAT_CLR[cat]:'rgba(255,255,255,0.12)',transition:'all 0.2s'}}/>)}
           </div>
           <button style={S.aib} onClick={runAI} disabled={aiRun}><span>✦</span>{aiRun?"Analysing…":"AI Blood Panel Analysis"}</button>
           {aiTxt&&!aiRun&&<div style={S.air}><div style={S.aih}>✦ Blood Panel Analysis · {latest.date}</div><div style={S.ait}>{aiTxt}</div></div>}
@@ -2400,6 +2809,9 @@ function HomeCockpit({data,setTab}){
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
 function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobileInitView}){
+  // ── Storage version (Phase 4m.2) — invalidates the KRI ctx/timeframes
+  // memo whenever any storage key changes (Cloud Sync pull, manual edit).
+  const storageVersion=useStorageVersion();
   // ── Mobile detection ──
   const [isDashMobile,setIsDashMobile]=useState(()=>window.innerWidth<=600);
   useEffect(()=>{const mq=window.matchMedia('(max-width: 600px)');const h=e=>setIsDashMobile(e.matches);mq.addEventListener('change',h);return()=>mq.removeEventListener('change',h);},[]);
@@ -2704,6 +3116,19 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const avg30Pro=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.protein)||0),0)/last30Crono.length):null;
   const avg30Carbs=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.carbs)||0),0)/last30Crono.length):null;
   const avg30Fat=last30Crono.length?Math.round(last30Crono.reduce((s,c)=>s+(parseFloat(c.fat)||0),0)/last30Crono.length):null;
+  // Phase 4l — Micronutrients + quality fields for the LAST 8 WEEKS Nutrition
+  // tile, so it has comparable visual heft to the Training tile next to it.
+  const _sumKey=(k)=>last30Crono.reduce((s,c)=>s+(parseFloat(c[k])||0),0);
+  const avg30Sod  = last30Crono.length?Math.round(_sumKey('sodium')/last30Crono.length):null;
+  const avg30Pot  = last30Crono.length?Math.round(_sumKey('potassium')/last30Crono.length):null;
+  const avg30Mag  = last30Crono.length?Math.round(_sumKey('magnesium')/last30Crono.length):null;
+  const avg30Fiber= last30Crono.length?Math.round(_sumKey('fiber')/last30Crono.length):null;
+  const avg30Sugar= last30Crono.length?Math.round(_sumKey('sugar')/last30Crono.length):null;
+  const _satFSum = _sumKey('saturated_fat')||_sumKey('saturatedFat')||_sumKey('satFat');
+  const avg30SatF = last30Crono.length&&_satFSum?Math.round(_satFSum/last30Crono.length):null;
+  // Logging coverage — out of last 30 days, how many had any nutrition logged
+  const _last30Dates=(()=>{const o=new Set();for(let i=0;i<30;i++){const d=new Date();d.setDate(d.getDate()-i);o.add(td(d));}return o;})();
+  const cov30Days = last30Crono.filter(c=>_last30Dates.has(c.date)).length;
   // 30-day average daily burn for the Nutrition donut: RMR floor + activity calories ÷ 30
   const last30Acts=activities.filter(a=>a.date>=td(d30));
   const last30ActKcal=last30Acts.reduce((s,a)=>s+(parseFloat(a.calories)||0),0);
@@ -2736,6 +3161,26 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const allLogs=storage.get('dailyLogs')||[];
   const rpeEntries=allLogs.filter(l=>l?.rpe!=null&&!isNaN(parseFloat(l.rpe)));
   const avgRPE=rpeEntries.length?(rpeEntries.reduce((s,l)=>s+parseFloat(l.rpe),0)/rpeEntries.length).toFixed(1):null;
+
+  // ── Live Baseline data (Phase 4l Stage B — replaces hardcoded Mar 2025) ──
+  // Body composition: priority DEXA → Garmin scale → profile → estimate
+  const liveBodyComp = (() => { try { return getCurrentBodyComp(); } catch { return null; } })();
+  // RMR: Katch-McArdle from current LBM (live from latest body comp)
+  const liveRMRResult = (() => { try { return computeRMR(); } catch { return null; } })();
+  // VO2Max: priority watch override → wellness → latest activity → clinical lab test
+  const clinicalTestsAll = storage.get('clinicalTests') || [];
+  const wellnessAll = storage.get('wellness') || [];
+  const liveVO2Max = (() => {
+    const profileObj = storage.get('profile') || {};
+    const manualV = Number(profileObj?.watchVO2Max);
+    if (Number.isFinite(manualV) && manualV > 0) return Math.round(manualV * 10) / 10;
+    const sortedW = [...wellnessAll].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    for (const w of sortedW) { const v = Number(w?.garminWatchVO2Max); if (Number.isFinite(v) && v > 0) return Math.round(v * 10) / 10; }
+    const sortedActs = [...activities].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    for (const a of sortedActs) { const v = a?.vO2MaxValue ?? a?.vo2Max ?? a?.vO2Max; if (typeof v === 'number' && v > 0) return Math.round(v * 10) / 10; }
+    const labV = clinicalTestsAll.filter(t => t?.type === 'vo2max' && Number(t?.metrics?.vo2max) > 0).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+    return labV ? Math.round(Number(labV.metrics.vo2max) * 10) / 10 : null;
+  })();
 
   // ── Recovery panel variables (Phase 4l Stage 2.4) ──
   const d7Trend=new Date(now);d7Trend.setDate(d7Trend.getDate()-7);
@@ -2773,7 +3218,14 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // 8-week stats for sparklines + Annual Trends 8-wk charts
   // Fields: mi, hrs, sleepScore, rhr, hrv, pace (avg run pace secs), weight (avg)
   const weeklyStatsTrend=Array.from({length:8},(_,i)=>{
-    const ws=new Date(now);ws.setDate(now.getDate()-(7*(7-i)+now.getDay()));ws.setHours(0,0,0,0);
+    // ISO Mon-Sun week. JS getDay() returns 0=Sunday … 6=Saturday, so the
+    // offset back to Monday is (day===0?6:day-1). Using getDay() directly
+    // produced a Sunday-start window — on Sunday morning the current week
+    // bucket pointed forward to next Sunday, leaving this Mon-Sat data
+    // outside the bucket. (Bug fix: cockpit blank on Sundays.)
+    const day=now.getDay();
+    const daysBackToMon=(day===0?6:day-1);
+    const ws=new Date(now);ws.setDate(now.getDate()-7*(7-i)-daysBackToMon);ws.setHours(0,0,0,0);
     const we=new Date(ws);we.setDate(ws.getDate()+7);
     const wAll=activities.filter(a=>{const d=new Date(a.date);return d>=ws&&d<we;});
     const wRuns=wAll.filter(isRunAct);
@@ -2784,8 +3236,14 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
     const sleepScore=sScores.length?Math.round(sScores.reduce((a,b)=>a+b,0)/sScores.length):null;
     const rhrs=wSleep.filter(s=>s.restingHR).map(s=>s.restingHR);
     const rhr=rhrs.length?Math.round(rhrs.reduce((a,b)=>a+b,0)/rhrs.length):null;
-    const wHRV=hrvData.filter(h=>{const d=new Date(h.date);return d>=ws&&d<we;});
-    const hrvs=wHRV.filter(h=>h.overnightHRV).map(h=>h.overnightHRV);
+    // HRV — merge sources by date (Phase 4m.2.10 fix). Cockpit was only
+    // reading hrvData (manual CSV imports); Garmin Worker writes HRV onto
+    // sleepData rows (overnightHRV field). Sleep wins on date conflicts —
+    // same priority as the Recovery > HRV KRI tile uses via mergedHrvByDate.
+    const hrvByDate=new Map();
+    for(const h of hrvData){const d=new Date(h.date);if(d>=ws&&d<we&&h?.overnightHRV)hrvByDate.set(h.date,Number(h.overnightHRV));}
+    for(const s of wSleep){if(s?.overnightHRV)hrvByDate.set(s.date,Number(s.overnightHRV));}
+    const hrvs=[...hrvByDate.values()].filter(v=>Number.isFinite(v));
     const hrv=hrvs.length?Math.round(hrvs.reduce((a,b)=>a+b,0)/hrvs.length):null;
     // Avg pace this week (seconds per mile)
     const paces=wRuns.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
@@ -2826,433 +3284,355 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
     </div>;
   };
 
+  // ── KRI context for Trend spaceship view (Phase 4m.2) ──
+  // buildTileContext bundles every collection any metric might need (avoids
+  // each metric reading storage individually). Memoized against the global
+  // storage version so a Cloud Sync pull triggers a recompute.
+  const tileCtx=useMemo(()=>buildTileContext({
+    activities, sleepData: cleanSleepForAveraging(storage.get('sleep')||[]),
+    hrvData: storage.get('hrv')||[], weightData: storage.get('weight')||[],
+    nutritionLog: storage.get('nutritionLog')||[], cronometer: storage.get('cronometer')||[],
+    dailyLogs: storage.get('dailyLogs')||[], profile,
+    wellness: storage.get('wellness')||[],
+    // Races live at the legacy localStorage key 'arnold:races' (used by
+    // Garmin ICS sync + manual CSV imports). Race Predictor metric uses
+    // the soonest future race to pick which prediction field to surface.
+    races:(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return [];}})(),
+  }),[storageVersion]);
+  // Pinned-to-Start-screen state for the tap-to-pin feature on KRI tiles.
+  const [tilePrefs,setTilePrefs]=useState(()=>normalizeTilePrefs(storage.get('startTilePrefs')));
+  useEffect(()=>{setTilePrefs(normalizeTilePrefs(storage.get('startTilePrefs')));},[storageVersion]);
+
+  // ── Phase 4o.autopromote.4 — Web Trend tab visibility into auto-promote ──
+  // Compute the same auto-promoted tile selection mobile uses, so the Trend
+  // tab can render a hollow amber star on tiles that would auto-fill the
+  // Start screen even though the user hasn't manually pinned them. Gives
+  // the user a single coherent picture of what shows on Start without
+  // having to switch devices to check.
+  const promoCtxWeb = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const todays = (activities || []).filter(a => (a.date || '').startsWith(today));
+    let sessionType = 'rest';
+    if (todays.length) {
+      const hasRun = todays.some(isRunAct);
+      const hasStrength = todays.some(isStrengthAct);
+      const hasHIIT = todays.some(isHIITAct);
+      if (hasRun && hasStrength) sessionType = 'mixed';
+      else if (hasHIIT && hasStrength) sessionType = 'hyrox';
+      else if (hasRun) sessionType = 'run';
+      else if (hasStrength) sessionType = 'strength';
+      else sessionType = 'mixed';
+    }
+    let activePrompts = [];
+    try { activePrompts = getTopCoachingPrompts(5) || []; } catch {}
+    return { sessionType, activePrompts, today, tileCtx, maxSlots: 4 };
+  }, [storageVersion, activities, tileCtx]);
+
+  const resolvedTilesWeb = useMemo(
+    () => resolveAllStartTiles(tilePrefs, TILE_METRICS, promoCtxWeb),
+    [tilePrefs, promoCtxWeb]
+  );
+  // Toggle a KRI's presence in the user's pinned list for its category.
+  // Mirrors StartTilePicker's min-2/max-4 constraint logic in spirit; this
+  // is the lightweight tap-to-toggle path (the picker still does final
+  // validation when you save).
+  const togglePin=useCallback((metric)=>{
+    setTilePrefs(prev=>{
+      const cat=metric.category;
+      const cur=Array.isArray(prev?.[cat])?prev[cat]:[];
+      const isPinned=cur.includes(metric.id);
+      let next;
+      if(isPinned){
+        if(cur.length<=2){showToast?.('Need at least 2 pinned per category');return prev;}
+        next={...prev,[cat]:cur.filter(id=>id!==metric.id)};
+      }else{
+        if(cur.length>=4){showToast?.('Max 4 pinned per category — unpin one first');return prev;}
+        next={...prev,[cat]:[...cur,metric.id]};
+      }
+      try{
+        storage.set('startTilePrefs',next,{skipValidation:true});
+        console.info('[tilesync][web] togglePin saved', { cat, metric: metric.id, action: isPinned?'unpin':'pin', next: next[cat] });
+      }catch(e){console.warn('[togglePin] save failed',e);}
+      return next;
+    });
+  },[showToast]);
+  // Layout map per category — hero row of foundational/cumulative tiles
+  // sits at the top of each section, followed by balanced sub-bands. Hero
+  // rows render with a stronger sub-band header + thicker post-hero
+  // divider so the eye reads the cumulative metrics first, then drops into
+  // the more granular bands. Cell count per sub-band sets the grid columns
+  // explicitly so rows fill evenly (no "6 in one row, 2 in the next").
+  const KRI_LAYOUT={
+    run:[
+      // INLINE hero — these render next to the section title (no tile
+      // chrome, just dial-style stats). Cumulative volume + mechanical
+      // cadence belong here because they apply across all run types.
+      {inline:true,
+        ids:['weeklyMiles','weeklyHours','cadence']},
+      {label:'Easy / Aerobic',
+        ids:['avgRunHR','paceHrRatio','aerobicDecoupling','aerobicTE','zone2Weekly']},
+      {label:'Speed / Anaerobic',
+        ids:['avgRunPower','maxRunHR','heartRateRecovery','anaerobicTE']},
+      // Load/Forecast expanded to 4 KRIs — was previously 2 wide tiles.
+      // ACWR (load risk), Long Run (peak weekly distance), Weekly Load
+      // (TE sum), Race Predictor (forecast).
+      {label:'Load / Forecast',
+        ids:['acwr','longRun','weeklyLoad','racePredictor']},
+    ],
+    strength:[
+      {label:'Intensity',
+        ids:['epoc','avgStrengthHR','peakStrengthHR','activeStrengthCal']},
+      {label:'Session',
+        ids:['workRestRatio','sessionDuration','preTrainingCarbs','postTrainingProtein']},
+    ],
+    recovery:[
+      {label:'Sleep',
+        ids:['overnightHRV','sleepScore','sleepRegularity','recoveryHours']},
+      {label:'State',
+        ids:['rhr','morningBodyBattery','dailyStress','trainingReadiness']},
+    ],
+    body:[
+      // INLINE hero — composition stats next to "Body" label. Same
+      // dial-style as Run.
+      {inline:true,
+        ids:['weightTrend','bodyFatPct','leanMass','bmi']},
+      {label:'Fuel',
+        ids:['totalCal','protein','carbs','fat']},
+      {label:'Quality',
+        ids:['fiber','sodium','micronutrientScore','rmr']},
+    ],
+  };
+
   const panelStyle={background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:'14px 16px'};
+  // Inner sub-panels live inside section wrappers — bg-elevated lifts them
+  // off the section's bg-surface; no border to avoid card-in-card nesting.
+  const innerPanelStyle={background:'var(--bg-elevated)',borderRadius:'var(--radius-md)',padding:'14px 16px'};
+  // Section wrapper — each timeframe (This Week / Last 8 Weeks / YTD) is one
+  // container; header lives inside as first child so there's no floating gap.
+  const sectionStyle={background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:'var(--radius-md)',padding:'clamp(14px,1.4vw,18px)',marginTop:'clamp(10px,1vw,14px)'};
+  const sectionHdr={fontSize:10,fontWeight:600,letterSpacing:'0.12em',textTransform:'uppercase',color:C.m,marginBottom:14};
   const divider={height:'0.5px',background:C.bs,margin:'10px 0'};
   const subHdr={fontSize:9,fontWeight:500,letterSpacing:'0.07em',color:C.m,textTransform:'uppercase',marginBottom:8};
 
   return(
     <div style={S.sec}>
 
-      {/* ── 30-day Cockpit · TOP of Trend tab (Phase 4l rev) ──
-          7 sparkline tiles. Sets the "trend → trend → trend" flow before
-          the WoW summary cards below. ── */}
+      {/* ── Cockpit · WoW values + 8-week sparkline trend ──
+          Headline = THIS WEEK (Mon-Sun current). Sparkline = 8-week trend.
+          Consistent timeframe across all 7 tiles.
+
+          Carry-forward (Phase 4o.trend.1): on Monday morning the new ISO
+          week is empty until samples land. Each gauge below picks live
+          this-week first, then falls back to last-week's value with an
+          isFallback flag so the gauge renders dimmed + tagged "last wk"
+          instead of going dark. ── */}
       {(() => {
+        const thisWeek = weeklyStatsTrend[7] || {};   // current week is index 7 of 8-week array
+        const lastWeek = weeklyStatsTrend[6] || {};   // previous week — fallback source
         const milesHist     = weeklyStatsTrend.map(w => w.mi || 0);
         const hoursHist     = weeklyStatsTrend.map(w => w.hrs || 0);
         const hrvHist       = weeklyStatsTrend.map(w => w.hrv).filter(Boolean);
-        const avgHrHist     = yearRuns2.slice(-8).map(r => r.avgHR || null).filter(Boolean);
         const rhrHist       = weeklyStatsTrend.map(w => w.rhr).filter(Boolean);
         const sleepScoreHist= weeklyStatsTrend.map(w => w.sleepScore).filter(Boolean);
+        // This-week's avg run HR (uses Dashboard's existing this-week avgHR var)
+        const avgHrHist     = yearRuns2.slice(-8).map(r => r.avgHR || null).filter(Boolean);
+        // This-week's avg daily protein (uses Dashboard's existing avgProtein var)
         const proteinHist   = nutrition.slice(0, 8).map(n => n.protein || null).reverse().filter(Boolean);
         const G = getGoals();
+        // Helper: live value if non-null/non-zero, otherwise fall back to
+        // last week and flag it. Volume metrics (miles, hours) treat 0 as
+        // "no activity" and fall back; rate metrics (HR, RHR, HRV, sleep,
+        // protein) only fall back when null because 0 is meaningful.
+        const cf = (live, fallback, opts = {}) => {
+          const treatZeroAsEmpty = opts.zeroIsEmpty;
+          const liveEmpty = live == null || (treatZeroAsEmpty && live === 0);
+          if (!liveEmpty)               return { value: live, isFallback: false };
+          if (fallback == null)         return { value: null, isFallback: false };
+          if (treatZeroAsEmpty && fallback === 0) return { value: null, isFallback: false };
+          return { value: fallback, isFallback: true };
+        };
+        const miles   = cf(Number((thisWeek.mi || 0).toFixed(1)),   Number((lastWeek.mi  || 0).toFixed(1)),  { zeroIsEmpty: true });
+        const hours   = cf(Number((thisWeek.hrs || 0).toFixed(1)),  Number((lastWeek.hrs || 0).toFixed(1)),  { zeroIsEmpty: true });
+        const runHR   = cf(avgHR || null,            lastAvgHR || null);
+        // ── Recovery metrics use the LATEST single reading, not the
+        //    weekly aggregate (Phase 4o.trend.2). RHR/HRV/Sleep come from
+        //    nightly sleep tracking — they exist whether or not you
+        //    trained, and the most recent night is the relevant signal.
+        //    Never fall back to "last wk" styling for these. ──
+        const sleepSorted = [...(sleepData || [])].sort((a, b) => (b?.date || '').localeCompare(a?.date || ''));
+        const latestSleep = sleepSorted[0] || null;
+        const latestRHR     = latestSleep?.restingHR ?? null;
+        const latestHRVval  = latestSleep?.overnightHRV ?? ((hrvData || [])[0]?.overnightHRV ?? null);
+        const latestSleepSc = latestSleep?.sleepScore != null ? Math.min(latestSleep.sleepScore, 100) : null;
+        const rhr     = { value: latestRHR,     isFallback: false };
+        const hrv     = { value: latestHRVval,  isFallback: false };
+        const sleepSc = { value: latestSleepSc, isFallback: false };
+        const proteinLive = avgProtein ? Math.round(avgProtein) : null;
+        const proteinPrev = lastWeekNut.length ? Math.round(avg2(lastWeekNut, 'protein')) : null;
+        const protein = cf(proteinLive, proteinPrev);
         return <CockpitRail gauges={[
-          { label: 'Avg miles/wk',  value: Number(avgWeeklyMi.toFixed(1)),         unit: 'mi',    goal: G.weeklyRunDistanceTarget, history: milesHist,     color: '#60a5fa' },
-          { label: 'Avg hours/wk',  value: Number(avgWeeklyHrsTotal.toFixed(1)),   unit: 'hrs',   goal: G.weeklyTimeTargetHrs,     history: hoursHist,     color: '#a78bfa' },
-          { label: 'Avg run HR',    value: avgHRTrend || null,                      unit: 'bpm',   goal: G.targetAvgRunHR, invert: true, history: avgHrHist, color: '#fbbf24' },
-          { label: 'RHR',           value: latestRHRDash || null,                   unit: 'bpm',   goal: G.targetRHR,      invert: true, history: rhrHist,   color: '#f59e0b' },
-          { label: 'HRV',           value: latestHRVDash || null,                   unit: 'ms',    goal: G.targetHRV,                    history: hrvHist,   color: '#34d399' },
-          { label: 'Sleep score',   value: latestSleepScoreDash || null,            unit: '/100',  goal: G.targetSleepScore,             history: sleepScoreHist, color: '#22d3ee' },
-          { label: 'Protein',       value: avg30Pro || null,                        unit: 'g',     goal: G.dailyProteinTarget,           history: proteinHist, color: '#f472b6' },
+          { label: 'Miles',   value: miles.value,   isFallback: miles.isFallback,   unit: 'mi',   goal: G.weeklyRunDistanceTarget, history: milesHist,      color: '#60a5fa' },
+          { label: 'Hours',   value: hours.value,   isFallback: hours.isFallback,   unit: 'hrs',  goal: G.weeklyTimeTargetHrs,     history: hoursHist,      color: '#a78bfa' },
+          { label: 'Run HR',  value: runHR.value,   isFallback: runHR.isFallback,   unit: 'bpm',  goal: G.targetAvgRunHR,  invert: true, history: avgHrHist,  color: '#fbbf24' },
+          { label: 'RHR',     value: rhr.value,     isFallback: rhr.isFallback,     unit: 'bpm',  goal: G.targetRHR,       invert: true, history: rhrHist,    color: '#f59e0b' },
+          { label: 'HRV',     value: hrv.value,     isFallback: hrv.isFallback,     unit: 'ms',   goal: G.targetHRV,                   history: hrvHist,    color: '#34d399' },
+          { label: 'Sleep',   value: sleepSc.value, isFallback: sleepSc.isFallback, unit: '/100', goal: G.targetSleepScore,            history: sleepScoreHist, color: '#22d3ee' },
+          { label: 'Protein', value: protein.value, isFallback: protein.isFallback, unit: 'g',    goal: G.dailyProteinTarget,          history: proteinHist, color: '#f472b6' },
         ]}/>;
       })()}
 
-      {/* ── Week of X — WoW summary cards (3 side-by-side) ── */}
-      <div style={{fontSize:13,fontWeight:500,color:C.m,marginBottom:8,marginTop:12}}>◈ Week of {weekLabel}</div>
-      <div className="arnold-dashboard-panels" style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0, 1fr))',gap:'clamp(8px,1vw,12px)',marginBottom:10}}>
-
-        {/* ── TRAINING ── */}
-        <div style={panelStyle}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <span style={{fontSize:15,fontWeight:500,color:C.t}}>Training</span>
-            <span style={{fontSize:10,color:C.m}}>vs last week</span>
-          </div>
-          <div style={{display:'flex',gap:5,marginBottom:12,flexWrap:'wrap'}}>
-            <span style={{fontSize:9,fontWeight:500,padding:'2px 8px',borderRadius:10,background:'rgba(96,165,250,0.12)',color:'#60a5fa'}}>{runCount} run{runCount!==1?'s':''}</span>
-            {strengthCount>0&&<span style={{fontSize:9,fontWeight:500,padding:'2px 8px',borderRadius:10,background:'rgba(167,139,250,0.12)',color:'#a78bfa'}}>{strengthCount} strength</span>}
-            {otherCount>0&&<span style={{fontSize:9,fontWeight:500,padding:'2px 8px',borderRadius:10,background:'rgba(156,163,175,0.12)',color:'#9ca3af'}}>{otherCount} other</span>}
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(2, minmax(0,1fr))',gap:8,marginBottom:12}}>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDial value={weekMi} max={parseFloat(profile?.weeklyRunDistanceTarget)||20} size={68} color="#60a5fa" label="mi" sublabel={weekMi?.toFixed(1)||'—'}/>
-              <div style={{fontSize:9,color:C.m,marginTop:2,textAlign:'center'}}>Weekly miles <TrendBadge delta={miDelta} unit=" mi"/></div>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-              <ArcDial value={weekMins} max={300} size={68} color="#a78bfa" label="time" sublabel={formatDuration(weekMins)}/>
-              <div style={{fontSize:9,color:C.m,marginTop:2,textAlign:'center'}}>Active time <TrendBadge delta={timeDelta} unit="m"/></div>
-            </div>
-          </div>
-          <div style={divider}/>
-          <div style={subHdr}>Run metrics</div>
-          <MiniBar label="Avg pace" displayValue={avgPace||'—'} delta={paceDeltaSecs} deltaUnit="s" goal={profile?.targetRacePace} goalLabel={`Goal ${profile?.targetRacePace||'not set'} /mi`} pct={pacePct} inverted/>
-          <MiniBar label="Avg HR" displayValue={avgHR?`${avgHR} bpm`:'—'} delta={hrDelta} deltaUnit=" bpm" goalLabel="Zone 2 target" pct={hrPct}/>
-          <MiniBar label="Elevation gain" displayValue={weekAscent?`${weekAscent.toLocaleString()} ft`:'—'} delta={ascentDelta} deltaUnit=" ft" pct={0.6}/>
-          <div style={divider}/>
-          <div style={subHdr}>Strength</div>
-          <MiniBar label="Sessions" displayValue={`${strengthCount}`} delta={strengthDelta} deltaUnit="" goalLabel={`Goal ${profile?.weeklyStrengthTarget||2}/week`} pct={strengthCount/(parseFloat(profile?.weeklyStrengthTarget)||2)}/>
-          <MiniBar label="Calories burned" displayValue={weekCals?`${weekCals.toLocaleString()} kcal`:'—'} delta={calsDelta} deltaUnit=" kcal" pct={0.65}/>
-        </div>
-
-        {/* ── NUTRITION ── */}
-        <div style={panelStyle}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <span style={{fontSize:15,fontWeight:500,color:C.t}}>Nutrition</span>
-            <span style={{fontSize:10,color:C.m}}>vs last week</span>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
-            <svg width="72" height="72" viewBox="0 0 72 72" style={{flexShrink:0}}>
-              <circle cx="36" cy="36" r="28" fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
-              <circle cx="36" cy="36" r="28" fill="none" stroke="#4ade80" strokeWidth="6" strokeDasharray={`${Math.min(consumedPct,1)*176} 176`} strokeDashoffset="44" strokeLinecap="round"/>
-              <circle cx="36" cy="36" r="28" fill="none" stroke="#60a5fa" strokeWidth="6" strokeDasharray={`${Math.min(burnedPct,1)*176} 176`} strokeDashoffset={-(consumedPct*176-44)} strokeLinecap="round" opacity="0.7"/>
-              <text x="36" y="32" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>net</text>
-              <text x="36" y="44" textAnchor="middle" fontSize="12" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{netCalories!=null?(netCalories>0?'+':'')+netCalories:'—'}</text>
-              <text x="36" y="54" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>kcal/day</text>
-            </svg>
-            <div style={{flex:1}}>
-              <div style={{fontSize:9,color:C.m,marginBottom:4}}>7-day avg</div>
-              <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:3}}>
-                <div style={{width:8,height:8,borderRadius:'50%',background:'#4ade80',flexShrink:0}}/>
-                <span style={{fontSize:10,color:C.s}}>Consumed</span>
-                <span style={{fontSize:11,fontWeight:500,color:C.t,marginLeft:'auto'}}>{avgConsumed?avgConsumed.toLocaleString():'—'}</span>
-              </div>
-              <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:4}}>
-                <div style={{width:8,height:8,borderRadius:'50%',background:'#60a5fa',opacity:0.8,flexShrink:0}}/>
-                <span style={{fontSize:10,color:C.s}}>Burned</span>
-                <span style={{fontSize:11,fontWeight:500,color:C.t,marginLeft:'auto'}}>{avgBurned?avgBurned.toLocaleString():'—'}</span>
-              </div>
-              {netCalories!=null&&<div style={{fontSize:9,color:netCalories<0?'#4ade80':'#f87171'}}>{netCalories<0?`↓ ${Math.abs(netCalories)} deficit`:`↑ ${netCalories} surplus`}</div>}
-            </div>
-          </div>
-          <div style={divider}/>
-          <div style={subHdr}>Macros · daily avg vs goal</div>
-          <MiniBar label="Protein" displayValue={`${Math.round(avgProtein||0)}g`} delta={proteinDelta} deltaUnit="g" goalLabel={`Goal ${profile?.dailyProteinTarget||150}g`} pct={(avgProtein||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-          <MiniBar label="Carbs" displayValue={`${Math.round(avgCarbs||0)}g`} delta={carbsDelta} deltaUnit="g" goalLabel={`Goal ${profile?.dailyCarbTarget||180}g`} pct={(avgCarbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
-          <MiniBar label="Fat" displayValue={`${Math.round(avgFat||0)}g`} delta={fatDelta} deltaUnit="g" goalLabel={`Goal ${profile?.dailyFatTarget||65}g`} pct={(avgFat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
-          <div style={divider}/>
-          <div style={subHdr}>Micronutrients</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0,1fr))',gap:5}}>
-            {[{label:'Sodium',val:avgSodium?`${(avgSodium/1000).toFixed(1)}g`:'—',color:C.t},{label:'Potassium',val:avgPotassium?`${(avgPotassium/1000).toFixed(1)}g`:'—',color:C.t},{label:'Magnesium',val:avgMagnesium?`${Math.round(avgMagnesium)}mg`:'—',color:avgMagnesium&&avgMagnesium<300?'#fbbf24':C.t}].map(m=>(
-              <div key={m.label} style={{background:C.elev,borderRadius:6,padding:'5px 7px',textAlign:'center'}}>
-                <div style={{fontSize:12,fontWeight:500,color:m.color}}>{m.val}</div>
-                <div style={{fontSize:8,color:C.m}}>{m.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── BODY ── */}
-        <div style={panelStyle}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-            <span style={{fontSize:15,fontWeight:500,color:C.t}}>Body</span>
-            <span style={{fontSize:10,color:C.m}}>vs last week</span>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
-            <ArcDial value={profile?.targetWeight&&currentWeight?Math.max(0,currentWeight-parseFloat(profile.targetWeight)):15} max={30} size={72} color="#fbbf24" label="lbs" sublabel={currentWeight?Math.round(currentWeight):'—'}/>
-            <div style={{flex:1}}>
-              <div style={{fontSize:9,color:C.m,marginBottom:2}}>Latest · {latestWeightDate}</div>
-              <div style={{fontSize:22,fontWeight:500,color:C.t,lineHeight:1}}>{currentWeight?.toFixed(1)||'—'}</div>
-              <div style={{fontSize:10,color:weightDelta!=null?(weightDelta<0?'#4ade80':'#f87171'):C.m,marginTop:2}}>{weightDelta!=null?`${weightDelta>0?'↑':'↓'} ${Math.abs(weightDelta).toFixed(1)} lbs this week`:'—'}</div>
-              <div style={{fontSize:9,color:C.m,marginTop:1}}>Target {profile?.targetWeight||'—'} lbs{currentWeight&&profile?.targetWeight?` · ${(currentWeight-parseFloat(profile.targetWeight)).toFixed(1)} to go`:''}</div>
-            </div>
-          </div>
-          <div style={divider}/>
-          <div style={subHdr}>Composition</div>
-          <MiniBar label="Body fat" displayValue={`${currentBodyFat?.toFixed(1)||'—'}%`} delta={bodyFatDelta} deltaUnit="%" inverted goalLabel={`Target ${profile?.targetBodyFat||16.7}%`} pct={currentBodyFat?Math.max(0,1-(currentBodyFat-(parseFloat(profile?.targetBodyFat)||16.7))/15):0}/>
-          <MiniBar label="Lean mass" displayValue={`${currentLeanMass?.toFixed(1)||'—'} lbs`} delta={leanDelta} deltaUnit=" lbs" goalLabel={`Target ${profile?.targetLeanMass||138} lbs`} pct={currentLeanMass?currentLeanMass/(parseFloat(profile?.targetLeanMass)||138):0}/>
-          <MiniBar label="BMI" displayValue={`${currentBMI?.toFixed(1)||'—'}`} delta={bmiDelta} deltaUnit="" inverted pct={currentBMI?Math.max(0,1-(currentBMI-22)/10):0}/>
-          <div style={divider}/>
-          <div style={subHdr}>Recovery</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3, minmax(0,1fr))',gap:5}}>
-            {[{label:'HRV avg',val:avgHRVv?`${Math.round(avgHRVv)}ms`:'—',delta:hrvDelta,positive:hrvDelta>0},{label:'Avg sleep',val:avgSleepMins?formatDuration(avgSleepMins):'—',delta:sleepDelta,positive:sleepDelta>0},{label:'Sleep score',val:avgSleepScore?`${Math.round(avgSleepScore)}/100`:'—',delta:scoreDelta,positive:scoreDelta>0}].map(m=>(
-              <div key={m.label} style={{background:C.elev,borderRadius:6,padding:'6px 7px',textAlign:'center'}}>
-                <div style={{fontSize:13,fontWeight:500,color:C.t}}>{m.val}</div>
-                <div style={{fontSize:8,color:C.m}}>{m.label}</div>
-                {m.delta!=null&&<div style={{fontSize:8,color:m.positive?'#4ade80':'#f87171',marginTop:1}}>{m.positive?'↑':'↓'} {Math.abs(m.delta)}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-
-      </div>
-
-      {/* Weekly Sync removed (Phase 4k) — auto-sync via Garmin Worker +
-          Cronometer Worker handles this end-to-end. Manual CSV imports
-          still available in Profile → Imports for one-off backfills. */}
-
-      {/* AI Weekly Summary section removed (Phase 4k) — the Cockpit cards
-          + Annual Progress + Principles Score already convey the weekly
-          state at a glance; the streaming AI button added more clutter
-          than insight. The aiInsights collection and Anthropic call path
-          remain available for the Training tab's "Analyze training" CTA. */}
-
-      {/* ── Sections 3-5 rearranged into a 2-column layout (Phase 4k):
-          LEFT  · Annual Progress (full height column)
-          RIGHT · Body & Fitness Baseline (top)
-                · Principles Score (below)
-          All three panels share the same surface background, border,
-          radius, header style, and padding rhythm for consistency. ── */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))",gap:"clamp(10px,1vw,14px)",alignItems:"start"}}>
-        {/* LEFT: Annual Progress · races inline below the bars */}
-        <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px)"}}>
-          <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:14}}>⚑ Annual Progress · {yearStr}</div>
-          <ProgBar label="Annual run distance" actual={Math.round(yearDist)} target={parseFloat(profile.annualRunDistanceTarget)||800} unit="mi"/>
-          <ProgBar label="Annual workouts" actual={yearWorkouts} target={parseFloat(profile.annualWorkoutsTarget)||200} unit="sessions"/>
-          <ProgBar label="Avg weekly distance" actual={Math.round(weeklyAvgDist*10)/10} target={parseFloat(profile.weeklyRunDistanceTarget)||20} unit="mi"/>
-          {avg30Cal!=null&&<ProgBar label="Avg daily calories" actual={avg30Cal} target={parseFloat(profile.dailyCalorieTarget)||2200} unit="kcal"/>}
-          {avg30Pro!=null&&<ProgBar label="Avg daily protein" actual={avg30Pro} target={parseFloat(profile.dailyProteinTarget)||150} unit="g"/>}
-
-          <div style={{height:1,background:C.b,margin:"14px 0 12px"}}/>
-          <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:10}}>⚑ Next Races</div>
-          {upRaces.length>0?upRaces.map((r,i)=>(
-            <div key={i} style={{marginBottom:10}}>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontSize:13,fontWeight:500,color:C.t}}>{r.name||"Race"}</span>
-                {r.source==='garmin-ics'&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:"rgba(74,222,128,0.12)",color:"#4ade80"}}>Garmin</span>}
-              </div>
-              <div style={{fontSize:11,color:C.m,marginTop:2}}>{new Date(r.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · {daysUntil(r.date)} days away{(r.distanceKm||r.distance_km)?` · ${raceTypeBadge(r.distanceKm||r.distance_km)}`:''}</div>
-              {(r.goalTime||r.goal_time)&&<div style={{fontSize:11,color:C.m}}>Goal: {r.goalTime||r.goal_time}</div>}
-            </div>
-          )):allRaces.length>0?<div style={{fontSize:12,color:C.m}}>No races in the next 90 days{nextFutureRace?<span> · Next: <span style={{color:C.t}}>{nextFutureRace.name}</span></span>:""}<div style={{cursor:"pointer",color:C.ta,marginTop:4}} onClick={()=>setTab("races")}>See all races →</div></div>:<div style={{fontSize:12,color:C.m,cursor:"pointer"}} onClick={()=>setTab("races")}>Sync your Garmin calendar in the Races tab →</div>}
-        </div>
-
-        {/* RIGHT column: Baseline (top) + Principles (bottom) */}
-        <div style={{display:"flex",flexDirection:"column",gap:"clamp(10px,1vw,14px)"}}>
-          {/* Body & Fitness Baseline — same panel surface as Annual Progress for visual rhythm */}
-          <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px)",cursor:"pointer"}} onClick={()=>setTab("clinical")}>
-            <div style={{fontSize:11,fontWeight:500,letterSpacing:"0.08em",color:C.m,textTransform:"uppercase",marginBottom:14}}>◉ Body & Fitness Baseline · Mar 2025</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"clamp(8px,0.6vw,12px)"}}>
-              {[["VO₂ Max","51","#34d399"],["Bio Age","33y","#4ade80"],["Body Fat","24.7%","#fbbf24"],["RMR","1,880","#facc15"]].map(([l,v,c],i)=>(
-                <div key={i} style={{textAlign:"center"}}>
-                  <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:c,lineHeight:1}}>{v}</div>
-                  <div style={{fontSize:10,fontWeight:500,letterSpacing:"0.06em",color:C.m,textTransform:"uppercase",marginTop:6}}>{l}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Principles Score — flows below Baseline in the right column */}
-          <PrinciplesPanel data={data}/>
-        </div>
-      </div>
-
-      {/* ── Annual Trends · Last 8 Weeks (Phase 4l moved from EdgeIQ) ──
-          Three 8-week mini-charts side-by-side: training hours bar,
-          avg pace line, weight line — plus annual goal progress bars. ── */}
+      {/* ── KRI SPACESHIP · 4-area Trend matrix (Phase 4m.2) ─────────────
+          Run / Activity / Recovery / Body — each a section with its full
+          KRI roster. Every tile shows week / 8-wk trailing / YTD with trend
+          arrows, and tap-to-pin toggles "on Start cockpit" for that
+          category. This is the new primary view; THIS WEEK and YEAR TO
+          DATE below stay temporarily for parity until user confirms.
+          ──────────────────────────────────────────────────────────────── */}
       {(() => {
-        const subHdrA={fontSize:9,fontWeight:500,letterSpacing:'0.07em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
-        const dividerA={height:1,background:'var(--border-default)',margin:'10px 0'};
-        return (
-          <div style={panelStyle}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>◦ Annual Trends · Last 8 Weeks</span>
-              <span style={{fontSize:10,color:'var(--text-muted)'}}>weekly aggregates</span>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:'clamp(10px,1vw,16px)',marginBottom:14}}>
-              {/* Weekly training hours bar chart */}
-              <div>
-                <div style={subHdrA}>Weekly training hours</div>
-                <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
-                  <line x1="2" y1={68-(weeklyHrsTargetTrend/maxHrsTrend)*60} x2="238" y2={68-(weeklyHrsTargetTrend/maxHrsTrend)*60} stroke="var(--text-muted)" strokeWidth="0.5" strokeDasharray="2,2"/>
-                  {weeklyStatsTrend.map((w,i)=>{
-                    const barW=22;const gap=6;const x=i*(barW+gap)+8;
-                    const h=Math.max(2,(w.hrs/maxHrsTrend)*60);
-                    const y=68-h;
-                    const isThis=i===7;
-                    return(<g key={i}>
-                      <rect x={x} y={y} width={barW} height={h} rx={2} fill={isThis?'#a78bfa':'rgba(167,139,250,0.4)'}/>
-                      <text x={x+barW/2} y={y-3} textAnchor="middle" fontSize="7" fill="var(--text-muted)">{w.hrs.toFixed(1)}</text>
-                    </g>);
+        const CATEGORY_META={
+          run:      {label:'Run',      color:'#60a5fa'},
+          strength: {label:'Activity', color:'#a78bfa'},
+          recovery: {label:'Recovery', color:'#22d3ee'},
+          body:     {label:'Body',     color:'#fbbf24'},
+        };
+        // Sub-band header style — hero rows get a stronger treatment so
+        // the foundational tiles read as "the headline" of the section.
+        const subBandHero=(catColor)=>({
+          display:'flex',alignItems:'baseline',gap:8,
+          borderBottom:`1px solid ${catColor}55`,    // thicker line, more saturated
+          paddingBottom:6,marginBottom:10,marginTop:8,
+        });
+        const subBandRegular=(catColor)=>({
+          display:'flex',alignItems:'baseline',gap:8,
+          borderBottom:`0.5px solid ${catColor}33`,
+          paddingBottom:5,marginBottom:8,marginTop:16,
+        });
+        const subHdrLabel=(isHero)=>({
+          fontSize:isHero?12:11,fontWeight:600,
+          color:isHero?'var(--text-primary)':'var(--text-secondary, var(--text-primary))',
+          letterSpacing:'0.10em',textTransform:'uppercase',
+        });
+        const subHdrCount={fontSize:9,color:'var(--text-muted)',letterSpacing:'0.04em'};
+        const _byId=Object.fromEntries(TILE_METRICS.map(m=>[m.id,m]));
+
+        const renderCategory=(catId)=>{
+          const meta=CATEGORY_META[catId];
+          const groups=KRI_LAYOUT[catId]||[];
+          const pinnedSet=new Set(tilePrefs?.[catId]||[]);
+          // Phase 4o.autopromote.4 — separate set of IDs that the resolver
+          // auto-promoted (i.e. would surface on Start despite no manual pin).
+          // Reasons map lets the tile show a hover/long-press explanation.
+          const resolvedForCat=resolvedTilesWeb?.[catId]||[];
+          const autoPromotedSet=new Set();
+          const autoReasonsById={};
+          for(const e of resolvedForCat){
+            if(e.source==='auto'){
+              autoPromotedSet.add(e.id);
+              autoReasonsById[e.id]=e.reasons||[];
+            }
+          }
+          const colsFor=(count)=>Math.min(Math.max(count,1),5);
+          // Pull the inline hero group out (if any) — it renders alongside
+          // the section title rather than as a tile band below.
+          const inlineHero=groups.find(g=>g.inline);
+          const tileBands=groups.filter(g=>!g.inline);
+          // Helper that builds tf + status for any metric id.
+          const metricFor=(id)=>{
+            const m=_byId[id];
+            const baseMetric=m||{id,label:id.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase()),category:catId,unit:'',polarity:'higher-better'};
+            // Some metrics (e.g. Race Predictor) compute their label from
+            // ctx (next race distance). Apply labelFor(ctx) override to
+            // produce the runtime label.
+            const dynamicLabel=baseMetric.labelFor?.(tileCtx);
+            const metric=dynamicLabel?{...baseMetric,label:dynamicLabel}:baseMetric;
+            let tf=null;
+            try{tf=metric.timeframes?.(tileCtx)||null;}catch(e){console.warn(`[KRI] ${id} timeframes failed:`,e);}
+            const status=tf?.week!=null?deriveStatus(tf.week, metric.thresholds):'neutral';
+            // Optional per-metric formatter (e.g. Race Predictor → time string).
+            const formatValue=metric.formatter||undefined;
+            // Optional description line for context (e.g. Race Predictor →
+            // "for RBC Brooklyn Half · May 16").
+            const description=metric.descriptionFor?.(tileCtx)||undefined;
+            return {metric, tf, status, formatValue, description};
+          };
+          return (
+            <section key={catId} style={{...sectionStyle,borderLeft:`3px solid ${meta.color}`}}>
+              {/* ── Section header row — title on the left, inline hero
+                  stats inline next to it (chrome-less dial style), pin
+                  hint on the right. ── */}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:inlineHero?12:4,flexWrap:'wrap'}}>
+                <div style={{display:'flex',alignItems:'center',gap:24,flexWrap:'wrap',flex:1,minWidth:0}}>
+                  <span style={{fontSize:13,fontWeight:600,color:meta.color,letterSpacing:'0.04em',whiteSpace:'nowrap'}}>{meta.label}</span>
+                  {inlineHero && inlineHero.ids.map(id=>{
+                    const {metric, tf, status, formatValue}=metricFor(id);
+                    return (
+                      <InlineKRIStat key={id} metric={metric} tf={tf} status={status}
+                        formatValue={formatValue}
+                        pinned={pinnedSet.has(id)}
+                        autoPromoted={autoPromotedSet.has(id)}
+                        autoReasons={autoReasonsById[id]}
+                        onTogglePin={()=>togglePin(metric)}/>
+                    );
                   })}
-                </svg>
-                <div style={{fontSize:10,color:'#a78bfa',marginTop:4}}>Goal: {weeklyHrsTargetTrend} hrs/week</div>
+                </div>
+                <span style={{fontSize:9,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.08em',whiteSpace:'nowrap'}}>tap a tile to pin to Start</span>
               </div>
-              {/* Avg pace line chart */}
-              <div>
-                <div style={subHdrA}>Avg pace</div>
-                <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
-                  {(()=>{
-                    if(validPacesTrend.length<2)return<text x="120" y="40" textAnchor="middle" fontSize="9" fill="var(--text-muted)">Not enough data</text>;
-                    const rng=maxPaceTrend-minPaceTrend||1;
-                    const xS=i=>10+(i/7)*220;
-                    const yS=v=>65-((maxPaceTrend-v)/rng)*55;
-                    const goalY=goalPaceSecs>=minPaceTrend&&goalPaceSecs<=maxPaceTrend?yS(goalPaceSecs):null;
-                    const pts=weeklyStatsTrend.map((w,i)=>w.pace?{x:xS(i),y:yS(w.pace)}:null).filter(Boolean);
-                    const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-                    return<>
-                      {goalY!=null&&<line x1="2" y1={goalY} x2="238" y2={goalY} stroke="#4ade80" strokeWidth="0.5" strokeDasharray="2,2" opacity="0.6"/>}
-                      <path d={path} fill="none" stroke="#4ade80" strokeWidth="1.5"/>
-                      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="2" fill="#4ade80"/>)}
-                    </>;
-                  })()}
-                </svg>
-                <div style={{fontSize:10,color:'#4ade80',marginTop:4}}>Goal: {fmtPaceTrend(goalPaceSecs)} /mi</div>
-              </div>
-              {/* Weight line chart */}
-              <div>
-                <div style={subHdrA}>Weight</div>
-                <svg viewBox="0 0 240 80" style={{width:'100%',height:'auto'}}>
-                  {(()=>{
-                    if(validWeightsTrend.length<2)return<text x="120" y="40" textAnchor="middle" fontSize="9" fill="var(--text-muted)">Not enough data</text>;
-                    const lo=Math.min(minWtTrend,targetWtTrend);
-                    const hi=Math.max(maxWtTrend,targetWtTrend);
-                    const rng=hi-lo||1;
-                    const xS=i=>10+(i/7)*220;
-                    const yS=v=>65-((v-lo)/rng)*55;
-                    const targetY=yS(targetWtTrend);
-                    const pts=weeklyStatsTrend.map((w,i)=>w.weight?{x:xS(i),y:yS(w.weight)}:null).filter(Boolean);
-                    const path=pts.map((p,i)=>`${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-                    return<>
-                      <line x1="2" y1={targetY} x2="238" y2={targetY} stroke="#fbbf24" strokeWidth="0.5" strokeDasharray="2,2" opacity="0.6"/>
-                      <path d={path} fill="none" stroke="#fbbf24" strokeWidth="1.5"/>
-                      {pts.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r="2" fill="#fbbf24"/>)}
-                    </>;
-                  })()}
-                </svg>
-                <div style={{fontSize:10,color:'#fbbf24',marginTop:4}}>Target: {targetWtTrend} lbs</div>
-              </div>
-            </div>
-            <div style={dividerA}/>
-            <div style={subHdrA}>Annual Goal Progress</div>
-            <MiniBar label="Avg hours/wk" displayValue={`${avgWeeklyHrsTotal.toFixed(1)} hrs`} goalLabel={`Goal ${weeklyHrsTargetTrend} hrs/wk`} pct={avgWeeklyHrsTotal/weeklyHrsTargetTrend}/>
-            <MiniBar label="Avg pace" displayValue={fmtPaceTrend(avgPaceSecsYtd)} goalLabel={`Goal ${fmtPaceTrend(goalPaceSecs)} /mi`} pct={avgPaceSecsYtd?Math.min(goalPaceSecs/avgPaceSecsYtd,1):0} inverted/>
-            <MiniBar label="Avg daily protein" displayValue={`${avg30Pro||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avg30Pro||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-            <MiniBar label="Avg daily calories" displayValue={`${avg30Cal||0} kcal`} goalLabel={`Goal ${calT} kcal`} pct={(avg30Cal||0)/calT}/>
-          </div>
-        );
-      })()}
-
-      {/* ── Training analysis (moved from EdgeIQ tab in Phase 4l) ──
-          3 annual dials + Run/Strength MiniBar breakdowns. ── */}
-      {(() => {
-        // Local DualArcDial helper (mirrors TrainingTab's). Aero/Ana split.
-        const DualArcDial=({aero,ana,size=76})=>{
-          const r=size/2-8;
-          const circ=2*Math.PI*r;
-          const arcLength=circ*0.75;
-          const aeroFilled=(aero/100)*arcLength;
-          const anaFilled=(ana/100)*arcLength;
-          return(
-            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
-              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#4ade80" strokeWidth="6"
-                strokeDasharray={`${aeroFilled} ${circ}`}
-                strokeDashoffset={-arcLength*0.167}
-                strokeLinecap="round"
-                transform={`rotate(135 ${size/2} ${size/2})`}/>
-              <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#f87171" strokeWidth="6"
-                strokeDasharray={`${anaFilled} ${circ}`}
-                strokeDashoffset={-(arcLength*0.167+aeroFilled)}
-                strokeLinecap="round"
-                transform={`rotate(135 ${size/2} ${size/2})`}/>
-              <text x={size/2} y={size/2-5} textAnchor="middle" fontSize="7.5" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>aero/ana</text>
-              <text x={size/2} y={size/2+7} textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{aero}/{ana}</text>
-              <text x={size/2} y={size/2+17} textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>%</text>
-            </svg>
+              {/* Thin section-color divider under the inline hero — visual
+                  separation between the headline stats and the detail bands. */}
+              {inlineHero && <div style={{height:1,background:`${meta.color}33`,margin:'4px 0 10px'}}/>}
+              {/* Detail tile bands. */}
+              {tileBands.map((g,gi)=>{
+                const cols=colsFor(g.ids.length);
+                return (
+                  <div key={gi}>
+                    {g.label&&(
+                      <div style={subBandRegular(meta.color)}>
+                        <span style={subHdrLabel(false)}>{g.label}</span>
+                        <span style={subHdrCount}>· {g.ids.length} {g.ids.length===1?'KRI':'KRIs'}</span>
+                      </div>
+                    )}
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:`repeat(${cols}, minmax(0, 1fr))`,
+                      gap:'clamp(6px,0.6vw,10px)',
+                      marginLeft:g.label?6:0,
+                    }}>
+                      {g.ids.map(id=>{
+                        const {metric, tf, status, formatValue, description}=metricFor(id);
+                        return (
+                          <KRITile key={id} metric={metric} tf={tf} status={status}
+                            formatValue={formatValue}
+                            description={description}
+                            pinned={pinnedSet.has(id)}
+                            autoPromoted={autoPromotedSet.has(id)}
+                            autoReasons={autoReasonsById[id]}
+                            onTogglePin={()=>togglePin(metric)}/>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
           );
         };
-        const divider={height:1,background:'var(--border-default)',margin:'10px 0'};
-        const subHdr={fontSize:9,fontWeight:500,letterSpacing:'0.08em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
         return (
-          <div style={{...panelStyle,borderLeft:'3px solid #60a5fa'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Training</span>
-              <span style={{fontSize:10,color:'var(--text-muted)'}}>year to date</span>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:8,marginBottom:12}}>
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-                <ArcDialSVG value={yearDist} max={annualRunTarget} color="#60a5fa" label="mi" sublabel={Math.round(yearDist)} size={76}/>
-                <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Annual miles</div>
-              </div>
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-                <ArcDialSVG value={yearWorkouts} max={annualWorkoutTarget} color="#a78bfa" label="wks" sublabel={yearWorkouts} size={76}/>
-                <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Workouts</div>
-              </div>
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-                <DualArcDial aero={aeroPct} ana={anaPct} size={76}/>
-                <div style={{fontSize:9,color:'var(--text-muted)',marginTop:2}}>Aero/Ana balance</div>
-              </div>
-            </div>
-            <div style={divider}/>
-            <div style={subHdr}>Running</div>
-            <MiniBar label="Avg weekly distance" displayValue={`${avgWeeklyMi.toFixed(1)} mi`} goalLabel={`Goal ${weeklyRunTarget} mi`} pct={avgWeeklyMi/weeklyRunTarget}/>
-            <MiniBar label="Avg weekly hours run" displayValue={`${avgWeeklyHrsRun.toFixed(1)} hrs`} goalLabel="Goal 4 hrs" pct={avgWeeklyHrsRun/4}/>
-            <MiniBar label="Avg pace vs goal" displayValue={fmtPaceTrend(avgPaceSecsYtd)} goalLabel={`Goal ${fmtPaceTrend(goalPaceSecs)} /mi`} pct={avgPaceSecsYtd?Math.min(goalPaceSecs/avgPaceSecsYtd,1):0} inverted/>
-            <MiniBar label="Avg HR runs" displayValue={avgHRTrend?`${avgHRTrend} bpm`:'—'} goalLabel="Aerobic zone" pct={avgHRTrend?Math.max(0,1-Math.abs(avgHRTrend-140)/40):0}/>
-            <MiniBar label="Long run last 30d" displayValue={`${longRun.toFixed(1)} mi`} goalLabel="Goal 10 mi" pct={longRun/10}/>
-            <div style={divider}/>
-            <div style={subHdr}>Strength</div>
-            <MiniBar label="Avg per week" displayValue={`${(ytdStrength.length/weeksElapsed).toFixed(1)} sess`} goalLabel={`Goal ${strTarget}/wk`} pct={(ytdStrength.length/weeksElapsed)/strTarget}/>
-            <MiniBar label="Avg weekly hours strength" displayValue={`${avgWeeklyHrsStr.toFixed(1)} hrs`} goalLabel="Goal 1 hr" pct={avgWeeklyHrsStr/1}/>
-            <MiniBar label="Avg RPE" displayValue={avgRPE||'—'} goalLabel="Self-reported" pct={avgRPE?parseFloat(avgRPE)/10:0}/>
-          </div>
+          <>
+            {['run','strength','recovery','body'].map(renderCategory)}
+          </>
         );
       })()}
 
-      {/* ── Nutrition analysis (moved from EdgeIQ tab in Phase 4l) ──
-          30-day rolling average — kcal balance donut + macro MiniBars. */}
-      <div style={{...panelStyle,borderLeft:'3px solid #4ade80'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Nutrition</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>
-            30-day average · {last30Crono.length} day{last30Crono.length === 1 ? '' : 's'} of data
-          </span>
-        </div>
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10}}>
-          <svg width="68" height="68" viewBox="0 0 68 68" style={{flexShrink:0}}>
-            <circle cx="34" cy="34" r="26" fill="none" stroke="var(--bg-input)" strokeWidth="6"/>
-            <circle cx="34" cy="34" r="26" fill="none" stroke="#4ade80" strokeWidth="6"
-              strokeDasharray={`${Math.min((avg30Cal||0)/calT,1)*163} 163`}
-              strokeDashoffset="41" strokeLinecap="round"/>
-            <text x="34" y="32" textAnchor="middle" fontSize="8" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>30d avg</text>
-            <text x="34" y="44" textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{avg30Cal||'—'}</text>
-            <text x="34" y="54" textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>kcal</text>
-          </svg>
-          <div style={{flex:1,fontSize:10,color:'var(--text-muted)'}}>
-            <div>Consumed: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avg30Cal?avg30Cal.toLocaleString():'—'}</span></div>
-            <div>Burned: <span style={{color:'var(--text-primary)',fontWeight:500}}>{avg30Burned?avg30Burned.toLocaleString():'—'}</span></div>
-            <div style={{color:avg30Cal&&avg30Cal<avg30Burned?'#4ade80':'#fbbf24',marginTop:2}}>
-              {avg30Cal?`${avg30Cal<avg30Burned?'↓':'↑'} ${Math.abs(avg30Cal-avg30Burned).toLocaleString()} kcal/day`:'—'}
-            </div>
-          </div>
-        </div>
-        <MiniBar label="Protein" displayValue={`${avg30Pro||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyProteinTarget)||150}g`} pct={(avg30Pro||0)/(parseFloat(profile?.dailyProteinTarget)||150)}/>
-        <MiniBar label="Carbs" displayValue={`${avg30Carbs||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyCarbTarget)||180}g`} pct={(avg30Carbs||0)/(parseFloat(profile?.dailyCarbTarget)||180)}/>
-        <MiniBar label="Fat" displayValue={`${avg30Fat||0}g`} goalLabel={`Goal ${parseFloat(profile?.dailyFatTarget)||65}g`} pct={(avg30Fat||0)/(parseFloat(profile?.dailyFatTarget)||65)}/>
-      </div>
+      {/* THIS WEEK section removed (Phase 4m.2.10) — KRI Spaceship covers
+          all of this in a more legible week/8-wk/YTD layout per tile. */}
 
-      {/* ── Recovery / Readiness (Phase 4l Stage 2.4 — moved from EdgeIQ) ──
-          this-week vs 30-day average tiles for HRV, Sleep, RHR. ── */}
-      {(() => {
-        const subHdrR={fontSize:9,fontWeight:500,letterSpacing:'0.07em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
-        const miniTile={background:'var(--bg-elevated)',borderRadius:6,padding:'7px 8px',textAlign:'center'};
-        const miniVal={fontSize:13,fontWeight:500,color:'var(--text-primary)',lineHeight:1.2};
-        const miniLbl={fontSize:9,color:'var(--text-muted)',marginTop:2};
-        return (
-          <div style={{...panelStyle,borderLeft:'3px solid #22d3ee'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Recovery / Readiness</span>
-              <span style={{fontSize:10,color:'var(--text-muted)'}}>this week vs 30-day</span>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)'}}>
-              <div>
-                <div style={subHdrR}>This Week</div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
-                  <div style={miniTile}><div style={miniVal}>{avgHRV7?`${avgHRV7}ms`:'—'}</div><div style={miniLbl}>HRV</div></div>
-                  <div style={miniTile}><div style={miniVal}>{fmtSleep(avgSleepMins7)}</div><div style={miniLbl}>Sleep{latestSleepScoreDash?` · ${latestSleepScoreDash}`:''}</div></div>
-                  <div style={miniTile}><div style={miniVal}>{latestRHRDash?`${latestRHRDash} bpm`:'—'}</div><div style={miniLbl}>RHR</div></div>
-                </div>
-              </div>
-              <div>
-                <div style={subHdrR}>30-Day Avg</div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:5}}>
-                  <div style={miniTile}><div style={miniVal}>{avgHRV30?`${avgHRV30}ms`:'—'}</div><div style={miniLbl}>HRV</div></div>
-                  <div style={miniTile}><div style={miniVal}>{fmtSleep(avgSleepMins30)}</div><div style={miniLbl}>Sleep</div></div>
-                  <div style={miniTile}><div style={miniVal}>{avgRHR30?`${avgRHR30} bpm`:'—'}</div><div style={miniLbl}>RHR</div></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* LAST 8 WEEKS section removed (Phase 4m.2.10) — KRI Spaceship's
+          per-tile sparklines and 8-wk avg numbers cover the same ground. */}
+
+      {/* YEAR TO DATE section removed (Phase 4m.2.15) — Body & Fitness Live
+          duplicates KRI Body Composition; Annual Progress + Next Races +
+          Principles Score will get a new home elsewhere when we figure out
+          where they fit best. */}
     </div>
   );
 }
@@ -3276,7 +3656,7 @@ const ZONE_LABELS = {
   no_data:       'No data',
 };
 
-function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, ts, saveStatus, handleSave, S }) {
+function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, ts, saveStatus, handleSave, S, hideNotes = false }) {
   // ── Rolling scores ──
   const rolling7 = useMemo(() => computeRolling7d(todayStr), [todayStr]);
   const rolling30 = useMemo(() => computeRolling30d(todayStr), [todayStr]);
@@ -3347,7 +3727,7 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
   const scoreColor = (s) => s >= 70 ? '#4ade80' : s >= 45 ? '#fbbf24' : '#f87171';
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: hideNotes ? '1fr' : '2fr 1fr', gap: 12 }}>
 
       {/* ── Score + Training Detail ── */}
       <div style={panelStyle}>
@@ -3482,18 +3862,20 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
       </div>
 
       {/* ── Notes ── */}
-      <div style={panelStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Notes</span>
-          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{ts}</span>
+      {!hideNotes && (
+        <div style={panelStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Notes</span>
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{ts}</span>
+          </div>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="How did today feel? Energy, mood, reflection..."
+            style={{ ...S.ta, minHeight: 70, marginBottom: 8 }} />
+          <button style={{ ...S.sb, padding: '10px 14px', width: '100%' }} onClick={handleSave}>
+            {saveStatus === 'saved' ? '\u2713 Saved' : 'Save daily entry'}
+          </button>
         </div>
-        <textarea value={notes} onChange={e => setNotes(e.target.value)}
-          placeholder="How did today feel? Energy, mood, reflection..."
-          style={{ ...S.ta, minHeight: 70, marginBottom: 8 }} />
-        <button style={{ ...S.sb, padding: '10px 14px', width: '100%' }} onClick={handleSave}>
-          {saveStatus === 'saved' ? '\u2713 Saved' : 'Save daily entry'}
-        </button>
-      </div>
+      )}
 
     </div>
   );
@@ -3503,6 +3885,11 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
 // LOG TODAY + WORKOUT LOG
 // ═══════════════════════════════════════════════════════════════════════════════
 function LogDay({data,persist,showToast,mobileView,setTab}){
+  // Subscribe to global storage version so cloud-synced data (HC daily
+  // energy from the phone, Cronometer worker pulls, Garmin worker pulls)
+  // refreshes Today's Movement and other read-only sections live on
+  // desktop without a manual reload. (Phase 4o.daily.9 fix.)
+  const storageVersion = useStorageVersion();
   const ts=td(),ex=data.logs.find(l=>l.date===ts);
   const[notes,setNotes]=useState(ex?.notes||"");
   // todayFITs holds ALL of today's uploaded FIT activities (multiple per day allowed).
@@ -3575,6 +3962,74 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     storage.set('dailyLogs',filtered.slice(0,90),{skipValidation:true});
   },[todayFITs,todayNutrition]);
 
+  // ── Manual sync handlers (Phase 4o.daily.3) ──
+  // Garmin Worker + Cronometer Worker auto-pull on a schedule, but the user
+  // wants a one-click way to force an immediate refresh from the Daily tab.
+  const [syncFitState, setSyncFitState] = useState('idle'); // idle | syncing | done | error
+  const [syncNutState, setSyncNutState] = useState('idle');
+  // ── Garmin sync handler (Phase 4o.mobile.7) ──
+  // Primary path: syncRecentActivities() — pulls fresh sessions from
+  // the Garmin Worker, downloads each FIT zip, parses, dedupes by
+  // activityId, and persists into the activities collection. This is
+  // the same function the Cloud Sync panel uses.
+  // Secondary path: pullFitsNow() — phone-paired relay fallback for
+  // users without the Garmin Worker configured. Best-effort, never
+  // throws; returns {ok:false, error:'not_paired'} silently when not set up.
+  const handleGarminSync = useCallback(async () => {
+    if (syncFitState === 'syncing') return;
+    setSyncFitState('syncing');
+    let added = 0, errorMsg = null, anyOk = false;
+    try {
+      const { syncRecentActivities } = await import('./core/garmin-activities-client.js');
+      const r = await syncRecentActivities({ daysBack: 14, limit: 30 });
+      if (r?.ok) {
+        anyOk = true;
+        added += r.added || (r.results || []).filter(x => x.ok).length || 0;
+      } else if (r?.error && r.error !== 'not_configured') {
+        errorMsg = r.error;
+      }
+    } catch (e) {
+      console.warn('[handleGarminSync] Worker path failed:', e);
+      errorMsg = e?.message || String(e);
+    }
+    // Fallback / additive: relay pull (phone-paired). Never overrides Worker.
+    try {
+      const r = await pullFitsNow();
+      if (r?.ok) {
+        anyOk = true;
+        added += r.added || 0;
+      }
+    } catch (e) {
+      console.warn('[handleGarminSync] Relay path failed (non-fatal):', e);
+    }
+    if (anyOk) {
+      setSyncFitState('done');
+      showToast?.(added > 0 ? `✓ Garmin sync — ${added} new` : '✓ Garmin sync — up to date');
+      setTimeout(() => setSyncFitState('idle'), 2400);
+    } else {
+      setSyncFitState('error');
+      showToast?.(`Garmin sync failed${errorMsg ? `: ${errorMsg}` : ' — Worker not configured. Open Settings → Cloud Sync.'}`);
+      setTimeout(() => setSyncFitState('idle'), 4000);
+    }
+  }, [syncFitState, showToast]);
+  const handleCronoSync = useCallback(async () => {
+    if (syncNutState === 'syncing') return;
+    setSyncNutState('syncing');
+    try {
+      const { fetchCronometerToday } = await import('./core/cronometer-client.js');
+      await fetchCronometerToday();
+      setSyncNutState('done');
+      showToast?.('✓ Cronometer sync complete');
+      setNutUploadKey(k => k + 1); // force NutritionInputPanel to refresh
+      setTimeout(() => setSyncNutState('idle'), 2400);
+    } catch (e) {
+      console.warn('[handleCronoSync] failed:', e);
+      setSyncNutState('error');
+      showToast?.(`Cronometer sync failed: ${e?.message || e}`);
+      setTimeout(() => setSyncNutState('idle'), 4000);
+    }
+  }, [syncNutState, showToast]);
+
   const handleSave=()=>{
     const today=td();
     const latestFit=todayFITs.length?todayFITs[todayFITs.length-1]:null;
@@ -3601,7 +4056,14 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     if(!file)return;
     setFitError(null);
     try{
-      const parsed=await parseFITFile(file);
+      // Phase 4r.zones.3 — pass cached bpm zone boundaries so the parser
+      // bins raw HR records against the user's custom Connect zones
+      // rather than trusting the watch-computed time-in-zone fields.
+      const _profile=storage.get('profile')||{};
+      const _zb=_profile?.hrZoneBpm;
+      const _zoneBpm=(_zb&&Number.isFinite(+_zb.z1Max)&&Number.isFinite(+_zb.z2Max)&&Number.isFinite(+_zb.z3Max)&&Number.isFinite(+_zb.z4Max))
+        ?{z1Max:+_zb.z1Max,z2Max:+_zb.z2Max,z3Max:+_zb.z3Max,z4Max:+_zb.z4Max}:null;
+      const parsed=await parseFITFile(file,{zoneBpm:_zoneBpm});
       // Stamp the source so fit-relay merge can dedup by filename across devices,
       // and so the local UI can identify "where did this activity come from".
       if(!parsed.source||typeof parsed.source!=='object'){
@@ -3730,8 +4192,10 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     </div>
   );
 
-  // Shared style constants
-  const panelStyle={background:'var(--bg-surface)',border:'0.5px solid var(--border-default)',borderRadius:'var(--radius-md)',padding:'14px 16px'};
+  // Shared style constants — Phase 4o.mobile.9: tighter padding on
+  // mobile so Strength + Nutrition cards open closer to their content
+  // without losing breathing room on desktop.
+  const panelStyle={background:'var(--bg-surface)',border:'0.5px solid var(--border-default)',borderRadius:'var(--radius-md)',padding: mobileView ? '10px 12px' : '14px 16px'};
   const divider={height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'};
   const subHdr={fontSize:9,fontWeight:500,letterSpacing:'0.07em',color:'var(--text-muted)',textTransform:'uppercase',marginBottom:8};
   const miniTile={background:'var(--bg-elevated)',borderRadius:8,padding:'7px 8px',textAlign:'center',flex:1};
@@ -4177,42 +4641,69 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
   );
 
   // Inline ArcDial (custom small SVG for the 5-dial row)
+  // ── SmallDial / MacroDial — unified styling (Phase 4o.daily.5) ──
+  // Both dials now share the same visual language: value lives INSIDE the
+  // circle centered, label sits below in mixed-case "Distance (mi)" format.
+  // No more all-caps labels, no more value-outside split. The two dial
+  // variants differ only by ring size (60 vs 64).
   const SmallDial=({value,max,color,unit,label,displayValue})=>{
     const pct=Math.min((value||0)/(max||1),1);
+    const isFull = pct >= 1;
     return(
-      <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:3,flex:1}}>
-        <svg width="54" height="54" viewBox="0 0 54 54">
-          <circle cx="27" cy="27" r="21" fill="none" stroke="var(--bg-input)" strokeWidth="4.5"/>
-          <circle cx="27" cy="27" r="21" fill="none" stroke={color} strokeWidth="4.5"
-            strokeDasharray={`${pct*132} 132`}
-            strokeDashoffset={-16}
+      <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,flex:1}}>
+        <svg width="60" height="60" viewBox="0 0 60 60">
+          <circle cx="30" cy="30" r="23" fill="none" stroke="var(--bg-input)" strokeWidth="4.5"/>
+          <circle cx="30" cy="30" r="23" fill="none" stroke={color} strokeWidth="4.5"
+            strokeDasharray={isFull ? undefined : `${pct*145} 145`}
+            strokeDashoffset={isFull ? 0 : -18}
             strokeLinecap="round"
-            transform="rotate(135 27 27)"/>
-          <text x="27" y="24" textAnchor="middle" fontSize="6.5" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>{unit}</text>
-          <text x="27" y="36" textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{displayValue??'—'}</text>
+            transform="rotate(135 30 30)"/>
+          <text x="30" y="34" textAnchor="middle" fontSize="13" fontWeight="600"
+            fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>
+            {displayValue??'—'}
+          </text>
         </svg>
-        <span style={{fontSize:9,color:'var(--text-muted)'}}>{label}</span>
+        <div style={{
+          fontSize:10,color:'var(--text-secondary, var(--text-muted))',
+          textAlign:'center',lineHeight:1.2,whiteSpace:'nowrap',
+          overflow:'hidden',textOverflow:'ellipsis',maxWidth:'100%',
+        }}>
+          {label}{unit ? ` (${unit})` : ''}
+        </div>
       </div>
     );
   };
 
-  // Macro dial (slightly larger, 3 text rows)
   const MacroDial=({value,max,color,unit,label,target})=>{
     const pct=Math.min((value||0)/(max||1),1);
+    // Phase 4o.fix.1 — drop dasharray at 100%+ so the ring fully closes.
+    const isFull = pct >= 1;
+    const v = value!=null ? Math.round(value) : '—';
     return(
-      <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:3,flex:1}}>
-        <svg width="62" height="62" viewBox="0 0 62 62">
-          <circle cx="31" cy="31" r="24" fill="none" stroke="var(--bg-input)" strokeWidth="5.5"/>
-          <circle cx="31" cy="31" r="24" fill="none" stroke={color} strokeWidth="5.5"
-            strokeDasharray={`${pct*151} 151`}
-            strokeDashoffset={-19}
+      <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,flex:1}}>
+        <svg width="64" height="64" viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="25" fill="none" stroke="var(--bg-input)" strokeWidth="5"/>
+          <circle cx="32" cy="32" r="25" fill="none" stroke={color} strokeWidth="5"
+            strokeDasharray={isFull ? undefined : `${pct*157} 157`}
+            strokeDashoffset={isFull ? 0 : -20}
             strokeLinecap="round"
-            transform="rotate(135 31 31)"/>
-          <text x="31" y="27" textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>{unit}</text>
-          <text x="31" y="38" textAnchor="middle" fontSize="12" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{value!=null?Math.round(value):'—'}</text>
-          <text x="31" y="47" textAnchor="middle" fontSize="6.5" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>/ {target}</text>
+            transform="rotate(135 32 32)"/>
+          <text x="32" y="34" textAnchor="middle" fontSize="14" fontWeight="600"
+            fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>
+            {v}
+          </text>
+          <text x="32" y="46" textAnchor="middle" fontSize="8"
+            fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>
+            / {target}
+          </text>
         </svg>
-        <span style={{fontSize:9,color:'var(--text-muted)'}}>{label}</span>
+        <div style={{
+          fontSize:10,color:'var(--text-secondary, var(--text-muted))',
+          textAlign:'center',lineHeight:1.2,whiteSpace:'nowrap',
+          overflow:'hidden',textOverflow:'ellipsis',maxWidth:'100%',
+        }}>
+          {label}{unit ? ` (${unit})` : ''}
+        </div>
       </div>
     );
   };
@@ -4237,56 +4728,867 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
   return(
     <div style={S.sec}>
-      <div style={S.st}>{mobileView==='activity'?'\u25CB Activity':mobileView==='nutrition'?'\u25C6 Nutrition':'\u2295 Daily Log'} {'\u00b7'} {ts}</div>
+      {/* Inner sub-header dropped on mobile (Phase 4o.mobile.6) \u2014 the
+          mobile compact page header above already shows the tab name
+          (Play/Fuel/Daily Log) plus today's date in the top-right.
+          Desktop still renders it because the desktop tab strip doesn't
+          carry a per-page title. */}
+      {!mobileView && (
+        <div style={S.st}>{'\u2295 Daily Log'} {'\u00b7'} {ts}</div>
+      )}
 
-      {todayLoaded&&!mobileView&&(
+      {false&&todayLoaded&&!mobileView&&(
         <div style={{fontSize:10,color:'var(--text-accent)',display:'flex',alignItems:'center',gap:4,marginBottom:8}}>
           <span>✓</span>
           <span>Today's entry loaded {'\u00b7'} {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</span>
         </div>
       )}
 
-      {/* ═══ Two-column cockpit (desktop) / Single-column (mobile views) ═══ */}
-      {mobileView==='nutrition' && (
-        <>
-          <TodaysTargetLine />
-          <PillarCoachingStrip
-            pillars={['nutrition']}
-            fallbackTitle="Fuel on track"
-            fallbackDetail="Intake pacing, macro balance, and protein gap all clear. Keep logging today's meals to keep the calibration tight."
-            accentColor="#fbbf24"
-          />
-        </>
-      )}
-      {mobileView==='activity' && (
-        <PillarCoachingStrip
-          pillars={['run', 'recovery']}
-          fallbackTitle="Training & recovery clean"
-          fallbackDetail="No workout flagged today, but recovery markers (HRV, sleep) look solid. Use a clean day for mobility / Z2 if you have the time."
-          accentColor="#60a5fa"
-        />
-      )}
+      {/* ═══════ DAILY HERO · rTSS speedometer + coaching (Phase 4o.daily.10) ═══════
+          Left  : 180° rTSS gauge — the day's run training-stress score with
+                  zone bands (easy / moderate / hard / overreaching). Distinct
+                  from EdgeIQ's daily 0-100 score: this one shows the absolute
+                  load of today's run, not the composite training-readiness.
+          Right : top-2 coaching prompts (vertical stack), with the inline
+                  calibration line (BEHIND / ON PACE / AHEAD + drift) wedged
+                  beneath them. Clicking the calibration row opens Goals.
+          One bordered band, single source of truth for "what should I do
+          right now".
+          Phase 4o.mobile.1 — Mobile branch added: same data prep, compact
+          single-column layout for Play (activity) + Fuel (nutrition). */}
+      {(() => {
+        // ── Today's session score + rolling readiness + A:C load ──
+        // All folded into the hero so the entire "score story" lives in
+        // one band. Calibration (BEHIND/ON PACE/AHEAD + "Lost X lb vs
+        // predicted" prompts) is intentionally NOT shown here — that lives
+        // on EdgeIQ where it belongs (Phase 4o.daily.13).
+        let sessionType = 'rest';
+        let sessionMetric = null;            // {label:'rTSS'|'Tonnage', value:number|string}
+        let r7Score = 0, r30Score = 0;
+        let domains = { activity: null, nutrition: null, body: null };
+        try {
+          const r7 = computeRolling7d(td());
+          const r30 = computeRolling30d(td());
+          sessionMetric = r7?.todayScore?.sessionMetric || null;
+          sessionType   = r7?.todayScore?.sessionType   || 'rest';
+          domains       = r7?.todayScore?.domains       || domains;
+          r7Score  = r7?.score  || 0;
+          r30Score = r30?.score || 0;
+        } catch {}
 
-      <div className="arnold-daily-grid" style={{display:'grid',gridTemplateColumns:mobileView?'1fr':'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
+        // ── Activity set + run metrics + A:C load + 30d EF baseline ──
+        let runMetrics = null;
+        let strengthMetrics = null; // Phase 4o.daily.21 — strength-day quality
+        let acr = { ratio: null, zone: 'no_data' };
+        let ef30Avg = null;        // 30-day average EF — gives today's EF context
+        try {
+          const csvActs = (storage.get('activities') || []).filter(a => a.source !== 'health_connect');
+          const dailyLogs = storage.get('dailyLogs') || [];
+          const fitActs = [];
+          for (const l of dailyLogs) {
+            if (!l?.date) continue;
+            const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
+              ? l.fitActivities
+              : (l.fitData ? [l.fitData] : []);
+            for (const fd of fits) if (fd) fitActs.push({ ...fd, date: l.date, source: 'daily_fit' });
+          }
+          const activities = [...csvActs, ...fitActs];
+          const ftpPace     = profile?.functionalThresholdPace || '8:30';
+          // Unified maxHR via shared helper (Phase 4o.daily.22).
+          const maxHR       = getEffectiveMaxHR(profile, activities);
+          const thresholdHR = parseFloat(profile?.thresholdHR) || null;
+          const todayActs = activities.filter(a => a.date === td());
+          const runs = todayActs.filter(isRunAct);
+          if (runs.length) {
+            const best = runs.reduce((b, r) => (r.durationSecs || 0) > (b.durationSecs || 0) ? r : b, runs[0]);
+            runMetrics = computeRTSS({
+              durationSecs: best.durationSecs,
+              avgPaceRaw:   best.avgPaceRaw,
+              avgHR:        best.avgHeartRate || best.avgHR,
+              ftpPace, maxHR, thresholdHR,
+            });
+          }
+
+          // ── Strength quality metrics (Phase 4o.daily.21) ──
+          // Mirror of runMetrics for lift days. Three values, same shape
+          // as Pace/Effort/Efficiency so the hero stays consistent.
+          //   Density — tonnage/min if a template matches, else reps/min.
+          //   W:R     — totalRest/totalWork from FIT set messages, tagged
+          //             with the energy-system tier (Power/Hyper/Endurance).
+          //   Effort  — avgHR/maxHR percent with the same Easy/Aerobic/
+          //             Tempo/Threshold/VO2 zones used for run Effort.
+          const strengths = todayActs.filter(isStrengthAct);
+          if (strengths.length) {
+            const best = strengths.reduce((b, s) => (s.durationSecs || 0) > (b.durationSecs || 0) ? s : b, strengths[0]);
+
+            // Density — tonnage/min preferred, reps/min fallback
+            let density = null, densityUnit = '';
+            try {
+              const templates = storage.get('strengthTemplates') || [];
+              const tpl = matchTemplate(best, templates);
+              const bw = parseFloat(profile?.targetWeight) || parseFloat(profile?.weight) || 175;
+              if (tpl && tpl.type !== 'hyrox') {
+                const { totalTonnage } = computeTonnage(tpl, null, bw);
+                const d = computeDensity(totalTonnage, best.durationSecs);
+                if (d) { density = d.toLocaleString(); densityUnit = 'lb/min'; }
+              }
+            } catch {}
+            if (density == null && best.totalReps && best.durationSecs) {
+              const rpm = best.totalReps / (best.durationSecs / 60);
+              density = rpm.toFixed(1);
+              densityUnit = 'reps/min';
+            }
+
+            // Work:Rest ratio
+            let wr = null, wrTier = null, wrColor = null;
+            if (best.totalWorkSecs && best.totalRestSecs) {
+              const restPerWork = best.totalRestSecs / best.totalWorkSecs;
+              wr = `1:${restPerWork.toFixed(1)}`;
+              if (restPerWork > 5)        { wrTier = 'Power';       wrColor = '#a78bfa'; }
+              else if (restPerWork > 1.5) { wrTier = 'Hypertrophy'; wrColor = '#fbbf24'; }
+              else                        { wrTier = 'Endurance';   wrColor = '#4ade80'; }
+            }
+
+            // Effort — same zone palette as run Effort, anchored to maxHR
+            let effortPct = null, effortTier = null, effortColor = null;
+            const sAvgHR = best.avgHR || best.avgHeartRate;
+            if (sAvgHR && maxHR) {
+              const pct = sAvgHR / maxHR;
+              effortPct = `${Math.round(pct * 100)}%`;
+              if (pct < 0.65)      { effortTier = 'Easy';      effortColor = '#4ade80'; }
+              else if (pct < 0.80) { effortTier = 'Aerobic';   effortColor = '#4ade80'; }
+              else if (pct < 0.92) { effortTier = 'Tempo';     effortColor = '#fbbf24'; }
+              else if (pct < 1.00) { effortTier = 'Threshold'; effortColor = '#fb923c'; }
+              else                 { effortTier = 'VO2/Race';  effortColor = '#f87171'; }
+            }
+
+            strengthMetrics = {
+              density, densityUnit,
+              wr, wrTier, wrColor,
+              effortPct, effortTier, effortColor,
+              setsCount:  best.setsCount  || null,
+              totalReps:  best.totalReps  || null,
+            };
+          }
+
+          acr = computeAcuteChronicRatio(activities, td(), ftpPace, maxHR) || acr;
+
+          // 30-day EF baseline — averages efficiency factor across the
+          // user's last 30 logged runs (excluding today). Used to flag
+          // today's EF as trending up / typical / down so the user can
+          // tell whether the run was efficient relative to their norm.
+          const today = td();
+          const pastRuns = activities
+            .filter(a => isRunAct(a) && a.avgPaceRaw && (a.avgHeartRate || a.avgHR)
+                        && a.durationSecs && a.date && a.date < today)
+            .slice(-30);
+          if (pastRuns.length >= 3) {
+            const efs = pastRuns
+              .map(r => computeRTSS({
+                durationSecs: r.durationSecs, avgPaceRaw: r.avgPaceRaw,
+                avgHR: r.avgHeartRate || r.avgHR,
+                ftpPace, maxHR, thresholdHR,
+              }).efficiencyFactor)
+              .filter(v => v != null && isFinite(v));
+            if (efs.length >= 3) ef30Avg = efs.reduce((s,v) => s+v, 0) / efs.length;
+          }
+        } catch {}
+        const scoreColor = (s) => s >= 70 ? '#4ade80' : s >= 45 ? '#fbbf24' : '#f87171';
+
+        // ── Adaptive gauge — rTSS on run/mixed days, Tonnage on
+        //    strength/hyrox days, REST otherwise. The gauge is the
+        //    single "today's load" reading, regardless of session
+        //    modality, so strength days don't render an empty gauge.
+        const isStrengthDay = sessionType === 'strength' || sessionType === 'hyrox';
+        const isRunDay      = sessionType === 'run' || sessionType === 'mixed';
+        let gaugeLabel = 'rTSS';
+        let gaugeUnit  = '';
+        let gaugeValue = 0;
+        let gaugeMax   = 200;
+        let gaugeBreaks = [50, 100, 150];           // easy / mod / hard / over
+        let gaugeZoneNames = ['EASY','MODERATE','HARD','OVERREACHING'];
+        if (isStrengthDay && sessionMetric?.label === 'Tonnage') {
+          // Tonnage value comes pre-formatted with commas — strip them.
+          const raw = parseInt(String(sessionMetric.value).replace(/[^\d]/g,''), 10) || 0;
+          gaugeLabel = 'Tonnage';
+          gaugeUnit  = 'lbs';
+          gaugeValue = raw;
+          gaugeMax   = 25000;
+          gaugeBreaks = [5000, 12000, 18000];
+          gaugeZoneNames = ['LIGHT','MODERATE','HARD','HEAVY'];
+        } else if (sessionMetric?.label === 'rTSS' || sessionMetric?.label === 'Load') {
+          // 'Load' is the HR-derived fallback for strength sessions
+          // without a template (Phase 4o.daily.20). Same 0-200 scale as
+          // rTSS, so we render with the same gauge geometry — only the
+          // label changes so the user sees what's been measured.
+          gaugeLabel = sessionMetric.label;
+          gaugeValue = Number(sessionMetric.value) || 0;
+        }
+
+        // ── Speedometer geometry (parameterised by gaugeMax/breaks) ──
+        const cx = 100, cy = 100, R = 80;
+        const angleFor = v => 180 + (Math.min(Math.max(v, 0), gaugeMax) / gaugeMax) * 180;
+        const polar = (deg, radius=R) => {
+          const rad = (deg * Math.PI) / 180;
+          return { x: cx + radius * Math.cos(rad), y: cy + radius * Math.sin(rad) };
+        };
+        const arcPath = (v0, v1, radius=R) => {
+          const a0 = angleFor(v0), a1 = angleFor(v1);
+          const p0 = polar(a0, radius), p1 = polar(a1, radius);
+          const large = (a1 - a0) > 180 ? 1 : 0;
+          return `M ${p0.x} ${p0.y} A ${radius} ${radius} 0 ${large} 1 ${p1.x} ${p1.y}`;
+        };
+        const zoneEasy = '#4ade80', zoneMod = '#60a5fa', zoneHard = '#fbbf24', zoneOver = '#f87171';
+        const zoneColors = [zoneEasy, zoneMod, zoneHard, zoneOver];
+        const [b1, b2, b3] = gaugeBreaks;
+        const zoneIdx =
+          gaugeValue >= b3 ? 3 :
+          gaugeValue >= b2 ? 2 :
+          gaugeValue >= b1 ? 1 :
+          gaugeValue >  0  ? 0 : -1;
+        const needleColor = zoneIdx >= 0 ? zoneColors[zoneIdx] : 'var(--text-muted)';
+        const needleEnd = polar(angleFor(gaugeValue), R - 6);
+        const zoneLabel = zoneIdx >= 0 ? gaugeZoneNames[zoneIdx] : 'REST';
+
+        // Display-formatted gauge value: thousands separator for tonnage,
+        // round int for rTSS.
+        const gaugeDisplay = gaugeValue
+          ? (gaugeMax >= 10000 ? gaugeValue.toLocaleString() : Math.round(gaugeValue))
+          : '—';
+
+        // ── Coaching prompts (top 2) — Daily shows TODAY-actionable
+        // prompts only. Long-arc weight/pace/calibration prompts live on
+        // EdgeIQ where the multi-week trend belongs:
+        //   • pillar 'calibration'   → energy-balance audit lines
+        //   • id 'cut-pace-*'        → "On-pace -0.55 lb/wk" weight rate
+        //   • id 'cut-pace-fast'     → losing-too-fast warning
+        //   • id 'weight-stalled'    → 4-week stall callout
+        //   • id 'cal-below-rmr'     → goal-vs-RMR calibration
+        // Pull a wider slice (8) and filter so we never short-fill.
+        const longArcIds = new Set([
+          'cut-pace-good', 'cut-pace-slow', 'cut-pace-fast',
+          'weight-stalled', 'cal-below-rmr',
+        ]);
+        // Pull a wider slice and split by pillar so the right prompts
+        // surface in the right context (Phase 4o.mobile.4):
+        //   topPrompts        → desktop hero (everything except long-arc)
+        //   trainingPrompts   → Play screen (no nutrition pillar)
+        //   nutritionPrompts  → Fuel screen (nutrition pillar only)
+        let topPrompts = [], trainingPrompts = [], nutritionPrompts = [];
+        try {
+          const all = (getTopCoachingPrompts(12) || [])
+            .filter(p => p.pillar !== 'calibration' && !longArcIds.has(p.id));
+          topPrompts        = all.slice(0, 2);
+          trainingPrompts   = all.filter(p => p.pillar !== 'nutrition').slice(0, 1);
+          nutritionPrompts  = all.filter(p => p.pillar === 'nutrition').slice(0, 1);
+        } catch {}
+        const colorFor = sev =>
+          sev === 'critical' ? '#f87171' :
+          sev === 'warning'  ? '#fbbf24' :
+          sev === 'positive' ? '#4ade80' :
+                               '#60a5fa';
+
+        // ── Mobile compact hero (Phase 4o.mobile.1) ──
+        // Same signal as desktop, but stacked vertically to fit Play /
+        // Fuel narrow viewports. Speedometer + readiness rings on top
+        // row, narrative + quality metrics + coaching beneath. Renders
+        // on activity AND nutrition mobile views so both screens get
+        // the same "what's today's load and how should I act on it"
+        // anchor at the top.
+        if (mobileView === 'activity' || mobileView === 'nutrition') {
+          // Mobile hero — condensed single-band design (Phase 4o.mobile.3).
+          // Activity panel below already carries the rich session detail,
+          // so the hero only needs to anchor: today's state (readiness +
+          // load/cal-summary + A:C) and one coaching nudge. Total height
+          // target ~110-130px instead of the ~250px earlier draft.
+          const isFuel = mobileView === 'nutrition';
+          // Compute nutrition snapshot for Fuel cells.
+          const fuel = (() => {
+            try {
+              const totals = nutDailyTotals(td()) || { calories: 0, protein: 0 };
+              const dyn = getDynamicMacroTarget();
+              const calT = dyn?.dynamicTarget ?? (parseFloat(profile?.dailyCalorieTarget) || 2200);
+              const proT = dyn?.proteinG       ?? (parseFloat(profile?.dailyProteinTarget) || 150);
+              return {
+                calLeft: Math.max(0, Math.round(calT - (totals.calories || 0))),
+                proLeft: Math.max(0, Math.round(proT - (totals.protein  || 0))),
+                calT, proT,
+                earned: dyn?.isTrainingDay ? Math.round(dyn.eatBackKcal || 0) : 0,
+                isTrainingDay: !!dyn?.isTrainingDay,
+              };
+            } catch { return null; }
+          })();
+
+          // Mini ring helper — uses SVG text with dominantBaseline=central
+          // so the number sits truly centered in the ring (the previous
+          // div+inset pattern drifted ~1-2px due to font baseline).
+          const MiniRing = ({ val, label, size = 32 }) => {
+            const r = (size - 6) / 2;
+            const C = 2 * Math.PI * r;
+            const cx = size / 2, cy = size / 2;
+            return (
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
+                <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                  <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--bg-elevated)" strokeWidth="3"/>
+                  <circle cx={cx} cy={cy} r={r} fill="none"
+                    stroke={scoreColor(val)} strokeWidth="3" strokeLinecap="round"
+                    strokeDasharray={`${(val/100)*C} ${C}`} transform={`rotate(-90 ${cx} ${cy})`}/>
+                  <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+                    fontSize={size >= 36 ? 12 : 11} fontWeight="700"
+                    fill="var(--text-primary)">{val || '—'}</text>
+                </svg>
+                <span style={{ fontSize:8, color:'var(--text-muted)', lineHeight:1, fontWeight:600, letterSpacing:'0.04em' }}>{label}</span>
+              </div>
+            );
+          };
+
+          // Render: separate Play and Fuel structures so each is
+          // focused on its own story (Phase 4o.mobile.4):
+          //   Play  → training-anchored: rings + Load + A:C ratio +
+          //           training-pillar coaching prompt
+          //   Fuel  → nutrition-anchored: cal/protein/earned trio +
+          //           fuel-progress narrative + nutrition-pillar coaching
+          //   No more shared cross-context coaching, no orphan rings on
+          //   Fuel without a corresponding training anchor.
+          if (isFuel) {
+            const fuelPctConsumed = fuel && fuel.calT
+              ? Math.round(((fuel.calT - fuel.calLeft) / fuel.calT) * 100)
+              : null;
+            return (
+              <section style={{
+                background: 'var(--bg-surface)',
+                border: '0.5px solid var(--border-default)',
+                borderRadius: 'var(--radius-md)',
+                padding: '10px 12px',
+                marginBottom: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 7,
+              }}>
+                {/* ── Three-cell nutrition anchor row ── */}
+                {fuel && (
+                  <div style={{ display:'flex', gap:10, alignItems:'stretch' }}>
+                    {[
+                      { v: fuel.calLeft.toLocaleString(),
+                        lbl: 'Cal Left',
+                        sub: `of ${fuel.calT.toLocaleString()}` },
+                      { v: `${fuel.proLeft}g`,
+                        lbl: 'Protein Left',
+                        sub: `of ${fuel.proT}g` },
+                      { v: fuel.isTrainingDay ? `+${fuel.earned}` : '—',
+                        lbl: 'Earned',
+                        sub: fuel.isTrainingDay ? 'from session' : 'rest day',
+                        color: fuel.isTrainingDay ? '#4ade80' : 'var(--text-primary)' },
+                    ].map(c => (
+                      <div key={c.lbl} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', textAlign:'center', gap:2, minWidth:0 }}>
+                        <span style={{ fontSize:15, fontWeight:700, color: c.color || 'var(--text-primary)', lineHeight:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'100%' }}>{c.v}</span>
+                        <span style={{ fontSize:9, color:'var(--text-secondary)', fontWeight:600, letterSpacing:'0.04em', textTransform:'uppercase' }}>{c.lbl}</span>
+                        <span style={{ fontSize:8.5, color:'var(--text-muted)', lineHeight:1.2 }}>{c.sub}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── Compact fuel narrative ── */}
+                {fuel && fuelPctConsumed != null && (
+                  <div style={{ fontSize:10, color:'var(--text-secondary)', lineHeight:1.4 }}>
+                    Fueled {fuelPctConsumed}% of today's
+                    {fuel.isTrainingDay ? ' training-day' : ''} target
+                    {fuel.isTrainingDay ? ` (+${fuel.earned} from session)` : ''}.
+                    {fuelPctConsumed < 50  ? ' Anchor the next meal.' :
+                     fuelPctConsumed < 90  ? ' On pace — stay consistent.' :
+                     fuelPctConsumed < 110 ? ' At target.' :
+                                              ' Past target — lighter dinner.'}
+                  </div>
+                )}
+
+                {/* ── Single nutrition coaching prompt ── */}
+                {nutritionPrompts.length > 0 && (
+                  <div style={{ display:'flex', flexDirection:'column', gap:5, paddingTop:6, borderTop:'0.5px solid var(--border-subtle)' }}>
+                    {nutritionPrompts.map(p => {
+                      const c = colorFor(p.severity);
+                      return (
+                        <div key={p.id} style={{ display:'flex', alignItems:'flex-start', gap:6, fontSize:10, lineHeight:1.4 }}>
+                          <span aria-hidden style={{ width:5, height:5, borderRadius:'50%', background:c, flexShrink:0, marginTop:4 }}/>
+                          <span style={{ minWidth:0 }}>
+                            <span style={{ fontWeight:600, color:c }}>{p.title}</span>
+                            <span style={{ color:'var(--text-muted)' }}> · {p.detail}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          }
+
+          // ── Play (activity) hero ──
+          return (
+            <section style={{
+              background: 'var(--bg-surface)',
+              border: '0.5px solid var(--border-default)',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 12px',
+              marginBottom: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 7,
+            }}>
+              {/* ── Single dense row: rings · Load value · A:C ratio ── */}
+              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <MiniRing val={r7Score}  label="7d"/>
+                <MiniRing val={r30Score} label="30d"/>
+
+                <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start',
+                  paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)', minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
+                    <span style={{ fontSize:15, fontWeight:700, color:needleColor, lineHeight:1 }}>
+                      {gaugeDisplay}
+                    </span>
+                    <span style={{ fontSize:9, color:'var(--text-muted)' }}>{gaugeLabel}</span>
+                  </div>
+                  <span style={{ fontSize:8.5, color:needleColor, marginTop:2, fontWeight:600, letterSpacing:'0.06em' }}>
+                    {zoneLabel}
+                  </span>
+                </div>
+
+                {acr.ratio != null && (
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start',
+                    marginLeft:'auto', paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)' }}>
+                    <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
+                      <span style={{ fontSize:13, fontWeight:600, color: ZONE_COLORS[acr.zone] }}>{acr.ratio}</span>
+                      <span style={{ fontSize:8.5, color: ZONE_COLORS[acr.zone] }}>{ZONE_LABELS[acr.zone]}</span>
+                    </div>
+                    <span style={{ fontSize:8.5, color:'var(--text-muted)', marginTop:2 }}>A:C ratio</span>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Compact training narrative ── */}
+              {(() => {
+                const tier =
+                  r7Score >= 80 ? 'strong'  :
+                  r7Score >= 65 ? 'solid'   :
+                  r7Score >= 50 ? 'mixed'   :
+                  r7Score >  0  ? 'fragile' : null;
+                const delta = r7Score - r30Score;
+                const trendClause =
+                  delta >=  6 ? `up ${delta} on 30d`     :
+                  delta <= -6 ? `${Math.abs(delta)} off 30d` :
+                                `steady on 30d`;
+                if (!tier) return null;
+                let acrClause = '';
+                if (acr.ratio != null) {
+                  if (acr.zone === 'overreaching')        acrClause = ' · ramping fast — protect recovery.';
+                  else if (acr.zone === 'danger')         acrClause = ' · injury risk — back off.';
+                  else if (acr.zone === 'undertraining') acrClause = ' · load dropped — rebuild.';
+                }
+                return (
+                  <div style={{ fontSize:10, color:'var(--text-secondary)', lineHeight:1.4 }}>
+                    Readiness {r7Score} — {tier}, {trendClause}{acrClause}
+                  </div>
+                );
+              })()}
+
+              {/* ── Single training coaching prompt ── */}
+              {trainingPrompts.length > 0 && (
+                <div style={{ display:'flex', flexDirection:'column', gap:5, paddingTop:6, borderTop:'0.5px solid var(--border-subtle)' }}>
+                  {trainingPrompts.map(p => {
+                    const c = colorFor(p.severity);
+                    return (
+                      <div key={p.id} style={{ display:'flex', alignItems:'flex-start', gap:6, fontSize:10, lineHeight:1.4 }}>
+                        <span aria-hidden style={{ width:5, height:5, borderRadius:'50%', background:c, flexShrink:0, marginTop:4 }}/>
+                        <span style={{ minWidth:0 }}>
+                          <span style={{ fontWeight:600, color:c }}>{p.title}</span>
+                          <span style={{ color:'var(--text-muted)' }}> · {p.detail}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        }
+        // Other mobile views (none today) — no hero
+        if (mobileView) return null;
+
+        return (
+          <section style={{
+            background: 'var(--bg-surface)',
+            border: '0.5px solid var(--border-default)',
+            borderRadius: 'var(--radius-md)',
+            padding: 'clamp(10px,1vw,14px) clamp(12px,1.2vw,16px)',
+            marginBottom: 12,
+            display: 'grid',
+            gridTemplateColumns: '120px minmax(0,1.25fr) minmax(0,1fr)',
+            gap: 'clamp(8px,1vw,12px)',
+            alignItems: 'start',
+            minWidth: 0,
+          }}>
+            {/* ── COL 1 · Adaptive speedometer ──
+                Run/mixed days  → rTSS gauge (0–200, threshold-anchored).
+                Strength/hyrox  → Tonnage gauge (0–25k lbs).
+                Rest day        → needle parked at 0, label "REST".
+                Long-form caption ("100 = 1 hr at threshold" / "lbs ·
+                sets×reps×weight") moved to a hover tooltip on the column
+                itself (Phase 4o.daily.18) so the hero band stays narrow. */}
+            <div title={gaugeLabel === 'Tonnage'
+                ? "Today's strength volume in pounds — sets × reps × weight summed across every exercise. Bigger lifts and longer sessions stack."
+                : gaugeLabel === 'Load'
+                ? "Today's training load (HR-derived) — for strength sessions without a template, we use duration × HR-relative-to-threshold² × 100. Same 0-200 scale as rTSS so it reads consistently."
+                : "Today's run training load. rTSS = duration × intensity² scaled so 100 = 1 hour at lactate threshold. A long Z2 run can score high here even when the pace felt easy because the duration stacks the stress."}
+              style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, minWidth:0, cursor:'help' }}>
+              <svg width="100%" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet"
+                   style={{ maxWidth: 130 }}>
+                {/* zone arcs (easy → over) — opacity dims the inactive zones */}
+                <path d={arcPath(0,  b1)}        stroke={zoneEasy} strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx>0?0.35:zoneIdx===0?1:0.35}/>
+                <path d={arcPath(b1, b2)}        stroke={zoneMod}  strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx>1?0.35:zoneIdx===1?1:0.35}/>
+                <path d={arcPath(b2, b3)}        stroke={zoneHard} strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx>2?0.35:zoneIdx===2?1:0.35}/>
+                <path d={arcPath(b3, gaugeMax)}  stroke={zoneOver} strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx===3?1:0.35}/>
+
+                {/* tick marks at zone boundaries */}
+                {[0, b1, b2, b3, gaugeMax].map(v=>{
+                  const inner = polar(angleFor(v), R-13);
+                  const outer = polar(angleFor(v), R-3);
+                  return <line key={v} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y}
+                    stroke="var(--border-subtle)" strokeWidth="0.6"/>;
+                })}
+
+                {/* needle */}
+                <line x1={cx} y1={cy} x2={needleEnd.x} y2={needleEnd.y}
+                  stroke={needleColor} strokeWidth="2.5" strokeLinecap="round"/>
+                <circle cx={cx} cy={cy} r="4" fill={needleColor}/>
+
+                {/* center value + metric label */}
+                <text x={cx} y={cy-22} textAnchor="middle" fontSize={gaugeMax >= 10000 ? "16" : "22"} fontWeight="700"
+                  fill="var(--text-primary)" style={{ fontFamily:'var(--font-ui)' }}>
+                  {gaugeDisplay}
+                </text>
+                <text x={cx} y={cy-8} textAnchor="middle" fontSize="8" letterSpacing="0.1em"
+                  fill="var(--text-muted)" style={{ fontFamily:'var(--font-ui)' }}>
+                  {gaugeLabel}{gaugeUnit ? ` · ${gaugeUnit}` : ''}
+                </text>
+              </svg>
+              <div style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+                color: needleColor, marginTop: -4,
+              }}>
+                {zoneLabel}
+              </div>
+              {/* Inline caption removed Phase 4o.daily.18 — full
+                  explanation lives in the parent column's hover tooltip. */}
+            </div>
+
+            {/* ── COL 2 · Training Readiness · wider, no domain dupe ──
+                Domain breakdown (Activity/Nutrition/Body) was removed
+                Phase 4o.daily.14 — that's already the headline of EdgeIQ.
+                What stays here: the rings, A:C, run pace quality, and a
+                short narrative interpreting the readiness for today. */}
+            <div style={{ display:'flex', flexDirection:'column', gap:7, minWidth:0,
+              borderLeft: '0.5px solid var(--border-subtle)', paddingLeft: 12 }}>
+              {/* Header — single line, no right-side subtitle (the
+                  narrative below explains what readiness measures). */}
+              <div style={{ fontSize:9, fontWeight:600, color:'var(--text-muted)',
+                letterSpacing:'0.08em', textTransform:'uppercase', whiteSpace:'nowrap' }}>
+                Training Readiness
+              </div>
+
+              {/* Rings + A:C + run metrics laid out HORIZONTALLY in one row
+                  so the column packs vertically tight. Each cluster is its
+                  own micro-section with the value(s) on top and a label
+                  beneath. */}
+              <div style={{ display:'flex', alignItems:'center', gap:14, flexWrap:'wrap' }}>
+                {/* 7d + 30d rings */}
+                {[
+                  { val: r7Score,  label: '7-day',  caption: 'weighted' },
+                  { val: r30Score, label: '30-day', caption: 'trend'    },
+                ].map(ring => {
+                  const C = 2 * Math.PI * 17;
+                  return (
+                    <div key={ring.label} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
+                      <div style={{ position:'relative', width:40, height:40, flexShrink:0 }}>
+                        <svg width="40" height="40" viewBox="0 0 40 40">
+                          <circle cx="20" cy="20" r="17" fill="none" stroke="var(--bg-elevated)" strokeWidth="3.5"/>
+                          <circle cx="20" cy="20" r="17" fill="none"
+                            stroke={scoreColor(ring.val)} strokeWidth="3.5" strokeLinecap="round"
+                            strokeDasharray={`${(ring.val/100)*C} ${C}`} transform="rotate(-90 20 20)"/>
+                        </svg>
+                        <div style={{ position:'absolute', inset:0, display:'flex',
+                          alignItems:'center', justifyContent:'center' }}>
+                          <span style={{ fontSize:13, fontWeight:700, color:'var(--text-primary)', lineHeight:1 }}>
+                            {ring.val || '—'}
+                          </span>
+                        </div>
+                      </div>
+                      <span style={{ fontSize:8.5, color:'var(--text-secondary)', fontWeight:600, lineHeight:1 }}>{ring.label}</span>
+                    </div>
+                  );
+                })}
+
+                {/* A:C ratio inline */}
+                {acr.ratio != null && (
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:1,
+                    paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)' }}>
+                    <div style={{ display:'flex', alignItems:'baseline', gap:5 }}>
+                      <span style={{ fontSize:13, fontWeight:600, color: ZONE_COLORS[acr.zone] }}>{acr.ratio}</span>
+                      <span style={{ fontSize:8.5, color: ZONE_COLORS[acr.zone] }}>{ZONE_LABELS[acr.zone]}</span>
+                    </div>
+                    <span style={{ fontSize:8.5, color:'var(--text-muted)', letterSpacing:'0.05em' }}>A:C ratio</span>
+                  </div>
+                )}
+
+                {/* ── Session quality metrics (Phase 4o.daily.21) ──
+                    Same three-tile rhythm regardless of session modality:
+                      Run days     → Pace · Effort · Efficiency
+                      Strength days → Density · W:R · Effort
+                    The values change but the visual shape and tier-color
+                    semantics stay constant, so the hero feels coherent
+                    whether you logged a run, a lift, or both. */}
+                {(() => {
+                  let cells = null;
+
+                  if (runMetrics && runMetrics.rTSS) {
+                    const IF = runMetrics.intensityFactor;
+                    const EF = runMetrics.efficiencyFactor;
+                    let effortTier, effortColor;
+                    if (IF == null) { effortTier = '—'; effortColor = 'var(--text-muted)'; }
+                    else if (IF < 0.65) { effortTier = 'Easy';      effortColor = '#4ade80'; }
+                    else if (IF < 0.80) { effortTier = 'Aerobic';   effortColor = '#4ade80'; }
+                    else if (IF < 0.92) { effortTier = 'Tempo';     effortColor = '#fbbf24'; }
+                    else if (IF < 1.00) { effortTier = 'Threshold'; effortColor = '#fb923c'; }
+                    else                { effortTier = 'VO2/Race';  effortColor = '#f87171'; }
+
+                    let efVerdict = 'baseline still loading';
+                    let efColor = 'var(--text-muted)';
+                    if (EF != null && ef30Avg) {
+                      const pct = (EF - ef30Avg) / ef30Avg;
+                      if (pct >= 0.06)       { efVerdict = `↑ ${Math.round(pct*100)}% vs 30d avg`; efColor = '#4ade80'; }
+                      else if (pct <= -0.06) { efVerdict = `↓ ${Math.round(Math.abs(pct)*100)}% vs 30d avg`; efColor = '#fbbf24'; }
+                      else                   { efVerdict = `near 30d avg (${ef30Avg.toFixed(2)})`; efColor = 'var(--text-secondary)'; }
+                    } else if (EF == null) {
+                      efVerdict = 'needs HR';
+                    }
+
+                    cells = [
+                      { v: runMetrics.ngpPace || '—', lbl: 'Pace',
+                        sub: 'graded', subColor: 'var(--text-muted)' },
+                      { v: IF ?? '—', lbl: 'Effort', sub: effortTier, subColor: effortColor,
+                        tooltip: runMetrics.ifSource === 'hr'
+                          ? `IF ${IF} = ${Math.round(IF*100)}% of threshold HR (HR-based — your easy pace ran faster than your effort).`
+                          : `IF ${IF} = ${Math.round(IF*100)}% of threshold pace (pace-based — set max HR in profile to switch to HR).`
+                      },
+                      { v: EF ?? '—', lbl: 'Efficiency', sub: efVerdict, subColor: efColor,
+                        tooltip: ef30Avg
+                          ? `Efficiency = pace ÷ HR. Today ${EF}, 30-day avg ${ef30Avg.toFixed(2)}. Rising over weeks at the same effort = aerobic engine improving.`
+                          : 'Efficiency = pace ÷ HR. Need ≥3 past runs with HR to compare to your baseline.'
+                      },
+                    ];
+                  } else if (strengthMetrics) {
+                    const sm = strengthMetrics;
+                    const setsLine = sm.setsCount && sm.totalReps ? `${sm.setsCount} sets · ${sm.totalReps} reps` : '';
+
+                    cells = [
+                      { v: sm.density ?? '—',
+                        lbl: 'Density',
+                        sub: sm.densityUnit || 'volume/min',
+                        subColor: 'var(--text-muted)',
+                        tooltip: sm.densityUnit === 'lb/min'
+                          ? `Tonnage per minute (sets × reps × weight ÷ duration). ${setsLine}`
+                          : sm.densityUnit === 'reps/min'
+                          ? `Reps per minute — fallback when no strength template matches this session. ${setsLine} Add a template in Workouts to upgrade to lb/min.`
+                          : 'No volume data available for this session.'
+                      },
+                      { v: sm.wr ?? '—',
+                        lbl: 'W:R',
+                        sub: sm.wrTier || 'no lap data',
+                        subColor: sm.wrColor || 'var(--text-muted)',
+                        tooltip: sm.wr
+                          ? `Work:Rest ratio ${sm.wr} — ${sm.wrTier} energy system. >1:5 = power/phosphagen, 1:1.5–5 = hypertrophy/glycolytic, <1:1.5 = endurance/oxidative.`
+                          : 'Work:Rest ratio needs typed set/rest segments from the FIT — older watches without lap-button discipline can\'t supply this.'
+                      },
+                      { v: sm.effortPct ?? '—',
+                        lbl: 'Effort',
+                        sub: sm.effortTier || 'needs HR',
+                        subColor: sm.effortColor || 'var(--text-muted)',
+                        tooltip: sm.effortPct
+                          ? `Avg HR as percent of max HR. ${sm.effortTier} zone — same tiering as run Effort so the colour reads the same across modalities.`
+                          : 'Effort needs avg HR + a maxHR estimate. Profile maxHR not set.'
+                      },
+                    ];
+                  }
+
+                  if (!cells) return null;
+                  return (
+                    <div style={{ display:'flex', gap:14, paddingLeft:12,
+                      borderLeft:'0.5px solid var(--border-subtle)' }}>
+                      {cells.map(c => (
+                        <div key={c.lbl} title={c.tooltip || ''}
+                          style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2 }}>
+                          <span style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', lineHeight:1 }}>{c.v}</span>
+                          <span style={{ fontSize:10, color:'var(--text-secondary)', fontWeight:500 }}>{c.lbl}</span>
+                          <span style={{ fontSize:9, color: c.subColor, lineHeight:1.2 }}>{c.sub}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* ── Readiness narrative ──
+                  This is the one block where the abstract numbers get
+                  translated into English. It always names:
+                    1. the score and a quality tier (strong/solid/mixed/fragile)
+                    2. how the 7d compares to the 30d baseline
+                    3. the dominant + lagging domain when the spread is real
+                    4. the A:C ramp-rate state and what to do about it
+                  No generic filler — every clause is tied to the actual data. */}
+              {(() => {
+                const tier =
+                  r7Score >= 80 ? 'strong'  :
+                  r7Score >= 65 ? 'solid'   :
+                  r7Score >= 50 ? 'mixed'   :
+                  r7Score >  0  ? 'fragile' : null;
+                const delta = r7Score - r30Score;
+                let trendClause;
+                if (delta >=  6) trendClause = `up ${delta} pts on the 30-day baseline`;
+                else if (delta <= -6) trendClause = `${Math.abs(delta)} pts off the 30-day baseline`;
+                else                  trendClause = `right on the 30-day baseline`;
+
+                const headline = tier
+                  ? `Readiness ${r7Score} — ${tier}, ${trendClause}.`
+                  : `No readiness yet — log a few days to bootstrap.`;
+
+                // Domain driver (uses the score breakdown internally; we
+                // never print the raw 0–100 numbers, only the names).
+                const ds = [
+                  ['activity',  domains.activity ],
+                  ['nutrition', domains.nutrition],
+                  ['body',      domains.body     ],
+                ].filter(([,v]) => v != null);
+                let driverClause = '';
+                if (ds.length >= 2) {
+                  ds.sort((a,b) => b[1] - a[1]);
+                  const [topName, topVal] = ds[0];
+                  const [botName, botVal] = ds[ds.length - 1];
+                  const cap = s => s.charAt(0).toUpperCase()+s.slice(1);
+                  if (topVal - botVal >= 15) {
+                    driverClause = ` ${cap(topName)} is doing the lifting; ${botName} is the lever to push higher.`;
+                  } else if (topVal >= 75) {
+                    driverClause = ' All three pillars in shape.';
+                  } else if (topVal < 60) {
+                    driverClause = ' All three pillars middling — pick one to focus on.';
+                  }
+                }
+
+                // A:C context — always carries the ratio number so the
+                // claim is verifiable, plus a what-to-do tail.
+                let acrClause = '';
+                if (acr.ratio != null) {
+                  if (acr.zone === 'overreaching')   acrClause = ` Load is ramping fast (A:C ${acr.ratio}) — green-light if recovery is on point, fragile if not.`;
+                  else if (acr.zone === 'danger')    acrClause = ` Load is in injury territory (A:C ${acr.ratio}) — back off this week.`;
+                  else if (acr.zone === 'undertraining') acrClause = ` Load has dropped (A:C ${acr.ratio}) — fine for a deload, rebuild after.`;
+                  else if (acr.zone === 'optimal')   acrClause = ` Load ramp is in the sweet spot (A:C ${acr.ratio}).`;
+                }
+
+                return (
+                  <div style={{ fontSize:10.5, color:'var(--text-secondary)', lineHeight:1.5,
+                    paddingTop:6, borderTop:'0.5px solid var(--border-subtle)' }}>
+                    {headline}{driverClause}{acrClause}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* ── COL 3 · Coaching prompts + calibration ── */}
+            <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:0,
+              borderLeft: '0.5px solid var(--border-subtle)', paddingLeft: 12 }}>
+              {/* Prompts wrap onto multiple lines so the full coaching text
+                  reads — the old single-line ellipsis truncation hid most
+                  of the detail (Phase 4o.daily.12 fix). */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                {topPrompts.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11, lineHeight: 1.4 }}>
+                    <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', flexShrink: 0, marginTop: 5, opacity: 0.7 }}/>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, color: '#4ade80' }}>All clear</span>
+                      <span style={{ color: 'var(--text-muted)' }}> · No flagged prompts. Keep the data flowing.</span>
+                    </span>
+                  </div>
+                ) : topPrompts.map(p => {
+                  const c = colorFor(p.severity);
+                  return (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11, lineHeight: 1.4, minWidth: 0 }}>
+                      <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0, marginTop: 5 }}/>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 600, color: c }}>{p.title}</span>
+                        <span style={{ color: 'var(--text-muted)' }}> · {p.detail}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Calibration row (BEHIND/ON PACE/AHEAD + drift/ETA) removed
+                  Phase 4o.daily.13 — that signal is the headline of EdgeIQ
+                  and was duplicated here. The Daily hero now reads as
+                  "today's load + readiness + actionable coaching", and
+                  long-arc weight-trend lives on EdgeIQ. */}
+            </div>
+          </section>
+        );
+      })()}
+
+      {/* Mobile coaching strips removed (Phase 4o.mobile.1) — the
+          mobile Daily Hero above now carries the top-2 coaching prompts
+          alongside the speedometer and readiness rings, so the
+          standalone strips were redundant. */}
+
+      {/* `minmax(0, 1fr)` lets each column actually shrink with the viewport
+          (default `1fr` = `minmax(auto, 1fr)` won't shrink below content
+          intrinsic size, which caused horizontal overflow on narrow widths). */}
+      <div className="arnold-daily-grid" style={{display:'grid',gridTemplateColumns:mobileView?'1fr':'minmax(0,1fr) minmax(0,1fr)',gap:'clamp(8px,1vw,12px)',alignItems:'start'}}>
 
         {/* ── LEFT: Activity (show in desktop or mobileView=activity) ── */}
-        {mobileView!=='nutrition'&&<div>
-          {/* Activity coaching strip — desktop Daily tab only. Garmin Worker
-              auto-sync now handles all FIT imports, so the manual upload pill
-              has been retired (Phase 4j-i). */}
-          {!mobileView && (
-            <PillarCoachingStrip
-              pillars={['run', 'recovery']}
-              fallbackTitle="Training & recovery clean"
-              fallbackDetail="No workout flagged today, but recovery markers (HRV, sleep) look solid. Use a clean day for mobility / Z2 if you have the time."
-              accentColor="#60a5fa"
-            />
-          )}
+        {mobileView!=='nutrition'&&<div style={{minWidth:0}}>
+          {/* Coaching now lives in the Daily Hero rail at the top of the
+              page — single source of truth. Per-panel coaching strip
+              removed (Phase 4o.daily.8). */}
 
           {!fitData?(
             <div style={panelStyle}>
-              <div style={{textAlign:'center',padding:'32px 0',color:'var(--text-muted)',fontSize:12}}>
-                Upload today's .fit file to see activity metrics
+              {/* Header — title + Garmin sync button so the user can pull
+                  today's runs without leaving the page. Mirrors the
+                  Nutrition panel's "Sync Cronometer" header for parity.
+                  Phase 4o.daily.19 — restored after the fitData-gated
+                  button disappeared on a fresh day with no activity yet. */}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,gap:8}}>
+                <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>Activity</span>
+                {/* Subtle ghost-style sync button (Phase 4o.mobile.3) — no
+                    filled background by default; only tints on done/error. */}
+                <button
+                  onClick={handleGarminSync}
+                  disabled={syncFitState==='syncing'}
+                  style={{
+                    fontSize:10,fontWeight:500,padding:'3px 8px',borderRadius:6,flexShrink:0,
+                    background: syncFitState==='done'  ? 'rgba(74,222,128,0.08)'
+                              : syncFitState==='error' ? 'rgba(248,113,113,0.08)'
+                              : 'transparent',
+                    color: syncFitState==='done'  ? '#4ade80'
+                         : syncFitState==='error' ? '#f87171'
+                         : 'var(--text-secondary, var(--text-muted))',
+                    border:`0.5px solid ${syncFitState==='done' ? 'rgba(74,222,128,0.25)' : syncFitState==='error' ? 'rgba(248,113,113,0.25)' : 'var(--border-subtle, rgba(255,255,255,0.08))'}`,
+                    cursor:syncFitState==='syncing'?'wait':'pointer',
+                    letterSpacing:'0.02em',
+                  }}
+                  title="Pull latest FIT activities from the Garmin Worker"
+                >
+                  {syncFitState==='syncing' ? '↻ Syncing…' : syncFitState==='done' ? '✓ Synced' : syncFitState==='error' ? '✗ Failed' : '↻ Sync'}
+                </button>
+              </div>
+              <div style={{textAlign:'center',padding:'24px 0',color:'var(--text-muted)',fontSize:12}}>
+                No activity logged yet today — sync Garmin or upload a .fit file.
               </div>
             </div>
           ):<>
@@ -4333,33 +5635,74 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
             {fitGroups.map((fd,idx)=>(
               <div key={`${fd?._groupKey||idx}`} style={{...panelStyle,marginBottom:fitGroups.length>1&&idx<fitGroups.length-1?8:panelStyle.marginBottom}}>
-                {/* Header */}
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                  <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>{fd.isRun?'Run':fd.isStrength?'Strength':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
-                  <span style={{fontSize:10,color:'var(--text-muted)'}}>today</span>
-                </div>
+                {/* Header — title + source badge + (desktop only) date.
+                    Desktop: badge + date inline with the title.
+                    Mobile (Phase 4o.mobile.5): title + sync button on top
+                    row, Garmin-FIT badge stacked beneath title at smaller
+                    font, date dropped (it's already in the "ACTIVITY ·
+                    2026-05-04" screen header). */}
+                {(() => {
+                  const badgeLabel = fd.isHIIT ? 'HIIT'
+                                   : fd.isRun ? 'Run'
+                                   : fd.isMobility ? 'Mobility'
+                                   : fd.isStrength ? 'Strength'
+                                   : (fd.activityType || 'Activity');
+                  const badgeColor = fd.isHIIT ? '#fbbf24'
+                                   : fd.isRun ? '#60a5fa'
+                                   : fd.isMobility ? '#22d3ee'
+                                   : '#a78bfa';
+                  const sourceBadge = (
+                    <span style={{fontSize: mobileView ? 8 : 9, fontWeight:500, padding: mobileView ? '1px 6px' : '2px 8px', borderRadius:10, background:`${badgeColor}1f`, color:badgeColor, whiteSpace:'nowrap', letterSpacing:'0.02em'}}>
+                      {badgeLabel} · Garmin FIT{fd._groupCount>1?` · cumulative`:''}
+                    </span>
+                  );
+                  const syncBtn = idx===0 && (
+                    <button
+                      onClick={handleGarminSync}
+                      disabled={syncFitState==='syncing'}
+                      style={{
+                        fontSize:10,fontWeight:500,padding:'3px 8px',borderRadius:6,flexShrink:0,
+                        background: syncFitState==='done'  ? 'rgba(74,222,128,0.08)'
+                                  : syncFitState==='error' ? 'rgba(248,113,113,0.08)'
+                                  : 'transparent',
+                        color: syncFitState==='done'  ? '#4ade80'
+                             : syncFitState==='error' ? '#f87171'
+                             : 'var(--text-secondary, var(--text-muted))',
+                        border:`0.5px solid ${syncFitState==='done' ? 'rgba(74,222,128,0.25)' : syncFitState==='error' ? 'rgba(248,113,113,0.25)' : 'var(--border-subtle, rgba(255,255,255,0.08))'}`,
+                        cursor:syncFitState==='syncing'?'wait':'pointer',
+                        letterSpacing:'0.02em',
+                      }}
+                      title="Pull latest FIT activities from the Garmin Worker"
+                    >
+                      {syncFitState==='syncing' ? '↻ Syncing…' : syncFitState==='done' ? '✓ Synced' : syncFitState==='error' ? '✗ Failed' : '↻ Sync'}
+                    </button>
+                  );
 
-                {/* Type badge */}
-                <div style={{display:'flex',gap:5,marginBottom:12,alignItems:'center'}}>
-                  {(() => {
-                    const label = fd.isHIIT ? 'HIIT'
-                                : fd.isRun ? 'Run'
-                                : fd.isMobility ? 'Mobility'
-                                : fd.isStrength ? 'Strength'
-                                : (fd.activityType || 'Activity');
-                    const color = fd.isHIIT ? '#fbbf24'
-                                : fd.isRun ? '#60a5fa'
-                                : fd.isMobility ? '#22d3ee'
-                                : '#a78bfa';
-                    const bg = `${color}1f`;
+                  if (mobileView) {
                     return (
-                      <span style={{fontSize:9,fontWeight:500,padding:'2px 9px',borderRadius:10,background:bg,color}}>
-                        {label} · Garmin FIT{fd._groupCount>1?` · cumulative`:''}
-                      </span>
+                      <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:8,minWidth:0}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                          <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>{fd.isRun?'Run':fd.isStrength?'Strength':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
+                          {syncBtn}
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginTop:0}}>
+                          {sourceBadge}
+                        </div>
+                      </div>
                     );
-                  })()}
-                  <span style={{fontSize:9,color:'var(--text-muted)'}}>{fd.date} · {fd.time}</span>
-                </div>
+                  }
+
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,gap:8,flexWrap:'wrap'}}>
+                      <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap',minWidth:0}}>
+                        <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>{fd.isRun?'Run':fd.isStrength?'Strength':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
+                        {sourceBadge}
+                        <span style={{fontSize:9,color:'var(--text-muted)',whiteSpace:'nowrap'}}>{fd.date} · {fd.time}</span>
+                      </div>
+                      {syncBtn}
+                    </div>
+                  );
+                })()}
 
                 {/* 5 dials for runs */}
                 {fd.isRun&&(
@@ -4464,19 +5807,51 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                       </div>
                     ))}
                   </div>
-                  <div style={{display:'flex',gap:5}}>
-                    {[
-                      {label:'body batt',val:fd.bodyBatteryDrain?`-${fd.bodyBatteryDrain}`:'—'},
-                      {label:'TSS',val:fd.trainingStressScore?fd.trainingStressScore.toFixed(0):'—'},
-                      {label:'aero TE',val:(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'},
-                      {label:'anaero TE',val:(fd.anaerobicTrainingEffect||fd.anaerobicTE)?(fd.anaerobicTrainingEffect||fd.anaerobicTE).toFixed(1):'—'},
-                    ].map(m=>(
-                      <div key={m.label} style={miniTile}>
-                        <div style={miniVal}>{m.val}</div>
-                        <div style={miniLbl}>{m.label}</div>
+                  {(() => {
+                    // TSS fallback (Phase 4o.daily.20): Garmin doesn't
+                    // emit trainingStressScore for strength sessions —
+                    // pace/power-anchored, run/cycling-only. When the FIT
+                    // didn't supply TSS but we have HR + duration, derive
+                    // hrTSS so the tile reads a real number with a *
+                    // marker indicating it was computed.
+                    //
+                    // maxHR ladder (Phase 4o.daily.20.1) mirrors the one
+                    // in computeDailyScore so the tile never silently
+                    // fails when profile.maxHR is unset.
+                    let tssVal = fd.trainingStressScore;
+                    let tssDerived = false;
+                    if (!tssVal) {
+                      // Unified ladder (Phase 4o.daily.22) — never fall
+                      // back to fd.maxHR (this session's peak); strength
+                      // sessions naturally cap below threshold so using
+                      // them as denominator inflates IF and hrTSS.
+                      const mhr = getEffectiveMaxHR(profile, getUnifiedActivities());
+                      const { hrTSS } = computeHrTSS({
+                        durationSecs: fd.durationSecs,
+                        avgHR:        fd.avgHR || fd.avgHeartRate,
+                        maxHR:        mhr,
+                        thresholdHR:  parseFloat(profile?.thresholdHR) || null,
+                      });
+                      if (hrTSS) { tssVal = hrTSS; tssDerived = true; }
+                    }
+                    return (
+                      <div style={{display:'flex',gap:5}}>
+                        {[
+                          {label:'body batt',val:fd.bodyBatteryDrain?`-${fd.bodyBatteryDrain}`:'—'},
+                          {label: tssDerived ? 'TSS*' : 'TSS',
+                           val: tssVal ? Math.round(tssVal).toString() : '—',
+                           tooltip: tssDerived ? 'Derived from HR + duration (hrTSS) — Garmin doesn\'t emit TSS for this session type.' : ''},
+                          {label:'aero TE',val:(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'},
+                          {label:'anaero TE',val:(fd.anaerobicTrainingEffect||fd.anaerobicTE)?(fd.anaerobicTrainingEffect||fd.anaerobicTE).toFixed(1):'—'},
+                        ].map(m=>(
+                          <div key={m.label} style={miniTile} title={m.tooltip || ''}>
+                            <div style={miniVal}>{m.val}</div>
+                            <div style={miniLbl}>{m.label}</div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
                     </>;
                   })()}
 
@@ -4509,61 +5884,45 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
               </div>
             ))}
           </>}
-
-          {/* ── Today's Movement (ambient NEAT from Health Connect) ── */}
-          {/* Shows steps + active kcal + total kcal. Populated by
-              syncDailyEnergy() (#89). Always visible on the Activity column
-              so rest/mobility days don't feel empty. */}
-          <div style={{...panelStyle,marginTop:8}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-              <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>Today's Movement</span>
-              <span style={{fontSize:9,color:'var(--text-muted)'}}>
-                {todayMovement?.source==='health_connect'?'Health Connect':todayMovement?'synced':'no data'}
-              </span>
-            </div>
-            {todayMovement?(
-              <div style={{display:'flex',gap:5}}>
-                <div style={miniTile}>
-                  <div style={{...miniVal,color:'#60a5fa'}}>{todayMovement.steps.toLocaleString()}</div>
-                  <div style={miniLbl}>steps</div>
-                </div>
-                <div style={miniTile}>
-                  <div style={{...miniVal,color:'#fbbf24'}}>{todayMovement.active>0?Math.round(todayMovement.active):'—'}</div>
-                  <div style={miniLbl}>active kcal</div>
-                </div>
-                <div style={miniTile}>
-                  <div style={{...miniVal,color:'#4ade80'}}>{todayMovement.total>0?Math.round(todayMovement.total):'—'}</div>
-                  <div style={miniLbl}>total kcal</div>
-                </div>
-              </div>
-            ):(
-              <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center',padding:'6px 0'}}>
-                Sync your Android phone to populate daily movement.
-              </div>
-            )}
-          </div>
+          {/* Today's Movement moved out of Activity column → summary
+              footer row at the bottom of the page (Phase 4o.daily.9). */}
         </div>}
 
         {/* ── RIGHT: Nutrition (show in desktop or mobileView=nutrition) ── */}
-        {mobileView!=='activity'&&<div>
-          {/* Today's target + nutrition coaching — desktop Daily tab only.
-              Cronometer live worker auto-pulls daily nutrition; the manual
-              CSV upload pill has been retired (Phase 4j-i). */}
-          {!mobileView && (
-            <>
-              <TodaysTargetLine />
-              <PillarCoachingStrip
-                pillars={['nutrition']}
-                fallbackTitle="Fuel on track"
-                fallbackDetail="Intake pacing, macro balance, and protein gap all clear. Keep logging today's meals to keep the calibration tight."
-                accentColor="#fbbf24"
-              />
-            </>
-          )}
+        {mobileView!=='activity'&&<div style={{minWidth:0}}>
+          {/* Coaching now lives in the Daily Hero rail at the top of the
+              page — single source of truth. Per-panel coaching strip
+              removed (Phase 4o.daily.8). */}
 
-          {/* ── New NutritionInput panel (all sections: dials, supplements, systems, micros, macros-vs-goal, water, log food) ── */}
+          {/* ── Nutrition panel — header carries the Cronometer sync button
+              and the dynamic Today's Target line, mirroring Activity's
+              "Run · sync · date" header structure. ── */}
           <div>
-            <NutritionInputPanel key={nutUploadKey} date={todayStr} onUpdate={()=>{
+            <NutritionInputPanel
+              key={nutUploadKey}
+              date={todayStr}
+              headerSlot={(
+                <button
+                  onClick={handleCronoSync}
+                  disabled={syncNutState==='syncing'}
+                  style={{
+                    fontSize:10,fontWeight:500,padding:'3px 8px',borderRadius:6,flexShrink:0,
+                    background: syncNutState==='done'  ? 'rgba(74,222,128,0.08)'
+                              : syncNutState==='error' ? 'rgba(248,113,113,0.08)'
+                              : 'transparent',
+                    color: syncNutState==='done'  ? '#4ade80'
+                         : syncNutState==='error' ? '#f87171'
+                         : 'var(--text-secondary, var(--text-muted))',
+                    border:`0.5px solid ${syncNutState==='done' ? 'rgba(74,222,128,0.25)' : syncNutState==='error' ? 'rgba(248,113,113,0.25)' : 'var(--border-subtle, rgba(255,255,255,0.08))'}`,
+                    cursor:syncNutState==='syncing'?'wait':'pointer',
+                    letterSpacing:'0.02em',
+                  }}
+                  title="Pull today's nutrition from Cronometer"
+                >
+                  {syncNutState==='syncing' ? '↻ Syncing…' : syncNutState==='done' ? '✓ Synced' : syncNutState==='error' ? '✗ Failed' : '↻ Sync'}
+                </button>
+              )}
+              onUpdate={()=>{
               // Refresh nutrition data from the new nutrition-log store
               try{
                 const entries=(storage.get('nutritionLog')||[])
@@ -4585,9 +5944,73 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
       </div>
 
-      {/* ═══ Training Stress + Notes row (desktop) ═══ */}
-      {!mobileView&&<TrainingStressPanel todayStr={ts} profile={profile} panelStyle={panelStyle}
-        notes={notes} setNotes={setNotes} ts={ts} saveStatus={saveStatus} handleSave={handleSave} S={S}/>}
+      {/* ═══ SUMMARY FOOTER (Phase 4o.daily.11) ═══════════════════════════
+          Single-row narrow footer: Today's Movement (left, aligns with the
+          Activity column above) and Notes (right, aligns with the Nutrition
+          column above), equal height. The old full-width Score detail panel
+          (rTSS factor pills, NGP/IF/EF tiles, A:C load) was absorbed into
+          the hero — the rTSS speedometer is flanked by a compact stats column
+          (7d/30d rings, A:C ratio, NGP/IF/EF) so the whole score story lives
+          in one band. Eliminates the redundant Score box entirely.
+          ═══════════════════════════════════════════════════════════════ */}
+
+      {/* ── Movement | Notes — narrow side-by-side band (desktop) ── */}
+      {!mobileView && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
+          gap: 'clamp(8px,1vw,12px)',
+          marginTop: 12,
+          alignItems: 'stretch',
+        }}>
+          {/* LEFT — Today's Movement (aligns with Activity column) */}
+          <div style={{...panelStyle, display: 'flex', flexDirection: 'column'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Today's Movement</span>
+              <span style={{fontSize:9,color:'var(--text-muted)'}}>
+                {todayMovement?.source==='health_connect' ? 'Health Connect'
+                 : todayMovement ? 'synced'
+                 : 'no data — sync your phone'}
+              </span>
+            </div>
+            {todayMovement ? (
+              <div style={{display:'flex',gap:6,flex:1,alignItems:'center'}}>
+                <div style={miniTile}>
+                  <div style={{...miniVal,color:'#60a5fa'}}>{todayMovement.steps.toLocaleString()}</div>
+                  <div style={miniLbl}>steps</div>
+                </div>
+                <div style={miniTile}>
+                  <div style={{...miniVal,color:'#fbbf24'}}>{todayMovement.active>0?Math.round(todayMovement.active):'—'}</div>
+                  <div style={miniLbl}>active kcal</div>
+                </div>
+                <div style={miniTile}>
+                  <div style={{...miniVal,color:'#4ade80'}}>{todayMovement.total>0?Math.round(todayMovement.total):'—'}</div>
+                  <div style={miniLbl}>total kcal</div>
+                </div>
+              </div>
+            ) : (
+              <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center',padding:'14px 0',flex:1,
+                display:'flex',alignItems:'center',justifyContent:'center'}}>
+                Open the Arnold app on your Android phone and tap sync to populate daily movement.
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT — Notes (aligns with Nutrition column) */}
+          <div style={{...panelStyle, display: 'flex', flexDirection: 'column'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>Notes</span>
+              <span style={{fontSize:10,color:'var(--text-muted)'}}>{ts}</span>
+            </div>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="How did today feel? Energy, mood, reflection..."
+              style={{...S.ta, minHeight: 44, marginBottom: 8, fontSize: 12, flex: 1}}/>
+            <button style={{...S.sb, padding: '8px 12px', width: '100%', fontSize: 12}} onClick={handleSave}>
+              {saveStatus === 'saved' ? '✓ Saved' : 'Save daily entry'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ═══ Mobile Activity: compact notes + save ═══ */}
       {mobileView==='activity'&&(
@@ -4696,7 +6119,12 @@ function WorkoutLog({showToast}){
     const ext=file.name.split('.').pop().toLowerCase();
     try{
       if(ext==='fit'){
-        const parsed=await parseFITFile(file);
+        // Phase 4r.zones.3 — pass cached bpm zone boundaries.
+        const _profile=storage.get('profile')||{};
+        const _zb=_profile?.hrZoneBpm;
+        const _zoneBpm=(_zb&&Number.isFinite(+_zb.z1Max)&&Number.isFinite(+_zb.z2Max)&&Number.isFinite(+_zb.z3Max)&&Number.isFinite(+_zb.z4Max))
+          ?{z1Max:+_zb.z1Max,z2Max:+_zb.z2Max,z3Max:+_zb.z3Max,z4Max:+_zb.z4Max}:null;
+        const parsed=await parseFITFile(file,{zoneBpm:_zoneBpm});
         applyParsed(parsed,'fit',file.name);
         setImportStatus({level:'ok',msg:'✓ FIT file parsed — fields pre-filled. Add your reflection to complete.'});
         setImportSource({type:'fit',filename:file.name});
@@ -5077,7 +6505,12 @@ function ImportHub({data,persist,showToast,setTab}){
     if(/\.fit$/i.test(file.name)){
       setZones(z=>({...z,activities:{file:file.name,loading:true}}));
       try{
-        const act=await parseFITFile(file);
+        // Phase 4r.zones.3 — pass cached bpm zone boundaries.
+        const _profile=storage.get('profile')||{};
+        const _zb=_profile?.hrZoneBpm;
+        const _zoneBpm=(_zb&&Number.isFinite(+_zb.z1Max)&&Number.isFinite(+_zb.z2Max)&&Number.isFinite(+_zb.z3Max)&&Number.isFinite(+_zb.z4Max))
+          ?{z1Max:+_zb.z1Max,z2Max:+_zb.z2Max,z3Max:+_zb.z3Max,z4Max:+_zb.z4Max}:null;
+        const act=await parseFITFile(file,{zoneBpm:_zoneBpm});
         const {merged}=mergeActivities(storage.get('activities')||[],[act]);
         storage.set('activities',merged);
         setZones(z=>({...z,activities:{file:file.name,count:merged.length,loading:false}}));
@@ -5236,7 +6669,586 @@ const SYSTEM_ICONS = {
   endurance: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c4-6 8-6 12 0s8 6 12 0"/></svg>,
 };
 
-function HealthSystemTile({ sys }) {
+// ── SYSTEM_SIGNALS ─────────────────────────────────────────────────────────
+// Maps each Health System to the training / body / blood-marker signals
+// most relevant to it. Used by WebSystemDetail to surface cross-domain
+// inputs that influence the score. Mirrors the same map in MobileHome.jsx —
+// keep them in sync (or extract to a shared module in a future pass).
+const SYSTEM_SIGNALS = {
+  brain:     { training: ['HRV', 'Sleep Score'],                       body: ['Body Fat %'],         blood: ['Vitamin B12', 'Folate', 'Vitamin D'] },
+  heart:     { training: ['RHR', 'Avg HR', 'Weekly Miles'],            body: ['Weight'],             blood: ['Cholesterol', 'Triglycerides', 'CRP'] },
+  bones:     { training: ['Strength Sessions', 'Weekly Hours'],        body: ['Lean Mass', 'Weight'],blood: ['Vitamin D', 'Calcium'] },
+  gut:       { training: [],                                           body: ['Body Fat %'],         blood: ['CRP', 'Iron'] },
+  immune:    { training: ['HRV', 'Sleep Score'],                       body: [],                     blood: ['Vitamin D', 'Vitamin C', 'Zinc', 'WBC'] },
+  energy:    { training: ['Weekly Hours', 'Weekly Miles'],             body: ['Weight'],             blood: ['Iron', 'Ferritin', 'Vitamin B12'] },
+  longevity: { training: ['HRV', 'RHR', 'Weekly Hours'],               body: ['Body Fat %', 'Weight'],blood: ['Glucose', 'HbA1c', 'CRP'] },
+  sleep:     { training: ['Sleep Score', 'HRV', 'RHR'],                body: [],                     blood: ['Magnesium'] },
+  metabolism:{ training: ['Weekly Hours', 'Weekly Miles'],             body: ['Weight', 'Body Fat %'],blood: ['Glucose', 'HbA1c', 'Triglycerides'] },
+  endurance: { training: ['Weekly Miles', 'Avg Pace', 'Weekly Hours'], body: ['Weight'],             blood: ['Iron', 'Ferritin', 'Hemoglobin'] },
+};
+
+// ── WebSystemDetail — inline expansion panel for a Health System tile ─────
+// Same data backbone as the mobile SystemDetailPanel (getSystemDetail +
+// getSystemWeekly + SYSTEM_SIGNALS) but with web-native styling: CSS
+// variables instead of mobile constants, slightly larger typography, more
+// breathing room since we have desktop real estate.
+//
+// Renders three tabs:
+//   Daily   → today's nutrient targets + training/body/blood signal snapshots
+//   Weekly  → 7-day score sparkline bars + weekly training rollups
+//   Annual  → YTD training totals + current body snapshot
+//
+// Future stages will add: 30-day trend, last-optimal detection + trigger
+// hypothesis, hand-crafted recommendations, live Labs cross-references.
+function WebSystemDetail({ system, comment, onClose, data }) {
+  const [tab, setTab] = useState('daily');
+  const containerRef = useRef(null);
+  const today = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }, []);
+  const detail = useMemo(() => getSystemDetail(system.id, today), [system.id, today]);
+  const weekly = useMemo(() => getSystemWeekly(system.id), [system.id]);
+
+  // Phase 4n.3.2 — auto-scroll the panel into view when it opens, so the
+  // user doesn't have to manually scroll down after clicking a tile.
+  // Smooth scroll, block=start positions the panel near the top of the
+  // viewport (with a small offset so the tile that was clicked stays
+  // visible above it).
+  useEffect(() => {
+    if (containerRef.current) {
+      const t = setTimeout(() => {
+        containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 80);
+      return () => clearTimeout(t);
+    }
+  }, [system.id]);
+
+  if (!detail) return null;
+  const nutrients = detail.details || [];
+  const signals = SYSTEM_SIGNALS[system.id] || { training: [], body: [], blood: [] };
+
+  // Status color mirrors the tile
+  const statusColor = system.status === 'good' ? '#4ade80'
+                    : system.status === 'focus' ? '#fbbf24'
+                    : '#f87171';
+
+  // ── Resolve signal values for daily/weekly/annual contexts ──
+  const activities = useMemo(() => getUnifiedActivities(), []);
+  const sleepData = useMemo(() => cleanSleepForAveraging(storage.get('sleep') || []), []);
+  const hrvData = useMemo(() => storage.get('hrv') || [], []);
+  const weightData = useMemo(() => storage.get('weight') || [], []);
+  const labsSource = useMemo(() => {
+    const s = storage.get('labSnapshots');
+    if (Array.isArray(s) && s.length) return s;
+    return data?.labSnapshots || [];
+  }, [data]);
+  const labMarkers = useMemo(() => {
+    const sorted = [...labsSource].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return sorted[0]?.markers || {};
+  }, [labsSource]);
+
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const d7 = new Date(); d7.setDate(d7.getDate() - 7);
+  const recentSleep = useMemo(() => [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [sleepData]);
+  const recentHRV = useMemo(() => [...hrvData].filter(h => h.overnightHRV).sort((a, b) => (b.date || '').localeCompare(a.date || '')), [hrvData]);
+  const recentWeight = useMemo(() => [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [weightData]);
+  const ytdRunsLocal = useMemo(() => activities.filter(a => a.date && new Date(a.date) >= yearStart && isRunAct(a)), [activities]);
+  const ytdAll = useMemo(() => activities.filter(a => a.date && new Date(a.date) >= yearStart), [activities]);
+  const wk7 = useMemo(() => activities.filter(a => a.date && new Date(a.date) >= d7), [activities]);
+  const wk7Runs = useMemo(() => wk7.filter(isRunAct), [wk7]);
+  const wk7Str = useMemo(() => wk7.filter(isStrengthAct), [wk7]);
+
+  const resolveSignal = (name, period) => {
+    if (period === 'annual') {
+      if (name === 'Weekly Miles') return { value: (ytdRunsLocal.reduce((s, a) => s + (a.distanceMi || 0), 0) / Math.max((now - yearStart) / 604800000, 1)).toFixed(1), unit: 'mi/wk' };
+      if (name === 'Weekly Hours') return { value: (ytdAll.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600 / Math.max((now - yearStart) / 604800000, 1)).toFixed(1), unit: 'hrs/wk' };
+      if (name === 'Strength Sessions') return { value: ytdAll.filter(a => /strength|weight|gym/i.test(a.activityType || '')).length, unit: 'YTD' };
+      if (name === 'Avg Pace') {
+        const p = ytdRunsLocal.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean);
+        return p.length ? { value: `${Math.floor(p.reduce((s, v) => s + v, 0) / p.length / 60)}:${String(Math.round(p.reduce((s, v) => s + v, 0) / p.length % 60)).padStart(2, '0')}`, unit: '/mi' } : { value: '—', unit: '' };
+      }
+    }
+    if (name === 'HRV') return { value: recentHRV[0]?.overnightHRV || recentSleep.find(s => s?.overnightHRV)?.overnightHRV || '—', unit: 'ms' };
+    if (name === 'RHR') return { value: recentSleep[0]?.restingHR || '—', unit: 'bpm' };
+    if (name === 'Sleep Score') return { value: recentSleep.find(s => s.sleepScore)?.sleepScore || '—', unit: '/100' };
+    if (name === 'Avg HR') { const hrs = wk7Runs.map(a => a.avgHR).filter(Boolean); return { value: hrs.length ? Math.round(hrs.reduce((s, v) => s + v, 0) / hrs.length) : '—', unit: 'bpm' }; }
+    if (name === 'Weekly Miles') return { value: wk7Runs.reduce((s, a) => s + (a.distanceMi || 0), 0).toFixed(1), unit: 'mi' };
+    if (name === 'Weekly Hours') return { value: (wk7.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600).toFixed(1), unit: 'hrs' };
+    if (name === 'Strength Sessions') return { value: wk7Str.length, unit: 'this wk' };
+    if (name === 'Avg Pace') {
+      const p = wk7Runs.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean);
+      return p.length ? { value: `${Math.floor(p.reduce((s, v) => s + v, 0) / p.length / 60)}:${String(Math.round(p.reduce((s, v) => s + v, 0) / p.length % 60)).padStart(2, '0')}`, unit: '/mi' } : { value: '—', unit: '' };
+    }
+    if (name === 'Weight') return { value: recentWeight[0]?.weightLbs?.toFixed(1) || '—', unit: 'lbs' };
+    if (name === 'Body Fat %') return { value: recentWeight.find(w => w?.bodyFatPct > 0)?.bodyFatPct?.toFixed(1) || '—', unit: '%' };
+    if (name === 'Lean Mass') return { value: recentWeight.find(w => w?.skeletalMuscleMassLbs)?.skeletalMuscleMassLbs?.toFixed(1) || '—', unit: 'lbs' };
+    return { value: '—', unit: '' };
+  };
+  const resolveBlood = (name) => {
+    const v = labMarkers[name];
+    return v != null ? { value: v, unit: '' } : { value: '—', unit: '' };
+  };
+
+  const barColor = (pct) => pct >= 80 ? '#4ade80' : pct >= 50 ? '#fbbf24' : '#f87171';
+  const weeklyAvg = weekly.length ? Math.round(weekly.reduce((s, d) => s + d.pct, 0) / weekly.length) : null;
+  const weeklyMax = Math.max(...weekly.map(d => d.pct), 1);
+
+  // ── 7-day history map per signal name (for mini sparklines) ──
+  // Walks each of the last 7 days and resolves the signal value for that
+  // date. Returns oldest→newest array, nulls preserved for missing data.
+  const last7Days = useMemo(() => {
+    const arr = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      arr.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+    }
+    return arr;
+  }, []);
+  const sigHistory = useMemo(() => {
+    const map = {};
+    map['HRV'] = last7Days.map(ds => {
+      const s = sleepData.find(s => s?.date === ds);
+      if (s?.overnightHRV != null) return Number(s.overnightHRV);
+      const h = hrvData.find(h => h?.date === ds);
+      return h?.overnightHRV != null ? Number(h.overnightHRV) : null;
+    });
+    map['RHR'] = last7Days.map(ds => {
+      const s = sleepData.find(s => s?.date === ds);
+      return s?.restingHR != null ? Number(s.restingHR) : null;
+    });
+    map['Sleep Score'] = last7Days.map(ds => {
+      const s = sleepData.find(s => s?.date === ds);
+      return s?.sleepScore != null ? Math.min(Number(s.sleepScore), 100) : null;
+    });
+    map['Avg HR'] = last7Days.map(ds => {
+      const dayRuns = activities.filter(a => a.date === ds && isRunAct(a));
+      const hrs = dayRuns.map(r => r.avgHR).filter(Boolean);
+      return hrs.length ? hrs.reduce((s, v) => s + v, 0) / hrs.length : null;
+    });
+    map['Weekly Miles'] = last7Days.map(ds => {
+      const dayRuns = activities.filter(a => a.date === ds && isRunAct(a));
+      return dayRuns.reduce((s, a) => s + (a.distanceMi || 0), 0) || null;
+    });
+    map['Weekly Hours'] = last7Days.map(ds => {
+      const dayActs = activities.filter(a => a.date === ds);
+      const total = dayActs.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
+      return total > 0 ? +total.toFixed(2) : null;
+    });
+    map['Strength Sessions'] = last7Days.map(ds => {
+      return activities.filter(a => a.date === ds && /strength|weight|gym/i.test(a.activityType || '')).length || null;
+    });
+    map['Avg Pace'] = last7Days.map(ds => {
+      const dayRuns = activities.filter(a => a.date === ds && isRunAct(a));
+      const paces = dayRuns.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean);
+      return paces.length ? paces.reduce((s, v) => s + v, 0) / paces.length : null;
+    });
+    map['Weight'] = last7Days.map(ds => {
+      const w = weightData.find(w => w?.date === ds && (w?.weightLbs || w?.weight));
+      return w ? Number(w.weightLbs || w.weight) : null;
+    });
+    map['Body Fat %'] = last7Days.map(ds => {
+      const w = weightData.find(w => w?.date === ds && w?.bodyFatPct > 0);
+      return w?.bodyFatPct != null ? Number(w.bodyFatPct) : null;
+    });
+    map['Lean Mass'] = last7Days.map(ds => {
+      const w = weightData.find(w => w?.date === ds && w?.skeletalMuscleMassLbs);
+      return w?.skeletalMuscleMassLbs != null ? Number(w.skeletalMuscleMassLbs) : null;
+    });
+    return map;
+  }, [last7Days, sleepData, hrvData, activities, weightData]);
+
+  // Reference targets — lets each signal tile show "vs goal" context.
+  const goals = getGoals();
+  const sigTarget = (name) => {
+    if (name === 'HRV') return parseFloat(goals?.targetHRV) || 45;
+    if (name === 'RHR') return parseFloat(goals?.targetRHR) || 50;
+    if (name === 'Sleep Score') return parseFloat(goals?.targetSleepScore) || 80;
+    if (name === 'Avg HR') return parseFloat(goals?.targetAvgRunHR) || null;
+    if (name === 'Weekly Miles') return parseFloat(goals?.weeklyRunDistanceTarget) || null;
+    if (name === 'Weekly Hours') return parseFloat(goals?.weeklyTimeTargetHrs) || null;
+    if (name === 'Strength Sessions') return parseFloat(goals?.weeklyStrengthTarget) || null;
+    if (name === 'Weight') return parseFloat(goals?.targetWeight) || null;
+    if (name === 'Body Fat %') return parseFloat(goals?.targetBodyFat) || null;
+    if (name === 'Lean Mass') return parseFloat(goals?.targetLeanMass) || null;
+    return null;
+  };
+  // Status-color logic per signal — knows direction (lower-better for HR/RHR/pace, higher-better for HRV/sleep, etc.)
+  const sigColor = (name, val) => {
+    if (val == null || val === '—' || !Number.isFinite(Number(val))) return 'var(--text-muted)';
+    const v = Number(val);
+    const t = sigTarget(name);
+    if (name === 'HRV')         return v >= 40 ? '#4ade80' : v >= 30 ? '#fbbf24' : '#f87171';
+    if (name === 'RHR')         return v <= 55 ? '#4ade80' : v <= 65 ? '#fbbf24' : '#f87171';
+    if (name === 'Sleep Score') return v >= 80 ? '#4ade80' : v >= 60 ? '#fbbf24' : '#f87171';
+    if (t == null) return 'var(--text-primary)';
+    // Default: % of target, lower-better for HR-style, higher-better otherwise
+    if (name === 'Avg HR')      return v <= t * 1.05 ? '#4ade80' : v <= t * 1.15 ? '#fbbf24' : '#f87171';
+    const pct = v / t;
+    return pct >= 0.9 ? '#4ade80' : pct >= 0.7 ? '#fbbf24' : '#f87171';
+  };
+
+  const tabStyle = (active) => ({
+    flex: 1, textAlign: 'center', fontSize: 12, fontWeight: active ? 600 : 500,
+    padding: '8px 0', color: active ? statusColor : 'var(--text-muted)',
+    borderBottom: active ? `2px solid ${statusColor}` : '2px solid transparent',
+    cursor: 'pointer', transition: 'all 0.15s', letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+  });
+
+  const subHeaderStyle = {
+    fontSize: 10, fontWeight: 600, color: 'var(--text-muted)',
+    textTransform: 'uppercase', letterSpacing: '0.10em',
+    marginTop: 14, marginBottom: 8,
+  };
+  const signalCellStyle = {
+    background: 'var(--bg-elevated)',
+    borderRadius: 8, padding: '8px 10px',
+    border: '0.5px solid var(--border-subtle)',
+    display: 'flex', flexDirection: 'column', gap: 2,
+  };
+
+  // Mini-sparkline SVG for signal tiles. Stretches to container width.
+  const SignalSparkline = ({ history, color }) => {
+    const valid = (history || []).filter(v => v != null && Number.isFinite(v));
+    if (valid.length < 2) return <div style={{ height: 16 }}/>;
+    const lo = Math.min(...valid); const hi = Math.max(...valid);
+    const rng = hi - lo || 1;
+    const W = 100, H = 16;
+    const xS = (i) => (i / (history.length - 1)) * W;
+    const yS = (v) => H - 2 - ((v - lo) / rng) * (H - 4);
+    let path = ''; let inPath = false;
+    history.forEach((v, i) => {
+      if (v == null || !Number.isFinite(v)) { inPath = false; return; }
+      const p = { x: xS(i), y: yS(v) };
+      path += inPath ? ` L ${p.x.toFixed(1)} ${p.y.toFixed(1)}` : ` M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+      inPath = true;
+    });
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: H, marginTop: 2 }}>
+        <path d={path} fill="none" stroke={color} strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" opacity="0.85"/>
+      </svg>
+    );
+  };
+
+  // Status indicator word per signal — succinct interpretation.
+  const sigStatus = (name, val) => {
+    if (val == null || val === '—') return null;
+    const v = Number(val);
+    if (!Number.isFinite(v)) return null;
+    if (name === 'HRV')         return v >= 40 ? 'recovered' : v >= 30 ? 'borderline' : 'strained';
+    if (name === 'RHR')         return v <= 55 ? 'fit' : v <= 65 ? 'normal' : 'elevated';
+    if (name === 'Sleep Score') return v >= 80 ? 'restful' : v >= 60 ? 'fair' : 'poor';
+    return null;
+  };
+
+  // ── Enriched signal tile renderer ──
+  // Each tile: label + value+unit + sparkline + target/status sub-line.
+  // Significantly more info than the single-value version, less black space.
+  const renderSignalGrid = (sigList, period, opts = {}) => (
+    // Always render at least 3 columns so a single-signal section (e.g.
+    // Heart > Body > Weight) doesn't stretch to a giant empty banner.
+    // Set { fillCols: false } to disable this when you actually want the
+    // grid to size to content.
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: opts.fillCols === false
+        ? `repeat(${Math.min(sigList.length, 4)}, minmax(0, 1fr))`
+        : `repeat(${Math.max(3, Math.min(sigList.length, 4))}, minmax(0, 1fr))`,
+      gap: 8,
+    }}>
+      {sigList.map((sig, i) => {
+        const r = resolveSignal(sig, period);
+        const valueColor = sigColor(sig, r.value);
+        const target = sigTarget(sig);
+        const statusWord = sigStatus(sig, r.value);
+        const hist = sigHistory[sig] || [];
+        return (
+          <div key={i} style={signalCellStyle}>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sig}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+              <span style={{ fontSize: 18, fontWeight: 600, color: r.value === '—' ? 'var(--text-muted)' : valueColor, lineHeight: 1 }}>{r.value}</span>
+              {r.unit && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{r.unit}</span>}
+            </div>
+            <SignalSparkline history={hist} color={valueColor === 'var(--text-muted)' ? 'var(--text-muted)' : valueColor}/>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: 6, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+              {target != null ? (
+                <span>goal {target}{r.unit ? ` ${r.unit}` : ''}</span>
+              ) : (
+                <span>{statusWord || ''}</span>
+              )}
+              {target != null && statusWord && <span style={{ color: valueColor, fontWeight: 500 }}>{statusWord}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div ref={containerRef} style={{
+      background: 'var(--bg-surface)',
+      border: `1px solid ${statusColor}55`,
+      borderRadius: 12,
+      padding: 'clamp(14px,1.4vw,18px)',
+      marginTop: 10,
+      animation: 'edgeiqSlideDown 0.25s ease-out',
+      scrollMarginTop: 80,  // leaves space for any sticky header above
+    }}>
+      <style>{`@keyframes edgeiqSlideDown { from { opacity: 0; max-height: 0; transform: translateY(-8px); } to { opacity: 1; max-height: 1200px; transform: translateY(0); } }`}</style>
+
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>{system.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{comment || 'Click tile again to close'}</div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 28, fontWeight: 600, color: statusColor, lineHeight: 1, fontFamily: 'var(--font-mono)' }}>{system.pct || 0}%</div>
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.08em' }}>today</div>
+        </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 18, cursor: 'pointer', padding: '4px 8px', lineHeight: 1 }}
+            aria-label="Close detail panel"
+            title="Close"
+          >×</button>
+        )}
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: 'flex', borderBottom: '0.5px solid var(--border-default)', marginBottom: 12 }}>
+        <div style={tabStyle(tab === 'daily')}  onClick={() => setTab('daily')}>Daily</div>
+        <div style={tabStyle(tab === 'weekly')} onClick={() => setTab('weekly')}>Weekly</div>
+        <div style={tabStyle(tab === 'annual')} onClick={() => setTab('annual')}>Annual</div>
+      </div>
+
+      {/* ── Tab summary header — directional interpretation per tab ── */}
+      {(() => {
+        // Compute insights specific to the tab
+        const lowestNutrient = nutrients.length ? [...nutrients].filter(n => n.pct != null).sort((a, b) => a.pct - b.pct)[0] : null;
+        const highestNutrient = nutrients.length ? [...nutrients].filter(n => n.pct != null).sort((a, b) => b.pct - a.pct)[0] : null;
+        // 7-day delta (this week's first day vs last week's same day)
+        const wowDelta = weekly.length >= 7 && weekly[0]?.pct != null && weekly[6]?.pct != null
+          ? weekly[0].pct - weekly[6].pct
+          : null;
+        // Days logged this week (any data)
+        const daysLogged = weekly.filter(d => d.pct != null && d.pct > 0).length;
+        // YTD trend direction (compare first half vs second half of weekly)
+        const firstHalfAvg = weekly.slice(0, 3).filter(d => d.pct).map(d => d.pct);
+        const secondHalfAvg = weekly.slice(4, 7).filter(d => d.pct).map(d => d.pct);
+        const trendDir = firstHalfAvg.length && secondHalfAvg.length
+          ? (secondHalfAvg.reduce((s,v)=>s+v,0)/secondHalfAvg.length) - (firstHalfAvg.reduce((s,v)=>s+v,0)/firstHalfAvg.length)
+          : null;
+
+        const summaryStyle = {
+          background: `${statusColor}11`,
+          border: `0.5px solid ${statusColor}33`,
+          borderLeft: `3px solid ${statusColor}`,
+          borderRadius: 8,
+          padding: '10px 14px',
+          marginBottom: 14,
+          fontSize: 12,
+          color: 'var(--text-secondary)',
+          lineHeight: 1.5,
+        };
+        const labelStyle = { fontSize: 9, fontWeight: 700, color: statusColor, letterSpacing: '0.10em', textTransform: 'uppercase', marginRight: 8 };
+
+        if (tab === 'daily') {
+          const score = system.pct || 0;
+          const verdict = score >= 80 ? 'Strong' : score >= 50 ? 'On track' : 'Needs attention';
+          const nutHook = lowestNutrient && lowestNutrient.pct < 50 ? `${lowestNutrient.short || lowestNutrient.name} ${lowestNutrient.pct}%` : null;
+          const winHook = highestNutrient && highestNutrient.pct >= 100 ? `${highestNutrient.short || highestNutrient.name} ${highestNutrient.pct}%` : null;
+          return (
+            <div style={summaryStyle}>
+              <span style={labelStyle}>Today</span>
+              <span style={{ color: statusColor, fontWeight: 600 }}>{verdict}</span>
+              <span> — {comment || `${system.name} score reflects today's inputs.`}</span>
+              {(nutHook || winHook) && (
+                <div style={{ marginTop: 6, fontSize: 11 }}>
+                  {nutHook && <span style={{ color: '#f87171' }}>⚠ Lowest: {nutHook}</span>}
+                  {nutHook && winHook && <span style={{ color: 'var(--text-muted)' }}>  ·  </span>}
+                  {winHook && <span style={{ color: '#4ade80' }}>✓ Hit: {winHook}</span>}
+                </div>
+              )}
+            </div>
+          );
+        }
+        if (tab === 'weekly') {
+          const dirWord = trendDir == null ? '' : trendDir > 5 ? 'trending up' : trendDir < -5 ? 'trending down' : 'flat';
+          const dirColor = trendDir == null ? 'var(--text-muted)' : trendDir > 0 ? '#4ade80' : trendDir < 0 ? '#f87171' : 'var(--text-muted)';
+          return (
+            <div style={summaryStyle}>
+              <span style={labelStyle}>This week</span>
+              <span>Avg <span style={{ color: barColor(weeklyAvg || 0), fontWeight: 600 }}>{weeklyAvg || '—'}%</span></span>
+              {dirWord && <span> · <span style={{ color: dirColor, fontWeight: 500 }}>{dirWord}</span></span>}
+              <span style={{ color: 'var(--text-muted)' }}> · {daysLogged}/7 days with data</span>
+              {wowDelta != null && (
+                <span style={{ marginLeft: 8, color: wowDelta > 0 ? '#4ade80' : wowDelta < 0 ? '#f87171' : 'var(--text-muted)' }}>
+                  {wowDelta > 0 ? '↑' : wowDelta < 0 ? '↓' : '→'} {Math.abs(wowDelta)} vs 7d ago
+                </span>
+              )}
+            </div>
+          );
+        }
+        if (tab === 'annual') {
+          // Find the most recent lab panel date + age in months
+          const sortedLabs = [...labsSource].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+          const latestLab = sortedLabs[0];
+          const labAge = latestLab?.date ? Math.round((Date.now() - new Date(`${latestLab.date}T12:00:00`).getTime()) / (30 * 86400000)) : null;
+          const stale = labAge != null && labAge > 12;
+          return (
+            <div style={summaryStyle}>
+              <span style={labelStyle}>YTD</span>
+              <span>{system.name} trajectory · score today <span style={{ color: statusColor, fontWeight: 600 }}>{system.pct}%</span></span>
+              {latestLab?.date ? (
+                <span style={{ color: 'var(--text-muted)' }}>  ·  last lab <span style={{ color: stale ? '#fbbf24' : 'var(--text-secondary)', fontWeight: 500 }}>{latestLab.date}</span>
+                  {stale && <span style={{ color: '#fbbf24' }}> ({labAge}mo old — schedule new panel)</span>}
+                </span>
+              ) : (
+                <span style={{ color: 'var(--text-muted)' }}>  ·  <span style={{ color: '#fbbf24' }}>No lab panel on file — schedule baseline test</span></span>
+              )}
+            </div>
+          );
+        }
+        return null;
+      })()}
+
+      {/* ── Daily tab ── */}
+      {tab === 'daily' && (
+        <div>
+          {/* Nutrient breakdown */}
+          {nutrients.length > 0 && (
+            <>
+              <div style={{ ...subHeaderStyle, marginTop: 0 }}>Nutrients · today's intake</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 'clamp(8px,1vw,14px)' }}>
+                {nutrients.map((n, i) => (
+                  <div key={i}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 3 }}>
+                      <span style={{ fontWeight: 500 }}>{n.short || n.name}</span>
+                      <span style={{ color: barColor(n.pct), fontWeight: 600 }}>
+                        {n.value} / {n.target}
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 4 }}>({n.pct}%)</span>
+                      </span>
+                    </div>
+                    <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
+                      <div style={{ height: 5, background: barColor(n.pct), borderRadius: 3, width: `${Math.min(n.pct, 100)}%`, transition: 'width 0.4s ease' }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {signals.training.length > 0 && (<><div style={subHeaderStyle}>Training signals</div>{renderSignalGrid(signals.training, 'daily')}</>)}
+          {signals.body.length > 0 && (<><div style={subHeaderStyle}>Body signals</div>{renderSignalGrid(signals.body, 'daily')}</>)}
+          {signals.blood.length > 0 && (
+            <>
+              <div style={subHeaderStyle}>Blood markers · last lab panel</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 4)}, 1fr)`, gap: 8 }}>
+                {signals.blood.map((sig, i) => {
+                  const r = resolveBlood(sig);
+                  return (
+                    <div key={i} style={signalCellStyle}>
+                      <div style={{ fontSize: 18, fontWeight: 600, color: r.value === '—' ? 'var(--text-muted)' : 'var(--text-primary)', lineHeight: 1 }}>{r.value}</div>
+                      <div style={{ fontSize: 10, fontWeight: 500, color: 'var(--text-secondary)', marginTop: 6 }}>{sig}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Weekly tab ── */}
+      {tab === 'weekly' && (
+        <div>
+          <div style={{ ...subHeaderStyle, marginTop: 0 }}>7-day score</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'flex-end' }}>
+            {weekly.map((d, i) => {
+              const barH = weeklyMax > 0 ? Math.max(6, Math.round((d.pct / weeklyMax) * 90)) : 6;
+              return (
+                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{ fontSize: 10, color: barColor(d.pct), fontWeight: 600, marginBottom: 4 }}>{d.pct}</div>
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: 90 }}>
+                    <div style={{ width: '100%', borderRadius: 4, height: barH, background: barColor(d.pct), transition: 'height 0.4s ease' }} />
+                  </div>
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 4 }}>{d.dayLabel}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', padding: '8px 0', borderTop: '0.5px solid var(--border-subtle)' }}>
+            <span style={{ fontWeight: 500 }}>Weekly avg</span>
+            <span style={{ fontWeight: 600, color: barColor(weeklyAvg || 0) }}>{weeklyAvg || '—'}%</span>
+          </div>
+          {signals.training.length > 0 && (<><div style={subHeaderStyle}>Weekly training</div>{renderSignalGrid(signals.training, 'weekly')}</>)}
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 12, textAlign: 'center', fontStyle: 'italic' }}>
+            Nutrient scores reflect today's intake — log consistently for accurate weekly trends
+          </div>
+        </div>
+      )}
+
+      {/* ── Annual tab ── */}
+      {tab === 'annual' && (
+        <div>
+          {signals.training.length > 0 && (<><div style={{ ...subHeaderStyle, marginTop: 0 }}>YTD training</div>{renderSignalGrid(signals.training, 'annual')}</>)}
+          {signals.body.length > 0 && (<><div style={subHeaderStyle}>Body · current</div>{renderSignalGrid(signals.body, 'daily')}</>)}
+          {signals.blood.length > 0 && (() => {
+            // Lab freshness — pulled from the most recent panel that
+            // contains *any* of this system's blood markers. Marker-level
+            // status badges so the tile communicates what to act on.
+            const sortedLabs = [...labsSource].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            const latestLab = sortedLabs[0];
+            const labAgeMo = latestLab?.date
+              ? Math.round((Date.now() - new Date(`${latestLab.date}T12:00:00`).getTime()) / (30 * 86400000))
+              : null;
+            const stale = labAgeMo != null && labAgeMo > 12;
+            return (
+              <>
+                <div style={{ ...subHeaderStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>Latest labs</span>
+                  {latestLab?.date ? (
+                    <span style={{ fontSize: 9, color: stale ? '#fbbf24' : 'var(--text-muted)', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>
+                      panel · {latestLab.date}{stale ? ` · ${labAgeMo}mo old` : ''}
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 9, color: '#fbbf24', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>no panel on file</span>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(3, Math.min(signals.blood.length, 4))}, 1fr)`, gap: 8 }}>
+                  {signals.blood.map((sig, i) => {
+                    const r = resolveBlood(sig);
+                    const hasValue = r.value !== '—' && r.value != null;
+                    return (
+                      <div key={i} style={{ ...signalCellStyle, opacity: hasValue ? 1 : 0.65 }}>
+                        <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sig}</div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                          <span style={{ fontSize: 18, fontWeight: 600, color: hasValue ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>{r.value}</span>
+                          {r.unit && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{r.unit}</span>}
+                        </div>
+                        <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 4 }}>
+                          {hasValue
+                            ? (stale ? <span style={{ color: '#fbbf24' }}>stale — re-test</span> : <span>recorded</span>)
+                            : <span style={{ color: '#fbbf24' }}>no result</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HealthSystemTile({ sys, isExpanded, onClick }) {
   const { pct, status, comment, color, name, id } = sys;
   const statusColor = status === 'good' ? '#4ade80' : status === 'focus' ? '#fbbf24' : '#f87171';
   const fillTint = status === 'good' ? 'rgba(74,222,128,0.15)'
@@ -5245,15 +7257,24 @@ function HealthSystemTile({ sys }) {
   const pngSrc = SYSTEM_PNGS_DESKTOP[id];
   const svgIcon = SYSTEM_ICONS[id] ? SYSTEM_ICONS[id](color) : null;
   return (
-    <div style={{
-      position: 'relative',
-      background: 'var(--bg-elevated)',
-      border: '0.5px solid var(--border-subtle)',
-      borderRadius: 12,
-      padding: '10px 6px 9px',
-      overflow: 'hidden',
-      minHeight: 0,
-    }}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); } }}
+      style={{
+        position: 'relative',
+        background: 'var(--bg-elevated)',
+        border: isExpanded ? `1px solid ${statusColor}` : '0.5px solid var(--border-subtle)',
+        borderRadius: 12,
+        padding: '10px 6px 9px',
+        overflow: 'hidden',
+        minHeight: 0,
+        cursor: 'pointer',
+        transition: 'border-color 0.15s, box-shadow 0.15s',
+        boxShadow: isExpanded ? `0 0 0 1px ${statusColor}55 inset` : 'none',
+      }}>
+
       <div style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         height: `${Math.max(8, pct)}%`,
@@ -5425,9 +7446,10 @@ function CalibrationSummaryStrip({ setTab }) {
 // Used by Fuel (nutrition pillar) and Play (run + recovery pillars).
 // Shows up to 3 prompts limited to the requested pillars, plus a contextual
 // "all clear" fallback message when no prompts fire for those pillars.
-function PillarCoachingStrip({ pillars, fallbackTitle, fallbackDetail, accentColor = '#9b8ec4' }) {
+function PillarCoachingStrip({ pillars, fallbackTitle, fallbackDetail, accentColor = '#9b8ec4', compact = false }) {
   const wanted = Array.isArray(pillars) ? pillars : [pillars];
   const prompts = useMemo(() => getPromptsByPillar(wanted, 3), [wanted.join(',')]);
+  const [expanded, setExpanded] = useState(false);
   const colorFor = sev =>
     sev === 'critical' ? '#f87171' :
     sev === 'warning'  ? '#fbbf24' :
@@ -5439,18 +7461,79 @@ function PillarCoachingStrip({ pillars, fallbackTitle, fallbackDetail, accentCol
     pillar === 'run'       ? '↗' :
     pillar === 'body'      ? '◎' : '•';
 
+  // ── Compact coach line (Phase 4o.daily.7) ──
+  // No outer container card. Single inline row: tiny status dot + title +
+  // detail (truncating ellipsis) + optional "+N more" expander. Designed
+  // to sit at the top of a panel column without competing visually with
+  // the panel below it. Honors `min-width:0` so it shrinks gracefully on
+  // narrow viewports.
+  if (compact) {
+    if (!prompts.length) {
+      return (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 4px', marginBottom: 8, minWidth: 0,
+          fontSize: 11,
+        }}>
+          <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: accentColor, flexShrink: 0, opacity: 0.7 }}/>
+          <span style={{ fontWeight: 600, color: accentColor, whiteSpace: 'nowrap' }}>{fallbackTitle}</span>
+          <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>· {fallbackDetail}</span>
+        </div>
+      );
+    }
+    const visible = expanded ? prompts : prompts.slice(0, 1);
+    const hidden = prompts.length - visible.length;
+    return (
+      <div style={{ marginBottom: 8, minWidth: 0 }}>
+        {visible.map((p, i) => {
+          const c = colorFor(p.severity);
+          return (
+            <div key={p.id} style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 4px', minWidth: 0, fontSize: 11,
+              borderTop: i > 0 ? '0.5px solid var(--border-subtle)' : 'none',
+            }}>
+              <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0 }}/>
+              <span style={{ fontWeight: 600, color: c, whiteSpace: 'nowrap' }}>{p.title}</span>
+              <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>· {p.detail}</span>
+              {p.action?.label && (
+                <span style={{ fontSize: 9, fontWeight: 600, color: c, opacity: 0.85, whiteSpace: 'nowrap', textTransform: 'uppercase', letterSpacing: '0.04em', flexShrink: 0 }}>
+                  {p.action.label}
+                </span>
+              )}
+            </div>
+          );
+        })}
+        {hidden > 0 && (
+          <button onClick={() => setExpanded(true)}
+            style={{ fontSize: 9, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px', letterSpacing: '0.04em' }}>
+            +{hidden} more
+          </button>
+        )}
+        {expanded && prompts.length > 1 && (
+          <button onClick={() => setExpanded(false)}
+            style={{ fontSize: 9, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px', letterSpacing: '0.04em' }}>
+            ↑ less
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ── Full mode (legacy, used elsewhere) — bordered card with multi-row layout ──
   const card = {
     background: 'var(--bg-surface)',
     border: '0.5px solid var(--border-default)',
     borderRadius: 'var(--radius-md)',
     padding: '12px 14px',
     marginBottom: 10,
+    minWidth: 0,
   };
 
   if (!prompts.length) {
     return (
       <div style={card}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 28, height: 28, borderRadius: 8, background: `${accentColor}1f`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 13 }}>✓</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: accentColor, marginBottom: 2 }}>{fallbackTitle}</div>
@@ -5472,7 +7555,7 @@ function PillarCoachingStrip({ pillars, fallbackTitle, fallbackDetail, accentCol
           return (
             <div key={p.id} style={{
               display: 'flex', alignItems: 'flex-start', gap: 10,
-              padding: '10px 12px', borderRadius: 8,
+              padding: '10px 12px', borderRadius: 8, minWidth: 0,
               background: 'rgba(255,255,255,0.025)',
               borderLeft: `3px solid ${c}`,
             }}>
@@ -5539,14 +7622,19 @@ function CoachingStrip({ dateStr }) {
   );
 }
 
-function HealthSystemsGrid({ dateStr }) {
-  // CalibrationSummaryStrip is now rendered separately by the parent so it
-  // can sit at the very top with Cockpit + Focus tiles between it and the
-  // Health Systems grid (Phase 4k web layout pass).
+function HealthSystemsGrid({ dateStr, data }) {
   const report = useMemo(() => getSystemsReport(dateStr), [dateStr]);
   const goodCount = report.filter(s => s.status === 'good').length;
   const focusCount = report.filter(s => s.status === 'focus').length;
   const defCount = report.filter(s => s.status === 'def').length;
+
+  // Phase 4n.3.1 — single tile expands at a time. Click a tile to open
+  // the WebSystemDetail panel; click the same tile again (or the close
+  // button) to collapse. The panel renders BELOW the grid, not inside
+  // any individual tile, so the grid stays clean and the detail has
+  // full row width.
+  const [expandedId, setExpandedId] = useState(null);
+  const expandedSystem = expandedId ? report.find(s => s.id === expandedId) : null;
 
   return (
     <div style={{background:'var(--bg-surface)',border:'0.5px solid var(--border-default)',borderRadius:'var(--radius-md)',padding:'14px 16px'}}>
@@ -5569,8 +7657,23 @@ function HealthSystemsGrid({ dateStr }) {
         gridTemplateColumns: 'repeat(5, 1fr)',
         gap: 6,
       }}>
-        {report.map(sys => <HealthSystemTile key={sys.id} sys={sys} />)}
+        {report.map(sys => (
+          <HealthSystemTile
+            key={sys.id}
+            sys={sys}
+            isExpanded={expandedId === sys.id}
+            onClick={() => setExpandedId(expandedId === sys.id ? null : sys.id)}
+          />
+        ))}
       </div>
+      {expandedSystem && (
+        <WebSystemDetail
+          system={expandedSystem}
+          comment={expandedSystem.comment}
+          data={data}
+          onClose={() => setExpandedId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -5995,45 +8098,583 @@ Structure:
         </div>
       </div>
 
-      {/* ═══════ SECTION 1: CALIBRATION COACH LINE (single row, top of page) ═══════ */}
-      <CalibrationSummaryStrip setTab={setTab} />
-
-      {/* Cockpit row moved to Trend tab (Phase 4l Stage 2.3). */}
-
-      {/* Focus areas */}
-      <div className="arnold-focus-tiles" style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(focusItems.length,4)}, minmax(0,1fr))`,gap:8}}>
-        {focusItems.slice(0,4).map((f,i)=><FocusCard key={i} {...f}/>)}
-      </div>
-
-      {/* ═══════ SECTION 3: HEALTH SYSTEMS — moved below cockpit + focus tiles ═══════ */}
-      <HealthSystemsGrid dateStr={td()} />
-
-      {/* ═══════ SECTION 4: DCY BREAKDOWN — calibration math expander ═══════ */}
+      {/* ═══════ HERO LINE · EdgeIQ (Phase 4n.1.4) ═══════
+          ONE consolidated hero line — answers "where are you + what to
+          do" at a glance. Dial shrunk so it doesn't dominate. Action-
+          oriented tiles added: Today's Plan, Recovery (HRV+Sleep), Fuel
+          Gap (cal+protein still to log), Race countdown. Calibration
+          coach line rendered inline (no separate container) as a thin
+          footer with status pill on the left + drift summary inline. ═══════ */}
       {(() => {
-        let dcyDaily=null;
-        try{ dcyDaily=dcyToday(); } catch(e){ console.warn('dcy() failed:',e); }
-        return <DcyDetails dcyDaily={dcyDaily} />;
-      })()}
+        const today = td();
+        // 7-day data for sparklines + rolling context
+        const days = [];
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(today + 'T12:00:00');
+          d.setDate(d.getDate() - i);
+          days.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+        }
+        const dailyResults = days.map(d => {
+          try { return computeDailyScore(d); } catch { return null; }
+        });
+        const todayResult = dailyResults[0];
+        const todayScore = todayResult?.score ?? null;
+        const reversedScores = (key) =>
+          dailyResults.map(r => key ? (r?.domains?.[key] ?? null) : (r?.score ?? null)).reverse();
+        const activityHist  = reversedScores('activity');
+        const nutritionHist = reversedScores('nutrition');
+        const bodyHist      = reversedScores('body');
 
-      {/* Training + Nutrition panels moved to Trend tab (Phase 4l Stage 2.1+2.2). */}
+        // Rolling avgs
+        let r7 = null, r30 = null;
+        try { r7  = computeRolling7d(today);  } catch {}
+        try { r30 = computeRolling30d(today); } catch {}
 
-      {/* Race Focus + Observations */}
-      {(()=>{
-        const races=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
-        const nowD=new Date();
-        const upcoming=races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=nowD;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
-        const nr=upcoming[0];
-        const runs30=ytdRuns.filter(a=>new Date(a.date)>=thirtyDays);
-        const paces30=runs30.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
-        const avgPace30=paces30.length?paces30.reduce((s,v)=>s+v,0)/paces30.length:null;
-        return(
-          <div className="arnold-race-obs" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'clamp(8px,1vw,12px)',alignItems:'stretch'}}>
-            <RaceFocusCard race={nr} goalPaceSecs={goalPaceSecs} avgPace30={avgPace30} fmtPace={fmtPace} planned={planned} plannedTypeLabel={plannedTypeLabel}/>
-            <div style={{minWidth:0}}>
-              <AnnotationStrip annotations={trainingAnnotations()}/>
+        // ACWR
+        const ftpPace = profile?.functionalThresholdPace || '8:30';
+        // Unified maxHR helper (Phase 4o.daily.22) — same lifetime peak
+        // logic the Daily hero / activity panel use, so hrTSS computed
+        // here matches what those panels show for the same session.
+        const maxHREdge = getEffectiveMaxHR(profile, activities);
+        const thresholdHREdge = parseFloat(profile?.thresholdHR) || null;
+        let acwrToday = null;
+        try { acwrToday = computeAcuteChronicRatio(activities, today, ftpPace, maxHREdge); } catch {}
+
+        // ── Action-oriented data ──
+        // Recovery vitals (latest from sleep/HRV)
+        const latestSleep = (sleepData || [])[0];
+        const sleepHrs = latestSleep?.durationMinutes ? +(latestSleep.durationMinutes / 60).toFixed(1) : null;
+        const sleepScore = latestSleep?.sleepScore != null ? Math.min(latestSleep.sleepScore, 100) : null;
+        const latestHrv = (() => {
+          // Merge: prefer sleep.overnightHRV, fall back to hrvData[0]
+          const sourced = (sleepData || []).find(s => s?.overnightHRV);
+          if (sourced) return sourced.overnightHRV;
+          return (hrvData || [])[0]?.overnightHRV || null;
+        })();
+
+        // Fuel gap — calories + protein still to consume today.
+        // Phase 4o.edgeiq.2 — uses the DYNAMIC target so training-day
+        // eat-back kcal is honoured. The static profile target was wrong
+        // on lift/run days: once intake crossed the static value, the
+        // remaining clamped to 0 even though the dynamic target still
+        // had room. Same getDynamicMacroTarget() the Daily tab uses, so
+        // the two views agree.
+        const todayNutTotals = (() => {
+          try { return nutDailyTotals(today); } catch { return { calories: 0, protein: 0 }; }
+        })();
+        const dynTarget = (() => {
+          try { return getDynamicMacroTarget(); } catch { return null; }
+        })();
+        const calTarget = dynTarget?.dynamicTarget
+                        ?? (parseFloat(profile?.dailyCalorieTarget) || 2200);
+        const proTarget = dynTarget?.proteinG
+                        ?? (parseFloat(profile?.dailyProteinTarget) || 150);
+        const calRemaining = Math.max(0, Math.round(calTarget - (todayNutTotals.calories || 0)));
+        const proRemaining = Math.max(0, Math.round(proTarget - (todayNutTotals.protein || 0)));
+
+        // Race countdown
+        const races = (() => {
+          try { return JSON.parse(localStorage.getItem('arnold:races') || '[]'); } catch { return []; }
+        })();
+        const todayDate = new Date(); todayDate.setHours(0,0,0,0);
+        const nextRace = races
+          .filter(r => { const d = parseLocalDate(r.date); return d && d >= todayDate; })
+          .sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0];
+        const daysToRace = nextRace?.date ? daysUntil(nextRace.date) : null;
+
+        // Calibration drift — rendered inline (no separate container)
+        const cal = (() => { try { return assessCalibration({ weeks: 4 }); } catch { return null; } })();
+        const calRec = (() => { try { return recommendCalorieTarget(); } catch { return null; } })();
+        const calStatusColor =
+          cal?.status === 'aligned'    ? '#4ade80' :
+          cal?.status === 'under-loss' ? '#fbbf24' :
+          cal?.status === 'over-loss'  ? '#60a5fa' :
+                                          'var(--text-muted)';
+        const calStatusLabel =
+          cal?.status === 'aligned'    ? 'ON PACE' :
+          cal?.status === 'under-loss' ? 'BEHIND'  :
+          cal?.status === 'over-loss'  ? 'AHEAD'   :
+                                         (cal?.status || '—').toUpperCase();
+        const driftStr = cal ? `${cal.driftLbs > 0 ? '+' : ''}${cal.driftLbs.toFixed(1)} lb drift` : '';
+        const etaPart  = calRec?.projectedDate ? ` · ETA ${calRec.projectedDate}` : '';
+        const goalPart = calRec?.userTargetDate
+          ? ` vs goal ${calRec.userTargetDate}${calRec?.requiredLossRate != null && calRec.requiredLossRate > 1.0 ? ' — aggressive' : ''}`
+          : '';
+
+        // ── Compact speedometer (smaller — no longer overpowering) ──
+        const R = 56;
+        const cx = 78, cy = 78;
+        const angleAt = (t) => Math.PI * (1 - t);
+        const ptAt = (t) => ({ x: cx + R * Math.cos(angleAt(t)), y: cy - R * Math.sin(angleAt(t)) });
+        const arcPath = (t0, t1) => {
+          const p0 = ptAt(t0); const p1 = ptAt(t1);
+          return `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} A ${R} ${R} 0 0 1 ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`;
+        };
+        const zoneRed   = arcPath(0,    0.30);
+        const zoneAmber = arcPath(0.30, 0.70);
+        const zoneGreen = arcPath(0.70, 1.00);
+        const needleAngle = todayScore != null ? -90 + (todayScore / 100) * 180 : -90;
+        const needleColor = todayScore == null ? 'var(--text-muted)' :
+                            todayScore >= 70 ? '#4ade80' :
+                            todayScore >= 30 ? '#fbbf24' :
+                                                '#f87171';
+
+        // Status helper for tile colors
+        const statusFor = (val, type) => {
+          if (val == null) return 'var(--text-muted)';
+          if (type === 'acwr')   { if (val >= 0.8 && val <= 1.3) return '#4ade80'; if (val >= 0.5 && val <= 1.5) return '#fbbf24'; return '#f87171'; }
+          if (type === 'sleep')  { if (val >= 7) return '#4ade80'; if (val >= 6) return '#fbbf24'; return '#f87171'; }
+          if (type === 'hrv')    { if (val >= 40) return '#4ade80'; if (val >= 30) return '#fbbf24'; return '#f87171'; }
+          if (type === 'fuel')   return val > 0 ? '#fbbf24' : '#4ade80';  // remaining > 0 = needs action
+          if (type === 'race')   return val != null ? '#a78bfa' : 'var(--text-muted)';
+          if (val >= 70) return '#4ade80';
+          if (val >= 50) return '#fbbf24';
+          return '#f87171';
+        };
+
+        // Mini-stat tile — compact, with optional sparkline.
+        // `tier` controls visual hierarchy: 'domain' (bold/larger) for the
+        // 3 composite scores; 'driver' (smaller) for the 6 contributors;
+        // 'action' (medium) for Today/Race.
+        const MiniStat = ({ label, value, sub, history, type, fmt, tier = 'driver' }) => {
+          const color = statusFor(typeof value === 'number' ? value : null, type);
+          const valueSize = tier === 'domain' ? 19 : tier === 'action' ? 15 : 15;
+          const valueWeight = tier === 'domain' ? 600 : 600;
+          const tileMinW = tier === 'domain' ? 62 : 58;
+
+          let pathEl = null;
+          if (history && history.filter(v => v != null && Number.isFinite(v)).length >= 2) {
+            const valid = history.filter(v => v != null && Number.isFinite(v));
+            const lo = Math.min(...valid); const hi = Math.max(...valid); const rng = hi - lo || 1;
+            const sparkW = 56, sparkH = 12;
+            const xS = (i) => (i / (history.length - 1)) * sparkW;
+            const yS = (v) => sparkH - 2 - ((v - lo) / rng) * (sparkH - 4);
+            let path = ''; let inPath = false;
+            history.forEach((v, i) => {
+              if (v == null || !Number.isFinite(v)) { inPath = false; return; }
+              const p = { x: xS(i), y: yS(v) };
+              path += inPath ? ` L ${p.x.toFixed(1)} ${p.y.toFixed(1)}` : ` M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+              inPath = true;
+            });
+            pathEl = <svg viewBox={`0 0 ${sparkW} ${sparkH}`} width={sparkW} height={sparkH} preserveAspectRatio="none" style={{ display: 'block' }}>
+              <path d={path} fill="none" stroke={color} strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" opacity="0.85"/>
+            </svg>;
+          }
+          // Reserve sparkline + sub-text space on every tile so heights
+          // match across the rail (some tiles have neither — placeholder
+          // keeps the 4-row vertical structure consistent).
+          // flex:'1 1 0' lets tiles grow evenly within their RailColumn,
+          // so the rail fills the full width of its container instead of
+          // leaving dead space on the right.
+          return (
+            <div style={{
+              display: 'grid',
+              gridTemplateRows: '12px 22px 12px 12px',
+              rowGap: 1,
+              minWidth: tileMinW,
+              flex: '1 1 0',
+              alignContent: 'start',
+            }}>
+              <div style={{
+                fontSize: 8, color: 'var(--text-muted)', textTransform: 'uppercase',
+                letterSpacing: '0.08em', whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{label}</div>
+              <div style={{
+                fontSize: valueSize, fontWeight: valueWeight, color, lineHeight: 1.05,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                display: 'flex', alignItems: 'center',
+              }}>
+                {value == null || value === '' ? '—' : (fmt ? fmt(value) : value)}
+              </div>
+              <div style={{
+                fontSize: 8, color: 'var(--text-muted)', lineHeight: 1.2,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{sub || ''}</div>
+              <div style={{ height: 12 }}>{pathEl}</div>
+            </div>
+          );
+        };
+
+        // ── RailColumn — wraps any rail item with a reserved bracket-
+        // header row so all items top-align identically.
+        // When `bracket` is set, renders a subtle "─── LABEL ───" divider
+        // in the bracket's color above the children. When null, the row
+        // is empty but still occupies its 14px so the tiles below stay
+        // aligned with bracketed pairs.
+        const RailColumn = ({ bracket, color, children, gap = 'clamp(6px,0.7vw,10px)', flexWeight = 1 }) => (
+          <div style={{
+            display: 'flex', flexDirection: 'column', minWidth: 0,
+            // flexWeight=0 → fixed natural width (used by the speedometer);
+            // any other → grow proportionally to fill remaining width.
+            flex: flexWeight === 0 ? '0 0 auto' : `${flexWeight} 1 0`,
+          }}>
+            <div style={{
+              height: 14,
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: 7, fontWeight: 700, letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: bracket ? color : 'transparent',
+              marginBottom: 4,
+            }}>
+              {bracket ? (
+                <>
+                  <div style={{ flex: 1, height: 1, background: `${color}55` }}/>
+                  <span style={{ whiteSpace: 'nowrap' }}>{bracket}</span>
+                  <div style={{ flex: 1, height: 1, background: `${color}55` }}/>
+                </>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap, alignItems: 'flex-start' }}>
+              {children}
             </div>
           </div>
         );
+
+        return (
+          <section style={{
+            background: 'var(--bg-surface)',
+            border: '0.5px solid var(--border-default)',
+            borderRadius: 'var(--radius-md)',
+            padding: 'clamp(12px,1.2vw,16px)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}>
+            {/* ── One-line cockpit: dial + status + 12 mini-stats ──
+                Outer flex top-aligns everything. Each child is a
+                RailColumn that reserves a 14px bracket-header row so
+                tiles line up regardless of whether they're under a
+                bracket or not. ── */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'clamp(8px,0.8vw,12px)', flexWrap: 'wrap' }}>
+              {/* Compact speedometer + minimal label block */}
+              <RailColumn flexWeight={0}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:6, flexShrink:0 }}>
+                <svg viewBox="0 0 156 100" width="112" height="72">
+                  <path d={zoneRed}   fill="none" stroke="#f87171" strokeWidth="9" strokeLinecap="round" opacity="0.35"/>
+                  <path d={zoneAmber} fill="none" stroke="#fbbf24" strokeWidth="9" strokeLinecap="round" opacity="0.35"/>
+                  <path d={zoneGreen} fill="none" stroke="#4ade80" strokeWidth="9" strokeLinecap="round" opacity="0.35"/>
+                  {todayScore != null && (
+                    <g transform={`rotate(${needleAngle} ${cx} ${cy})`}>
+                      <line x1={cx} y1={cy} x2={cx} y2={cy - R + 8} stroke={needleColor} strokeWidth="2" strokeLinecap="round"/>
+                    </g>
+                  )}
+                  <circle cx={cx} cy={cy} r="3.5" fill="var(--text-primary)"/>
+                  <circle cx={cx} cy={cy} r="1.6" fill="var(--bg-surface)"/>
+                  <text x={cx} y="98" textAnchor="middle" fontSize="18" fontWeight="600" fill={needleColor} style={{fontFamily:'var(--font-ui)'}}>
+                    {todayScore ?? '—'}<tspan fontSize="9" fill="var(--text-muted)" fontWeight="400">/100</tspan>
+                  </text>
+                </svg>
+                <div style={{ display:'flex', flexDirection:'column', gap:1, minWidth:0 }}>
+                  <div style={{ fontSize:8, fontWeight:600, letterSpacing:'0.10em', textTransform:'uppercase', color:'var(--text-muted)', whiteSpace:'nowrap' }}>Daily</div>
+                  <div style={{ fontSize:11, fontWeight:500, color:'var(--text-primary)', whiteSpace:'nowrap' }}>
+                    {todayScore == null ? '—' :
+                      todayScore >= 80 ? 'Optimal' :
+                      todayScore >= 60 ? 'On track' :
+                      todayScore >= 40 ? 'Mixed' : 'Attention'}
+                  </div>
+                  <div style={{ fontSize:8, color:'var(--text-muted)', whiteSpace:'nowrap' }}>
+                    7d <span style={{color:'var(--text-secondary)',fontWeight:500}}>{r7?.score ?? '—'}</span> · 30d <span style={{color:'var(--text-secondary)',fontWeight:500}}>{r30?.score ?? '—'}</span>
+                  </div>
+                </div>
+              </div>
+              </RailColumn>
+
+              <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-subtle)', marginTop: 18 }}/>
+
+              {/* 12-tile cockpit:
+                    Speedometer · Activity · Nutrition · Body
+                    | ACWR · rTSS                  ← Activity drivers
+                    | Cal-left · Protein-left      ← Nutrition drivers
+                    | HRV · Sleep                  ← Body drivers
+                    | Today · Race                 ← Action + deadline
+                  Each domain score is followed by its 2 most impactful
+                  drivers so the rail reads "score → what's making it →
+                  what to do". Sparklines where the metric has a meaningful
+                  7-day series; status colors throughout. */}
+              {(() => {
+                // ── Pull the focus contributors for each domain ──
+                // Activity: ACWR (load mgmt) + rTSS (today's effort intensity)
+                const activityFactors = (todayResult?.factors || []).filter(f => f.domain === 'activity');
+                const rTSSFactor = activityFactors.find(f => /rtss/i.test(f.label || ''));
+                const todayRTSS = (() => {
+                  // Sum session load across today's activities. Runs use
+                  // rTSS (pace + HR), strength sessions fall back to
+                  // hrTSS (HR + duration) so the tile reads a real
+                  // number on lift days too — Phase 4o.edgeiq.1 fix.
+                  const todayActsAll = (activities || []).filter(a => a.date === today);
+                  if (!todayActsAll.length) return null;
+                  let total = 0;
+                  for (const a of todayActsAll) {
+                    try {
+                      if (isRunAct(a)) {
+                        const { rTSS } = computeRTSS({
+                          durationSecs: a.durationSecs,
+                          avgPaceRaw:   a.avgPaceRaw || a.avgPace,
+                          avgHR:        a.avgHR,
+                          ftpPace, maxHR: maxHREdge, thresholdHR: thresholdHREdge,
+                        });
+                        total += rTSS || 0;
+                      } else if (isStrengthAct(a)) {
+                        const { hrTSS } = computeHrTSS({
+                          durationSecs: a.durationSecs,
+                          avgHR:        a.avgHR || a.avgHeartRate,
+                          maxHR: maxHREdge, thresholdHR: thresholdHREdge,
+                        });
+                        total += hrTSS || 0;
+                      }
+                    } catch {}
+                  }
+                  return total > 0 ? Math.round(total) : null;
+                })();
+                // Today completed = any logged session (run or strength)
+                // produced load. Drives the green ✓ next to the Today tile.
+                const todayCompleted = todayRTSS != null && todayRTSS > 0;
+
+                // 7-day history for HRV + Sleep (sparkline data)
+                const hrvHist = days.map(d => {
+                  const sleepRow = (sleepData || []).find(s => s?.date === d);
+                  if (sleepRow?.overnightHRV) return Number(sleepRow.overnightHRV);
+                  const csvRow = (hrvData || []).find(h => h?.date === d);
+                  return csvRow?.overnightHRV != null ? Number(csvRow.overnightHRV) : null;
+                }).reverse();
+                const sleepHistHrs = days.map(d => {
+                  const sleepRow = (sleepData || []).find(s => s?.date === d);
+                  return sleepRow?.durationMinutes ? +(sleepRow.durationMinutes / 60).toFixed(1) : null;
+                }).reverse();
+
+                // Vertical divider between rail groups
+                const Sep = () => (
+                  <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-subtle)', flexShrink: 0, marginTop: 18 }}/>
+                );
+
+                return (
+                  <>
+                    {/* ── Domain scores (3 tiles → weight 3) ── */}
+                    <RailColumn flexWeight={3}>
+                      <MiniStat tier="domain" label="Activity"  value={todayResult?.domains?.activity}  history={activityHist}/>
+                      <MiniStat tier="domain" label="Nutrition" value={todayResult?.domains?.nutrition} history={nutritionHist}/>
+                      <MiniStat tier="domain" label="Body"      value={todayResult?.domains?.body}      history={bodyHist}/>
+                    </RailColumn>
+
+                    <Sep/>
+
+                    {/* ── Activity drivers (bracket: Activity / blue) ── */}
+                    <RailColumn bracket="Activity" color="#60a5fa" flexWeight={2}>
+                      <MiniStat label="ACWR" value={acwrToday?.ratio} type="acwr"
+                        fmt={v => v.toFixed(2)}
+                        sub={acwrToday?.ratio != null ? (acwrToday.ratio > 1.5 ? 'high risk' : acwrToday.ratio > 1.3 ? 'over-reach' : acwrToday.ratio < 0.8 ? 'under-load' : 'in zone') : 'no data'}/>
+                      <MiniStat label="rTSS today" value={todayRTSS}
+                        sub={todayRTSS == null ? 'no session' : todayRTSS > 80 ? 'big effort' : todayRTSS > 40 ? 'moderate' : 'easy'}/>
+                    </RailColumn>
+
+                    {/* ── Nutrition drivers (bracket: Nutrition / green) ── */}
+                    <RailColumn bracket="Nutrition" color="#4ade80" flexWeight={2}>
+                      <MiniStat label="Cal left"  value={calRemaining} type="fuel"
+                        fmt={v => `${v}`}
+                        sub={`/${calTarget}`}/>
+                      <MiniStat label="Protein left" value={proRemaining} type="fuel"
+                        fmt={v => `${v}g`}
+                        sub={`/${proTarget}g`}/>
+                    </RailColumn>
+
+                    {/* ── Body drivers (bracket: Body / cyan) ── */}
+                    <RailColumn bracket="Body" color="#22d3ee" flexWeight={2}>
+                      <MiniStat label="HRV" value={latestHrv} history={hrvHist} type="hrv"
+                        fmt={v => `${v}ms`}
+                        sub={latestHrv != null ? (latestHrv >= 40 ? 'recovered' : latestHrv >= 30 ? 'borderline' : 'strained') : 'no data'}/>
+                      <MiniStat label="Sleep" value={sleepHrs} history={sleepHistHrs} type="sleep"
+                        fmt={v => `${v}h`}
+                        sub={sleepScore != null ? `score ${sleepScore}` : 'no data'}/>
+                    </RailColumn>
+
+                    <Sep/>
+
+                    {/* ── Action + Race (2 tiles → weight 2) ── */}
+                    <RailColumn flexWeight={2}>
+                      <MiniStat
+                        tier="action"
+                        label="Today"
+                        value={(
+                          <span style={{ display:'inline-flex', alignItems:'baseline', gap:5 }}>
+                            <span>{plannedTypeLabel || 'Rest'}</span>
+                            {todayCompleted && (
+                              <span
+                                aria-label="completed"
+                                title={`Today's session logged · ${todayRTSS} load`}
+                                style={{ color:'#4ade80', fontSize:12, lineHeight:1, fontWeight:700 }}>
+                                ✓
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        type="plan"
+                        sub={
+                          todayCompleted
+                            ? `${todayRTSS} load logged`
+                            : (planned?.distanceMi ? `${planned.distanceMi}mi` : (planned?.minutes ? `${planned.minutes}min` : 'No plan'))
+                        }/>
+                      <MiniStat tier="action" label="Race" value={daysToRace} type="race"
+                        fmt={v => `${v}d`}
+                        sub={nextRace?.name ? nextRace.name.split(' ').slice(0,3).join(' ') : 'No race'}/>
+                    </RailColumn>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* ─── Phase 4n.3 — Coaching prompts integrated ───
+                Top 3 active coaching prompts, rendered as compact one-line
+                strips. Sits between the rail body and the calibration footer
+                so the user reads "score → drivers → what to actually do".
+                Calibration-pillar prompts are filtered OUT here because the
+                calibration footer below already covers that signal — we'd
+                duplicate it otherwise. Severity colors match the rail's:
+                  critical → red, warning → amber, info → blue, positive → green.
+                Tap any row to jump to the relevant tab. Empty state is
+                omitted (no "all clear" placeholder — it'd just waste height
+                when the calibration footer below is already saying that). */}
+            {(() => {
+              let prompts = [];
+              try {
+                prompts = (getTopCoachingPrompts(5) || [])
+                  .filter(p => p.pillar !== 'calibration')
+                  .slice(0, 3);
+              } catch {}
+              if (!prompts.length) return null;
+              const sevColor = (sev) =>
+                sev === 'critical' ? '#f87171' :
+                sev === 'warning'  ? '#fbbf24' :
+                sev === 'positive' ? '#4ade80' :
+                                     '#60a5fa';
+              const pillarTab = (pillar) =>
+                pillar === 'nutrition' ? 'daily' :
+                pillar === 'recovery'  ? 'trend' :
+                pillar === 'run'       ? 'training' :
+                pillar === 'body'      ? 'trend' :
+                                          'goals';
+              const pillarLabel = (pillar) =>
+                pillar === 'nutrition' ? 'Fuel' :
+                pillar === 'recovery'  ? 'Recover' :
+                pillar === 'run'       ? 'Train' :
+                pillar === 'body'      ? 'Body' :
+                                          (pillar || 'Coach').toString().toUpperCase();
+              return (
+                <div style={{
+                  display: 'flex', flexDirection: 'column', gap: 6,
+                  paddingTop: 8, borderTop: '0.5px solid var(--border-subtle)',
+                }}>
+                  {prompts.map(p => {
+                    const c = sevColor(p.severity);
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => setTab?.(pillarTab(p.pillar))}
+                        title={p.detail || ''}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          minHeight: 22,
+                          cursor: setTab ? 'pointer' : 'default',
+                          userSelect: 'none',
+                        }}
+                      >
+                        {/* severity dot */}
+                        <span aria-hidden style={{
+                          width: 6, height: 6, borderRadius: '50%',
+                          background: c, flexShrink: 0,
+                        }}/>
+                        {/* pillar tag — uppercase, severity-tinted */}
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, letterSpacing: '0.10em',
+                          color: c, textTransform: 'uppercase',
+                          minWidth: 48, flexShrink: 0,
+                        }}>{pillarLabel(p.pillar)}</span>
+                        {/* title — truncates if long, full text on hover */}
+                        <span style={{
+                          fontSize: 11, fontWeight: 500,
+                          color: 'var(--text-primary)',
+                          flex: 1, minWidth: 0,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>{p.title}</span>
+                        {/* action arrow */}
+                        {p.action?.label ? (
+                          <span style={{
+                            fontSize: 10, fontWeight: 600,
+                            color: c, opacity: 0.85,
+                            whiteSpace: 'nowrap', flexShrink: 0,
+                          }}>→ {p.action.label}</span>
+                        ) : setTab ? (
+                          <span style={{
+                            fontSize: 10, fontWeight: 600,
+                            color: 'var(--text-muted)',
+                            whiteSpace: 'nowrap', flexShrink: 0,
+                          }}>→</span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* ── Inline calibration footer (no separate container) ── */}
+            {cal && cal.status !== 'no-data' && (
+              <div
+                onClick={() => setTab?.('goals')}
+                style={{
+                  display:'flex', alignItems:'center', gap:10,
+                  paddingTop:8, borderTop:'0.5px solid var(--border-subtle)',
+                  cursor: setTab ? 'pointer' : 'default',
+                  userSelect:'none',
+                }}
+                title={setTab ? 'Open full calibration in Goals' : ''}
+              >
+                <span style={{ fontSize:10, fontWeight:700, color: calStatusColor, letterSpacing:'0.08em', flexShrink:0,
+                  padding:'2px 8px', borderRadius:10, background:`${calStatusColor}1a` }}>
+                  {calStatusLabel}
+                </span>
+                <span style={{ fontSize:11, color:'var(--text-secondary)', fontFamily:'var(--font-mono)', flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {driftStr}{etaPart}{goalPart}
+                </span>
+                {setTab && (
+                  <span style={{ fontSize:10, fontWeight:600, color:'var(--text-muted)', whiteSpace:'nowrap' }}>
+                    see Goals →
+                  </span>
+                )}
+              </div>
+            )}
+          </section>
+        );
+      })()}
+
+      {/* Standalone Coach line + Focus tiles removed — embedded in or
+          consolidated by the Hero Line above (Phase 4n.1.3). */}
+
+      {/* ═══════ SECTION 3: HEALTH SYSTEMS — clickable tiles, inline detail ═══════ */}
+      <HealthSystemsGrid dateStr={td()} data={data} />
+
+      {/* DCY breakdown removed (Phase 4n.2.1) — DCY is the Mobile Start
+          readiness compass; web EdgeIQ covers the same signal differently
+          via the hero-rail composite + drivers. Keeping both surfaces
+          duplicates the readiness story.
+
+          AnnotationStrip removed — coaching nudges are surfaced through
+          the hero-rail Behind line + (future Stage 3) coaching prompts. */}
+
+      {/* Race detail — conditional. Only render when there's a race within
+          the next 60 days. Carries info the hero's compact Race tile can't:
+          predicted finish, goal pace vs current pace, race readiness. */}
+      {(()=>{
+        const races=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
+        const nowD=new Date(); nowD.setHours(0,0,0,0);
+        const cutoff60=new Date(nowD); cutoff60.setDate(nowD.getDate()+60);
+        const upcoming=races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=nowD&&d<=cutoff60;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
+        const nr=upcoming[0];
+        if(!nr)return null;
+        const runs30=ytdRuns.filter(a=>new Date(a.date)>=thirtyDays);
+        const paces30=runs30.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
+        const avgPace30=paces30.length?paces30.reduce((s,v)=>s+v,0)/paces30.length:null;
+        return <RaceFocusCard race={nr} goalPaceSecs={goalPaceSecs} avgPace30={avgPace30} fmtPace={fmtPace} planned={planned} plannedTypeLabel={plannedTypeLabel}/>;
       })()}
 
       {/* AI analysis card */}

@@ -33,6 +33,7 @@ import {
   handleGarminActivityDetails,
   handleGarminActivityFit,
   handleGarminVO2Max,
+  handleGarminWeight,
 } from './garmin-relay.js';
 
 const MAX_BLOB_BYTES = 8 * 1024 * 1024; // 8 MB safety cap
@@ -582,6 +583,7 @@ export default {
       if (pathname === '/garmin/readiness') return handleGarminReadiness(request, env);
       if (pathname === '/garmin/all')       return handleGarminAll(request, env);
       if (pathname === '/garmin/vo2max')    return handleGarminVO2Max(request, env);
+      if (pathname === '/garmin/weight')    return handleGarminWeight(request, env);
       // Activity routes — list is body-only; details/fit take {activityId} in path.
       if (pathname === '/garmin/activities/recent') return handleGarminActivitiesList(request, env);
       const detMatch = pathname.match(/^\/garmin\/activities\/(\d+)\/details$/);

@@ -13,6 +13,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { STATUS } from '../core/semantics.js';
 import { getGoals } from '../core/goals.js';
+import { getDynamicMacroTarget } from '../core/energyBalance.js';
 import {
   MEAL_CATEGORIES, createEntry, saveEntry, deleteEntry,
   getEntriesForDate, dailyTotals, goalImpact,
@@ -61,41 +62,222 @@ const INPUT_MODES = [
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MacroDial — Activity-style dial with unit on top, value in middle, target below
-// Matches the SmallDial visual from Arnold.jsx
+// MacroDial — Phase 4o.daily.6 unified with Activity's SmallDial.
+// Just value-in-the-circle + label-below ("Calories (kcal)"). The /target
+// text is gone — the panel-level Today's Target line now carries the
+// dynamic target so per-dial duplication isn't needed (and the per-dial
+// targets were static, not honoring the dynamic eat-back math).
 // ═════════════════════════════════════════════════════════════════════════════
 function MacroDial({ value, target, color, unit, label }) {
   const pct = Math.min((value || 0) / (target || 1), 1);
   const safePct = Math.max(0, pct);
+  // Phase 4o.fix.1 — at 100%+, drop the dasharray so the full circle is
+  // stroked. The previous strokeDashoffset(-18) + dasharray("145 145")
+  // combo left a ~18-unit visible gap even when pct=1 because the offset
+  // pushed the stroke's endpoint short of the path origin.
+  const isFull = safePct >= 1;
+  const v = value != null ? Math.round(value) : '—';
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center',
-      gap: 3, flex: 1, minWidth: 0,
+      gap: 4, flex: 1, minWidth: 0,
     }}>
-      <svg width="54" height="54" viewBox="0 0 54 54">
-        <circle cx="27" cy="27" r="21" fill="none"
+      <svg width="60" height="60" viewBox="0 0 60 60">
+        <circle cx="30" cy="30" r="23" fill="none"
           stroke="var(--bg-input)" strokeWidth="4.5" />
-        <circle cx="27" cy="27" r="21" fill="none"
+        <circle cx="30" cy="30" r="23" fill="none"
           stroke={color} strokeWidth="4.5"
-          strokeDasharray={`${safePct * 132} 132`}
-          strokeDashoffset={-16.5}
+          strokeDasharray={isFull ? undefined : `${safePct * 145} 145`}
+          strokeDashoffset={isFull ? 0 : -18}
           strokeLinecap="round"
-          transform="rotate(135 27 27)" />
-        <text x="27" y="23" textAnchor="middle" fontSize="6.5"
-          fill="var(--text-muted)"
-          style={{ fontFamily: 'var(--font-ui)' }}>{unit}</text>
-        <text x="27" y="33" textAnchor="middle" fontSize="11" fontWeight="500"
+          transform="rotate(135 30 30)" />
+        <text x="30" y="34" textAnchor="middle" fontSize="13" fontWeight="600"
           fill="var(--text-primary)"
           style={{ fontFamily: 'var(--font-ui)' }}>
-          {value != null ? Math.round(value) : '—'}
+          {v}
         </text>
-        <text x="27" y="41" textAnchor="middle" fontSize="6"
-          fill="var(--text-muted)"
-          style={{ fontFamily: 'var(--font-ui)' }}>/ {target}</text>
       </svg>
       <span style={{
-        fontSize: 9, color: 'var(--text-muted)',
-      }}>{label}</span>
+        fontSize: 10, color: 'var(--text-secondary, var(--text-muted))',
+        textAlign: 'center', lineHeight: 1.2, whiteSpace: 'nowrap',
+        overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+      }}>
+        {label}{unit ? ` (${unit})` : ''}
+      </span>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BowlDial — Phase 4r.fuel.15
+// Round bowl drawn from a thin elliptical rim + a half-ellipse body curving
+// down. Matches the user-approved sketch: no vertical walls, no foot —
+// just the classic bowl silhouette. Walls are charcoal so the liquid
+// color carries the macro family tint, consistent with the rest of
+// Arnold's tile aesthetic (Tron-glow on dark surface).
+//
+// Layer order (back to front):
+//   1. Body shape filled (closed half-ellipse + chord at rim height)
+//      → looks like the dark interior of the bowl seen from a slight angle
+//   2. Liquid (clipped to body cavity, animated translateY on fillPct)
+//   3. Surface meniscus + gloss (sells the fluid feel)
+//   4. Rim ellipse outline (the mouth seen at perspective)
+//   5. Body outline (the curve)
+//   6. Value readout (HTML overlay)
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Bowl geometry (viewBox 64×40)
+const BOWL_RIM_CY    = 12;
+const BOWL_RIM_RX    = 26;
+const BOWL_RIM_RY    = 3.5;
+const BOWL_BODY_RY   = 22;   // depth of the curved body below the rim
+const BOWL_CAV_RX    = 24;
+const BOWL_CAV_RY    = 20;
+const BOWL_CAV_RANGE = BOWL_CAV_RY;  // liquid translation range
+
+// Outer body (half-ellipse closed by chord across the rim line).
+// Sweep flag = 0 → arc curves DOWNWARD below the chord (the bowl body).
+// Sweep=1 would put it above the chord (off-screen above the rim).
+const BOWL_BODY_PATH = `M ${32 - BOWL_RIM_RX} ${BOWL_RIM_CY} A ${BOWL_RIM_RX} ${BOWL_BODY_RY} 0 0 0 ${32 + BOWL_RIM_RX} ${BOWL_RIM_CY} Z`;
+// Inner cavity (slightly inset, used as clip for the liquid)
+const BOWL_CAV_PATH  = `M ${32 - BOWL_CAV_RX} ${BOWL_RIM_CY} A ${BOWL_CAV_RX} ${BOWL_CAV_RY} 0 0 0 ${32 + BOWL_CAV_RX} ${BOWL_RIM_CY} Z`;
+
+// Per-macro liquid palette — matches the Tron-glow tints used in the
+// Macros vs Goal bars + the legacy MacroDial rings, so the bowls feel
+// native to the rest of the Nutrition panel rather than introducing a
+// second color language. liquid = main fill, surface = light meniscus,
+// glow = over-goal halo.
+const BOWL_PALETTES = {
+  calories: { liquid: '#60a5fa', surface: '#bfdbfe', glow: '#93c5fd' }, // blue
+  protein:  { liquid: '#4ade80', surface: '#bbf7d0', glow: '#86efac' }, // green
+  carbs:    { liquid: '#fbbf24', surface: '#fde68a', glow: '#fcd34d' }, // amber
+  fat:      { liquid: '#f472b6', surface: '#fbcfe8', glow: '#f9a8d4' }, // pink
+  fiber:    { liquid: '#a78bfa', surface: '#ddd6fe', glow: '#c4b5fd' }, // purple
+};
+
+function BowlDial({ value, target, family, unit, label, compact = false }) {
+  const pct = (value || 0) / (target || 1);
+  const fillPct = Math.max(0, Math.min(pct, 1));
+  const overGoal = pct > 1.0;
+  const v = value != null ? Math.round(value) : '—';
+  // Two size profiles. Desktop bowls (76×52) have room for 4-digit
+  // values; mobile bowls (60×42) shrink so all five fit in a 360-ish
+  // panel without clipping. Aspect ratio (64:40 viewBox) is identical
+  // so the bowl shape stays consistent — only the rendered scale changes.
+  const SIZE     = compact ? 60 : 76;
+  const HEIGHT   = compact ? 42 : 52;
+  const fontSize = compact ? 11 : 13;
+  // Phase 4r.fuel.20 — labels were 9px on compact / 10px desktop in
+  // --text-secondary on a dark panel, which made them effectively
+  // invisible (user feedback: "categories hidden behind the images").
+  // Bumped one step on each axis: 11/12 size, primary color at 90%
+  // opacity, weight 500 — present without screaming.
+  const labelSize = compact ? 11 : 12;
+  const palette = BOWL_PALETTES[family] || BOWL_PALETTES.calories;
+  const clipId = `bowl-cav-${family}`;
+  const translateY = (1 - fillPct) * BOWL_CAV_RANGE;
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      // Phase 4r.fuel.20 — bumped column gap 4→8 so labels sit clearly
+      // below the bowl curve rather than visually touching it.
+      gap: 8, flex: 1, minWidth: 0,
+    }}>
+      <div style={{
+        position: 'relative',
+        width: SIZE, height: HEIGHT,
+        flexShrink: 0,
+        filter: overGoal ? `drop-shadow(0 0 3px ${palette.glow})` : undefined,
+      }}>
+        <svg width={SIZE} height={HEIGHT} viewBox="0 0 64 40">
+          <defs>
+            <clipPath id={clipId}>
+              <path d={BOWL_CAV_PATH}/>
+            </clipPath>
+          </defs>
+
+          {/* Layer 1 — Body fill (interior dark, slightly warmer than the
+              panel bg so the silhouette reads even at low fill levels) */}
+          <path d={BOWL_BODY_PATH} fill="#1a1814"/>
+
+          {/* Layer 2 — Liquid clipped to cavity, translates up with fillPct */}
+          {fillPct > 0 && (
+            <g clipPath={`url(#${clipId})`}>
+              <g style={{
+                transform: `translateY(${translateY}px)`,
+                transition: 'transform 0.9s cubic-bezier(0.22, 1, 0.36, 1)',
+              }}>
+                <rect x="0" y={BOWL_RIM_CY}
+                      width="64" height={BOWL_CAV_RANGE + 2}
+                      fill={palette.liquid}/>
+                {/* Surface meniscus with subtle SMIL sway */}
+                <rect x="0" y={BOWL_RIM_CY - 0.6}
+                      width="64" height="1.4"
+                      fill={palette.surface}>
+                  <animate attributeName="y"
+                    values={`${BOWL_RIM_CY - 0.9};${BOWL_RIM_CY - 0.3};${BOWL_RIM_CY - 0.9}`}
+                    dur="3s" repeatCount="indefinite"/>
+                </rect>
+                {/* Gloss specular — small white smear on the surface */}
+                <ellipse cx="22" cy={BOWL_RIM_CY - 0.2}
+                         rx="5" ry="0.55"
+                         fill="rgba(255,255,255,0.55)">
+                  <animate attributeName="cx"
+                    values="22;24;22;20;22"
+                    dur="5s" repeatCount="indefinite"/>
+                </ellipse>
+              </g>
+            </g>
+          )}
+
+          {/* Layer 3 — Body outline (the bowl's lower curve). Bumped to
+              1.0px in T2 cream so it reads against the dark panel. */}
+          <path d={BOWL_BODY_PATH}
+                fill="none" stroke="#a8a59f"
+                strokeWidth="1" strokeLinejoin="round"/>
+
+          {/* Layer 4 — Rim ellipse outline (the mouth opening) */}
+          <ellipse cx="32" cy={BOWL_RIM_CY}
+                   rx={BOWL_RIM_RX} ry={BOWL_RIM_RY}
+                   fill="none" stroke="#a8a59f"
+                   strokeWidth="0.9" opacity="0.95"/>
+        </svg>
+        {/* Value readout — biased toward bowl center, white with shadow
+            so it stays legible over both the dark cavity and the bright
+            liquid. */}
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          // paddingTop 3 puts the digit center at the bowl shape's
+          // centroid (≈ 4·ry/3π below the rim chord) rather than the
+          // bbox midpoint — the bowl narrows downward, so a true
+          // bbox-center reads as "low". Empirically derived to match
+          // perceived center on both 76×52 and 60×42 sizes.
+          paddingTop: 3,
+          fontSize, fontWeight: 500,
+          color: '#fff',
+          textShadow: '0 1px 2px rgba(0,0,0,0.7), 0 0 4px rgba(0,0,0,0.4)',
+          pointerEvents: 'none',
+          fontFamily: 'var(--font-ui)',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          {v}
+        </div>
+      </div>
+      <span style={{
+        fontSize: labelSize,
+        color: 'var(--text-primary)',
+        opacity: 0.9,
+        fontWeight: 500,
+        textAlign: 'center', lineHeight: 1.2, whiteSpace: 'nowrap',
+        overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+      }}>
+        {compact ? label : `${label}${unit ? ` (${unit})` : ''}`}
+      </span>
     </div>
   );
 }
@@ -1148,13 +1330,25 @@ function LogFoodPanel({ dateStr, onSaved, onCancel }) {
 // MAIN COMPONENT
 // ═════════════════════════════════════════════════════════════════════════════
 
-export function NutritionInput({ date, onUpdate }) {
+export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
   const dateStr = date || localDate();
   const [entries, setEntries] = useState(() => getEntriesForDate(dateStr));
   const [totals, setTotals] = useState(() => dailyTotals(dateStr));
   const [showAdd, setShowAdd] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const G = getGoals();
+  // Viewport tracking (Phase 4o.mobile.5) — on mobile the dynamic-
+  // target line drops to a second row below the "Nutrition" title at
+  // a slightly smaller font, since the inline layout overflowed on
+  // narrow widths and made the panel feel busy.
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 600);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 600px)');
+    const h = e => setIsMobile(e.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
 
   useEffect(() => {
     setEntries(getEntriesForDate(dateStr));
@@ -1191,45 +1385,119 @@ export function NutritionInput({ date, onUpdate }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [realFoodCount, dateStr, refreshKey]);
 
+  // Compute the dynamic target ONCE here so the header line, the dial
+  // targets, and the Macros-vs-Goal bars all stay in lockstep — when the
+  // user logs a run the eat-back kcal flows through to every readout.
+  // Falls back to the static profile goals (G) when no dynamic value
+  // exists (e.g., calibration not yet bootstrapped).
+  let dyn = null;
+  try { dyn = getDynamicMacroTarget(); } catch {}
+  const effGoals = {
+    dailyCalorieTarget: dyn?.dynamicTarget ?? (parseFloat(G.dailyCalorieTarget) || 2200),
+    dailyProteinTarget: dyn?.proteinG       ?? (parseFloat(G.dailyProteinTarget) || 150),
+    dailyCarbTarget:    dyn?.carbsG         ?? (parseFloat(G.dailyCarbTarget)    || 200),
+    dailyFatTarget:     dyn?.fatG           ?? (parseFloat(G.dailyFatTarget)     || 70),
+    dailyFiberTarget:   dyn?.fiberG         ?? (parseFloat(G.dailyFiberTarget)   || 35),
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
       {/* ═════ SINGLE NUTRITION PANEL — matches Activity layout ═════ */}
-      <div style={panelStyle}>
-        {/* Header */}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom: hasAnyData ? 12 : 0}}>
-          <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>Nutrition</span>
-          <span style={{fontSize:10,color:'var(--text-muted)'}}>today</span>
-        </div>
+      <div style={{...panelStyle, ...(isMobile ? { padding: '10px 12px' } : null)}}>
+        {/* Header — Nutrition title + dynamic target.
+            Desktop: target line inline with the title.
+            Mobile (Phase 4o.mobile.5): title on top row alongside the
+            sync button, target line stacked below at slightly smaller
+            font. Keeps the panel from feeling crowded on narrow widths. */}
+        {(() => {
+          const targetInline = dyn && dyn.dynamicTarget ? (
+            <>
+              <span style={{fontSize: isMobile ? 12 : 13,fontWeight:600,color:'var(--text-primary)',whiteSpace:'nowrap'}}>
+                {dyn.dynamicTarget} <span style={{fontSize: isMobile ? 9 : 10,fontWeight:400,color:'var(--text-muted)'}}>kcal</span>
+              </span>
+              {dyn.isTrainingDay && (
+                <span style={{fontSize: isMobile ? 9 : 10,color:'#e0b45e',fontWeight:500,whiteSpace:'nowrap'}}>
+                  +{dyn.eatBackKcal} earned
+                </span>
+              )}
+              <span style={{fontSize: isMobile ? 9 : 10,color:'var(--text-muted)',whiteSpace:'nowrap'}}>
+                <span style={{color:'#9b8ec4',fontWeight:500}}>{dyn.proteinG}</span>P ·
+                <span style={{color:'#6bcf9a',fontWeight:500,marginLeft:4}}>{dyn.carbsG}</span>C ·
+                <span style={{color:'#e0b45e',fontWeight:500,marginLeft:4}}>{dyn.fatG}</span>F ·
+                <span style={{color:'#6fd4e4',fontWeight:500,marginLeft:4}}>{dyn.fiberG}</span>fb
+              </span>
+            </>
+          ) : null;
+
+          if (isMobile) {
+            return (
+              <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:hasAnyData?8:0,minWidth:0}}>
+                {/* Top row — title + sync button. Tighter spacing
+                    (Phase 4o.mobile.9) — was 3px gap / 10px marginBottom,
+                    now 1px gap / 8px marginBottom so the dial row sits
+                    closer to the header. */}
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+                  <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)',whiteSpace:'nowrap'}}>Nutrition</span>
+                  {headerSlot}
+                </div>
+                {/* Stacked target line — below the title, smaller font */}
+                {targetInline && (
+                  <div style={{display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap',minWidth:0}}>
+                    {targetInline}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <div style={{
+              display:'flex',justifyContent:'space-between',alignItems:'baseline',
+              marginBottom: hasAnyData ? 12 : 0, gap:10, flexWrap:'wrap', minWidth:0,
+            }}>
+              <div style={{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap',minWidth:0,flex:1}}>
+                <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)',whiteSpace:'nowrap'}}>Nutrition</span>
+                {targetInline}
+              </div>
+              {headerSlot}
+            </div>
+          );
+        })()}
 
         {hasAnyData && (
           <>
-            {/* Macro dials */}
+            {/* Macro dials — pinned to the same dynamic targets as the header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 3, alignItems: 'stretch', marginBottom: 14 }}>
-              <MacroDial value={totals.calories}
-                target={parseFloat(G.dailyCalorieTarget) || 2200}
-                color="#60a5fa" unit="kcal" label="Calories" />
-              <MacroDial value={totals.protein}
-                target={parseFloat(G.dailyProteinTarget) || 150}
-                color="#4ade80" unit="g" label="Protein" />
-              <MacroDial value={totals.carbs}
-                target={parseFloat(G.dailyCarbTarget) || 200}
-                color="#fbbf24" unit="g" label="Carbs" />
-              <MacroDial value={totals.fat}
-                target={parseFloat(G.dailyFatTarget) || 70}
-                color="#f472b6" unit="g" label="Fat" />
-              <MacroDial value={totals.fiber}
-                target={parseFloat(G.dailyFiberTarget) || 35}
-                color="#a78bfa" unit="g" label="Fiber" />
+              <BowlDial value={totals.calories}
+                target={effGoals.dailyCalorieTarget}
+                family="calories" unit="kcal" label="Calories"
+                compact={isMobile} />
+              <BowlDial value={totals.protein}
+                target={effGoals.dailyProteinTarget}
+                family="protein" unit="g" label="Protein"
+                compact={isMobile} />
+              <BowlDial value={totals.carbs}
+                target={effGoals.dailyCarbTarget}
+                family="carbs" unit="g" label="Carbs"
+                compact={isMobile} />
+              <BowlDial value={totals.fat}
+                target={effGoals.dailyFatTarget}
+                family="fat" unit="g" label="Fat"
+                compact={isMobile} />
+              <BowlDial value={totals.fiber}
+                target={effGoals.dailyFiberTarget}
+                family="fiber" unit="g" label="Fiber"
+                compact={isMobile} />
             </div>
 
             {/* Micronutrients */}
             <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
             <MicronutrientsPanel dateStr={dateStr} refreshKey={refreshKey} />
 
-            {/* Macros vs Goal */}
+            {/* Macros vs Goal — uses the same dynamic targets */}
             <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
-            <MacrosVsGoal totals={totals} goals={G} />
+            <MacrosVsGoal totals={totals} goals={effGoals} />
           </>
         )}
 

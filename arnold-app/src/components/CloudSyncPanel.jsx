@@ -23,6 +23,7 @@ import {
   getSyncStatus,
   onCloudSyncEvent,
   selfTest,
+  clearLastPullError,
 } from '../core/cloud-sync.js';
 import { snapshotBeforeOp } from '../core/backup.js';
 import {
@@ -134,6 +135,114 @@ function fmtBytes(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+// Phase 4o.cloudsync.1 — Inline re-enter passphrase form.
+// Used by both the decrypt-error banner and the always-available button
+// in the active panel. Calls setPassphrase + retries pull on submit;
+// dismisses on success.
+function PassphraseRetryForm({ onResolved, autoFocus = false, ctaLabel = 'Set & retry pull' }) {
+  const [pass, setPass] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!pass) return;
+    setBusy(true); setErr('');
+    try {
+      await setPassphrase(pass, { remember: true });
+      const r = await pull();
+      if (r?.error) {
+        setErr(/operation/i.test(r.error) || /decrypt/i.test(r.error)
+          ? 'Still wrong — try a different passphrase.'
+          : `Pull failed: ${r.error}`);
+      } else {
+        clearLastPullError();
+        setPass('');
+        onResolved?.();
+      }
+    } catch (e2) {
+      setErr(e2?.message || String(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={onSubmit} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginTop: 8 }}>
+      <input
+        type="password"
+        autoFocus={autoFocus}
+        value={pass}
+        onChange={e => setPass(e.target.value)}
+        placeholder="Passphrase"
+        style={{
+          flex: '1 1 180px', minWidth: 180,
+          padding: '6px 10px', borderRadius: 6,
+          background: '#0b0d12', border: '1px solid #2a2f3a', color: '#fff',
+          fontSize: 13,
+        }}
+        required
+      />
+      <button type="submit" disabled={busy || pass.length < 4} style={{
+        padding: '6px 12px', borderRadius: 6, fontSize: 13, fontWeight: 600,
+        background: '#3b82f6', border: '1px solid #3b82f6', color: '#fff',
+        cursor: busy ? 'wait' : 'pointer',
+      }}>
+        {busy ? 'Trying…' : ctaLabel}
+      </button>
+      {err && (
+        <div style={{ flex: '1 0 100%', fontSize: 12, color: '#f87171', marginTop: 2 }}>{err}</div>
+      )}
+    </form>
+  );
+}
+
+function DecryptErrorBanner({ message, onResolved }) {
+  return (
+    <div style={{
+      background: '#5c1f1f', border: '1px solid #8a2f2f', color: '#ffd4d4',
+      padding: '10px 12px', borderRadius: 6, marginBottom: 12,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4 }}>
+        ✗ Cloud pull failed — passphrase mismatch.
+      </div>
+      <div style={{ fontWeight: 400, fontSize: 12, marginTop: 4, opacity: 0.85, lineHeight: 1.45 }}>
+        {message || 'The cloud blob was encrypted with a different passphrase than the one cached on this device. Re-enter the passphrase you used on your other device.'}
+      </div>
+      <PassphraseRetryForm onResolved={onResolved} autoFocus ctaLabel="Re-enter & retry pull" />
+    </div>
+  );
+}
+
+function ReEnterPassphraseButton({ onResolved }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          padding: '6px 12px', borderRadius: 6, fontSize: 13,
+          background: 'transparent', border: '1px solid #2a2f3a', color: '#9ca3af',
+          cursor: 'pointer', marginRight: 6,
+        }}
+        title="Re-enter the encryption passphrase if it was lost or mismatched."
+      >
+        {open ? 'Cancel' : 'Re-enter passphrase'}
+      </button>
+      {open && (
+        <div style={{
+          flex: '1 0 100%', marginTop: 8, padding: 10,
+          background: '#0b0d12', border: '0.5px solid #2a2f3a', borderRadius: 6,
+        }}>
+          <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>
+            Sets the passphrase used to derive the encryption key, then immediately tries a pull. If it succeeds, sync resumes; if not, the error message points you at what's wrong.
+          </div>
+          <PassphraseRetryForm onResolved={() => { setOpen(false); onResolved?.(); }} autoFocus />
+        </div>
+      )}
+    </>
+  );
 }
 
 export default function CloudSyncPanel() {
@@ -352,9 +461,21 @@ export default function CloudSyncPanel() {
   }
 
   // Paired + unlocked
+  const decryptFailed = status.lastPullError?.code === 'decrypt_failed';
   return (
     <div style={panelStyle}>
       <h3 style={{ marginTop: 0 }}>Cloud sync — active</h3>
+
+      {/* Phase 4o.cloudsync.1 — surface a decrypt failure with an inline
+          re-enter-passphrase form. Without this, the panel silently
+          claims "active" while pulls keep failing in DevTools console. */}
+      {decryptFailed && (
+        <DecryptErrorBanner
+          message={status.lastPullError.message}
+          onResolved={() => { setStatus(getSyncStatus()); }}
+        />
+      )}
+
       <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
         <div>Endpoint: <code>{status.endpoint}</code></div>
         <div>Device ID: <code>{status.deviceId}</code></div>
@@ -380,6 +501,9 @@ export default function CloudSyncPanel() {
           title="Bypass LWW — overwrite local data with whatever's in the cloud. Use when this device has drifted from remote (bad migration, stale state, etc).">
           {busy === 'forcepull' ? 'Force pulling…' : '⚠ Force pull'}
         </button>
+        {/* Always-available re-enter button so the user can fix a
+            passphrase mismatch without going through Unpair. */}
+        <ReEnterPassphraseButton onResolved={() => setStatus(getSyncStatus())} />
         <button style={btnSecondary} onClick={handleUnpair}>Unpair</button>
       </div>
 

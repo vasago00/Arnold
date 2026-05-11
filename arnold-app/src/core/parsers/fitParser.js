@@ -2,7 +2,51 @@
 // Calibrated for Garmin FIT SDK output (Forerunner 955 Solar protocol v16/profile 21184)
 import { Decoder, Stream } from '@garmin/fitsdk';
 
-export async function parseFITFile(file) {
+// Phase 4r.zones.3 — bin a raw HR record stream into the user's custom
+// bpm zones from profile.hrZoneBpm. This is more authoritative than
+// the watch-computed time-in-zone in the FIT (which uses whatever
+// zone scheme the watch is currently configured for — typically
+// %HRmax, not the user's customized bpm boundaries shown in Connect).
+//
+// Returns an array of 5 ints (Z1..Z5 seconds), or null if the records
+// don't have enough HR samples to be useful.
+function binRecordsToBpmZones(records, zoneBpm) {
+  if (!Array.isArray(records) || records.length < 30) return null;
+  if (!zoneBpm) return null;
+  const buckets = [0, 0, 0, 0, 0];
+  let prevT = null;
+  for (const r of records) {
+    const t = r.timestamp instanceof Date ? r.timestamp.getTime() : null;
+    const hr = parseFloat(r.heartRate);
+    if (t == null || !Number.isFinite(hr) || hr < 60 || hr > 220) {
+      prevT = t;
+      continue;
+    }
+    if (prevT != null) {
+      const dt = (t - prevT) / 1000;
+      if (dt > 0 && dt < 30) {
+        let idx;
+        if      (hr <= zoneBpm.z1Max) idx = 0;
+        else if (hr <= zoneBpm.z2Max) idx = 1;
+        else if (hr <= zoneBpm.z3Max) idx = 2;
+        else if (hr <= zoneBpm.z4Max) idx = 3;
+        else                          idx = 4;
+        buckets[idx] += dt;
+      }
+    }
+    prevT = t;
+  }
+  if (buckets.some(b => b > 0)) return buckets.map(b => Math.round(b));
+  return null;
+}
+
+// Accepts an optional opts.zoneBpm — when present, raw HR records are
+// re-binned against the user's custom bpm boundaries (Path 0), which
+// overrides whatever scheme the watch baked into the FIT's
+// time-in-zone fields. Without zoneBpm, the parser falls back to
+// Path 1/2 (the watch's own time-in-zone) and finally to null.
+export async function parseFITFile(file, opts = {}) {
+  const zoneBpm = opts.zoneBpm || null;
   const buffer = await file.arrayBuffer();
   const stream = Stream.fromArrayBuffer(buffer);
   const decoder = new Decoder(stream);
@@ -220,10 +264,33 @@ export async function parseFITFile(file) {
   // protocol version. We accept both shapes; null if the device didn't
   // record zones for this session (e.g. some strength sessions).
   const hrZones = (() => {
+    // Phase 4r.zones.3 — Path 0 (authoritative when zoneBpm is provided):
+    // bin the raw HR record stream against the user's custom bpm zone
+    // boundaries. This makes Arnold's zones match Garmin Connect's
+    // "Heart Rate Zones" panel — Connect bins by user-configured bpm
+    // boundaries, while the watch's own time-in-zone fields (Path 1/2)
+    // and the activity DTO's hrTimeInZone use whatever zone scheme the
+    // watch is configured for (typically %HRmax). The two systems
+    // diverge whenever the user customizes their zones in Connect.
+    //
+    // Note: when zoneBpm IS set, we do NOT fall through to Path 1/2 if
+    // Path 0 fails. Path 1/2 are watch-computed and may use %HRmax —
+    // returning those would silently re-introduce the mismatch. Better
+    // to return null and let synthesizeZonesFromAvgHR (which now bins
+    // by bpm boundaries) take over with an explicit "est." label.
+    if (zoneBpm) {
+      const records = messages.recordMesgs || [];
+      const fromBpm = binRecordsToBpmZones(records, zoneBpm);
+      return fromBpm;  // Path 0 result OR null — never fall through.
+    }
+    // Path 1: session has the explicit time-in-zone array (watch-computed,
+    // scheme depends on the watch's zone config).
     if (Array.isArray(session.timeInHrZone) && session.timeInHrZone.length === 5) {
       return session.timeInHrZone.map(v => Math.round(parseFloat(v) || 0));
     }
+    // Path 2: session has the per-zone numbered fields (also watch-computed).
     const zones = [];
+    let allFound = true;
     for (let i = 1; i <= 5; i++) {
       const candidates = [
         session[`timeInHrZone_${i}`],
@@ -231,10 +298,34 @@ export async function parseFITFile(file) {
         session[`time_in_hr_zone_${i}`],
       ];
       const v = candidates.find(x => x != null);
-      if (v == null) return null;
+      if (v == null) { allFound = false; break; }
       zones.push(Math.round(parseFloat(v) || 0));
     }
-    return zones;
+    if (allFound && zones.length === 5) return zones;
+
+    // Phase 4r.zones.1 — Path 3 (local %HRmax binning) was REMOVED.
+    //
+    // It walked the raw HR record stream and binned each sample against
+    // fixed %HRmax thresholds (60/72/82/90%). The problem: Garmin Connect
+    // lets the user configure CUSTOM bpm-based zone boundaries (e.g. Z2
+    // = 123-136 bpm Easy, Z3 = 137-150 bpm Aerobic), and most users do.
+    // The %HRmax binner ignored those personalized boundaries, so a
+    // sample at 81% maxHR landed in Path-3-Z4 (≥80%) while Garmin
+    // showed it in user-configured-Z2 (123-136 bpm). On a typical
+    // easy run, the displayed zones came out 2 buckets too high — Z4
+    // 68% / Z5 27% for what Garmin reported as Z2 68% / Z3 27%.
+    //
+    // Worse, once Path 3 wrote hrZones, the Garmin worker enrichment
+    // skipped the activity (it only re-fetches when hrZones == null),
+    // so the wrong bins became permanent and the authoritative bpm
+    // zones never reached storage.
+    //
+    // Now: if the FIT session doesn't ship a time-in-zone array, we
+    // return null. Downstream, the Garmin worker enriches from the
+    // activity DTO (which uses the user's authoritative bpm zones), or
+    // synthesizeZonesFromAvgHR renders an explicitly-labeled "est."
+    // estimate at display time.
+    return null;
   })();
 
   // EPOC / Total Training Load — Garmin's measure of aerobic + anaerobic
@@ -259,6 +350,110 @@ export async function parseFITFile(file) {
     const tM   = sec(session.timeForMarathon ?? session.predictedTimeMarathon);
     if (t5k == null && t10k == null && tHM == null && tM == null) return null;
     return { t5k, t10k, tHM, tM };
+  })();
+
+  // ── HR Recovery (Phase 4m.1.5) ─────────────────────────────────────────
+  // Heart-rate recovery is the drop in BPM in the first 60 seconds after
+  // peak exertion — a clean autonomic-nervous-system fitness signal.
+  // Larger drop = better parasympathetic reactivation = better cardio
+  // fitness for the load you just absorbed.
+  //
+  // Garmin sometimes records a `recoveryHeartRate` field on the session
+  // (newer firmware), but it's not consistently present. The robust path
+  // is to compute it from the record stream: find the peak HR sample,
+  // then find the sample 60s after it, and subtract.
+  //
+  // Output is the bpm DROP (positive number = good). Returns null when:
+  //   • not a run (the metric only makes sense for cardio)
+  //   • run shorter than 10 min (peak is noisy on warmups)
+  //   • record stream doesn't extend ≥60s past the peak (no cooldown)
+  //   • peak HR or post-peak HR clamps fail physiology checks
+  const hrRecovery = (() => {
+    if (!isRun) return null;
+    if (durationSecs < 10 * 60) return null;
+    // 1. Try session-level field first — fastest path when present.
+    const direct = session.recoveryHeartRate
+                 ?? session.heartRateRecovery
+                 ?? session.hrRecovery
+                 ?? session.recovery_heart_rate
+                 ?? null;
+    if (direct != null) {
+      const v = parseInt(direct, 10);
+      // Garmin sometimes records this as the final-resting HR, sometimes
+      // as the drop. Keep numbers in a sensible range either way (10-100
+      // bpm drop is plausible; below 10 likely a parsing artifact).
+      if (Number.isFinite(v) && v >= 5 && v <= 120) return v;
+    }
+    // 2. Record-level fallback. Walk the record stream, identify the
+    //    peak HR sample, then look for a sample ~60s after it.
+    const records = messages.recordMesgs || [];
+    if (records.length < 30) return null;
+    const samples = records
+      .map(r => ({
+        t: r.timestamp instanceof Date ? r.timestamp.getTime() : null,
+        hr: parseFloat(r.heartRate),
+      }))
+      .filter(s => s.t != null && Number.isFinite(s.hr) && s.hr >= 60 && s.hr <= 220);
+    if (samples.length < 30) return null;
+    let peakIdx = 0;
+    for (let i = 1; i < samples.length; i++) {
+      if (samples[i].hr > samples[peakIdx].hr) peakIdx = i;
+    }
+    const peak = samples[peakIdx];
+    const targetT = peak.t + 60_000; // 60 seconds after peak
+    // Find the closest sample at or after targetT. If we don't have one
+    // (peak was within the last minute of the run), bail — we can't
+    // compute recovery without the cooldown window.
+    let postIdx = -1;
+    for (let i = peakIdx + 1; i < samples.length; i++) {
+      if (samples[i].t >= targetT) { postIdx = i; break; }
+    }
+    if (postIdx === -1) return null;
+    const drop = Math.round(peak.hr - samples[postIdx].hr);
+    if (!Number.isFinite(drop) || drop < 0 || drop > 120) return null;
+    return drop;
+  })();
+
+  // ── GAP (Grade-Adjusted Pace) — Phase 4m.1.5 ─────────────────────────
+  // Average GAP across the whole run, computed from records. For routes
+  // with significant elevation, GAP is the truer "effort pace" because
+  // it equalizes for hills using the standard formula:
+  //   adj_speed = speed * (1 + grade * 0.033)   (Strava's published curve)
+  // grade = altitude delta / horizontal delta; clamped to ±25%.
+  // Output: pace string in MM:SS per mile; null when records insufficient
+  // or the route is essentially flat (no point cluttering the tile).
+  const gapPerMi = (() => {
+    if (!isRun || distanceM <= 0 || durationSecs < 10 * 60) return null;
+    const records = messages.recordMesgs || [];
+    if (records.length < 60) return null;
+    const samples = records.map(r => ({
+      speed: parseFloat(r.enhancedSpeed ?? r.speed),
+      alt:   parseFloat(r.enhancedAltitude ?? r.altitude),
+      dist:  parseFloat(r.distance),
+    })).filter(s => Number.isFinite(s.speed) && s.speed > 0.5);
+    if (samples.length < 60) return null;
+    // If altitude is missing for most samples, no point computing GAP.
+    const withAlt = samples.filter(s => Number.isFinite(s.alt));
+    if (withAlt.length < samples.length * 0.5) return null;
+    let totalAdjDist = 0;
+    let totalTimeSecs = 0;
+    for (let i = 1; i < samples.length; i++) {
+      const prev = samples[i - 1];
+      const cur = samples[i];
+      const dDist = (cur.dist != null && prev.dist != null) ? (cur.dist - prev.dist) : 0;
+      if (!(dDist > 0)) continue;
+      const dAlt = (Number.isFinite(cur.alt) && Number.isFinite(prev.alt)) ? (cur.alt - prev.alt) : 0;
+      const grade = Math.max(-0.25, Math.min(0.25, dAlt / dDist));
+      const adjFactor = 1 + grade * 0.033;
+      totalAdjDist += dDist * adjFactor;
+      totalTimeSecs += dDist / cur.speed;
+    }
+    if (totalAdjDist <= 0 || totalTimeSecs <= 0) return null;
+    // Bail if the difference vs raw pace is < 2s/mi — no value to report.
+    const adjPaceSecsPerMi = (totalTimeSecs / totalAdjDist) * 1609.344;
+    const rawPaceSecsPerMi = durationSecs / distanceMi;
+    if (Math.abs(adjPaceSecsPerMi - rawPaceSecsPerMi) < 2) return null;
+    return fmt(adjPaceSecsPerMi);
   })();
 
   // Aerobic Decoupling — measures HR drift relative to pace over the course
@@ -384,6 +579,10 @@ export async function parseFITFile(file) {
     totalTrainingLoad,  // EPOC equivalent — single number, demand on recovery
     racePredictor,      // {t5k, t10k, tHM, tM} in seconds — or null
     aerobicDecoupling,  // % drift in HR/pace ratio between first and second half — null if not computable
+
+    // Phase 4m.1.5 — newly extracted Run KRIs
+    hrRecovery,         // bpm drop in the 60s after peak HR — null if not computable
+    gapPerMi,           // grade-adjusted pace per mile (MM:SS) — null when route is flat or records insufficient
 
     source: { type: 'fit', filename: file.name },
   };

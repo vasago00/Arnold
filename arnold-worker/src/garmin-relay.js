@@ -391,6 +391,24 @@ export async function fetchActivityFitZip(accessToken, activityId) {
 //   2. /userprofile-service/userprofile — vO2MaxRunning / vO2MaxCycling
 //   3. /usersummary-service/usersummary/daily/{date} — vO2MaxValue field
 //   4. /biometric-service/biometric/biometric_VO2MAX_RUNNING/latest
+// ── Weight / body composition (Phase 4r.energy.5) ───────────────────────────
+// Pulls every weigh-in in the requested window with full body-composition
+// fields (weight, BF%, body water %, muscle mass, bone mass, BMI, visceral
+// fat, metabolic age, sample timestamp). Replaces the Health Connect path
+// for users with the Worker configured, which previously collapsed same-day
+// weigh-ins to one row and stripped body-comp fields.
+//
+// Garmin's weight-service endpoint accepts a date range. The response is a
+// JSON object with { dateWeightList: [...] } or sometimes { totalAverage,
+// dailyWeightSummaries: [...] } depending on the account/version — we pass
+// the raw payload through and let the client tolerate both shapes.
+export async function fetchWeightRange(accessToken, startDate, endDate) {
+  return apiGet(
+    `/weight-service/weight/range/${encodeURIComponent(startDate)}/${encodeURIComponent(endDate)}?includeAll=true`,
+    accessToken,
+  );
+}
+
 export async function fetchUserProfileVO2Max(accessToken, displayName) {
   const headers = {
     'Authorization': `Bearer ${accessToken}`,
@@ -687,6 +705,39 @@ export async function handleGarminActivityFit(request, env, activityId) {
         'Access-Control-Expose-Headers': 'X-Activity-Id, Content-Disposition',
       },
     });
+  } catch (e) {
+    const msg = String(e.message || e);
+    return jsonResp(errStatus(msg), { error: 'garmin_failed', detail: msg });
+  }
+}
+
+// ── Weight / body composition handler (Phase 4r.energy.5) ───────────────────
+// Body: { user, pass, startDate?, endDate? }
+//   startDate / endDate are YYYY-MM-DD strings. If omitted, defaults to the
+//   last 30 days ending today (Garmin's range endpoint requires both).
+// Returns: { weighIns: <raw garmin payload>, fetchedAt }
+//   The client (garmin-weight-client.js) tolerates several payload shapes
+//   from Garmin (dateWeightList, dailyWeightSummaries, top-level array), so
+//   we pass the response through verbatim under a `weighIns` wrapper.
+export async function handleGarminWeight(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp(400, { error: 'bad_json' }); }
+  const { user, pass } = body || {};
+  if (!user || !pass) return jsonResp(400, { error: 'missing_credentials' });
+
+  // Sensible defaults: last 30 days. Garmin's range endpoint requires both
+  // endpoints, so we compute them server-side when the client omits them.
+  const today = new Date();
+  const defaultEnd   = today.toISOString().slice(0, 10);
+  const past30 = new Date(today.getTime() - 30 * 86400 * 1000);
+  const defaultStart = past30.toISOString().slice(0, 10);
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.startDate)) ? body.startDate : defaultStart;
+  const endDate   = /^\d{4}-\d{2}-\d{2}$/.test(String(body.endDate))   ? body.endDate   : defaultEnd;
+
+  try {
+    const { access_token } = await getGarminAccessToken(user, pass, env);
+    const weighIns = await fetchWeightRange(access_token, startDate, endDate);
+    return jsonResp(200, { weighIns, startDate, endDate, fetchedAt: Date.now() });
   } catch (e) {
     const msg = String(e.message || e);
     return jsonResp(errStatus(msg), { error: 'garmin_failed', detail: msg });

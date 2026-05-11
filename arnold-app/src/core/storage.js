@@ -25,6 +25,17 @@ function emitStorageChange(fullKey) {
   if (_cloudApplying) return;
   for (const fn of _changeListeners) { try { fn(fullKey); } catch { /* ignore */ } }
 }
+// Phase 4o.mobile.11 — synthetic notify, bypasses the cloud-applying
+// guard. cloud-sync.applySnapshot calls this AFTER it finishes applying
+// a remote pull so React hooks (useStorageVersion) re-render with the
+// new data. Cloud-sync's own listener short-circuits this to avoid a
+// feedback push loop (it checks a one-shot flag we set just before).
+let _suppressCloudPush = false;
+export function setSuppressCloudPush(v) { _suppressCloudPush = !!v; }
+export function isCloudPushSuppressed() { return _suppressCloudPush; }
+export function notifyStorageChanged(fullKey = '__cloud_apply__') {
+  for (const fn of _changeListeners) { try { fn(fullKey); } catch { /* ignore */ } }
+}
 
 // ─── AES-256-GCM Encryption at Rest ─────────────────────────────────────────
 // Session-key approach: a random AES key is generated once per browser session
@@ -232,6 +243,7 @@ export const KEYS = {
   labSnapshots:  'arnold:lab-snapshots',       // Lab/blood panel results — previously only inside the vitals-v4 blob (not synced). Now in KEYS so cloud-sync propagates labs entered on web to paired devices.
   clinicalTests: 'arnold:clinical-tests',      // Clinical test records (RMR, DEXA, etc.) — same migration as labSnapshots.
   startTilePrefs: 'arnold:start-tile-prefs',  // Phase 4b: user's chosen Start-screen tiles per category (run/strength/recovery/body). Shape: { run: ['avgHR','cadence',...], strength: [...], recovery: [...], body: [...] }. Min 2, max 4 per category. Syncs cross-device via LWW.
+  fullSyncMeta:  'arnold:full-sync-meta',     // Phase 4o.fullsync.1: last-success timestamps per source ({ garminActivities: { lastOkAt, lastResult, ... }, ... }). Local-only — each device tracks its own freshness.
 
   // User-owned
   workouts:      'arnold:workouts',

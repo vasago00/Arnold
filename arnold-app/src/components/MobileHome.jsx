@@ -47,6 +47,8 @@ import {
   STATUS_COLORS,
   STATUS_ICONS,
 } from "../core/derive/tileMetrics.js";
+import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
+import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
 
 // ─── Local date helper (avoids UTC rollover bug with toISOString) ───────────
 const localDate = (d = new Date()) =>
@@ -544,6 +546,84 @@ const NAV_ICONS = {
   more:   (c) => <Icon.Dots color={c} />,
 };
 
+// Phase 4q.header.1 — tab id → nav id mapping. Arnold.jsx uses internal
+// tab ids ('activity', 'nutrition_mobile', etc.) but the nav uses friendly
+// ids ('play', 'fuel'). This map lets the page header pull the same icon
+// the bottom-nav uses for the active tab.
+export const TAB_TO_NAV_ID = {
+  weekly:           'edgeiq',
+  activity:         'play',
+  nutrition_mobile: 'fuel',
+  clinical:         'core',
+  labs:             'labs',
+  // Drill-downs without their own bottom-nav slot — fall back to "more".
+  daily:            'more',
+  races:            'more',
+  goals:            'more',
+  supplements:      'more',
+  settings:         'more',
+};
+
+// Phase 4q.header.1 — pretty labels per tab id, used by the unified
+// page header. Keep aligned with NAV_ITEMS labels for the primary slots.
+export const TAB_LABEL = {
+  weekly:           'EdgeIQ',
+  activity:         'Play',
+  nutrition_mobile: 'Fuel',
+  clinical:         'Core',
+  labs:             'Labs',
+  daily:            'Daily Log',
+  races:            'Races',
+  goals:            'Goals',
+  supplements:      'Stack',
+  settings:         'Settings',
+};
+
+// Phase 4q.header.1 — direct nav-id → Icon component map so the page
+// header can pass `size` through (NAV_ICONS only accepts color since
+// the bottom nav renders at the default 19 px).
+const NAV_TAB_ICON_CMP = {
+  start:  Icon.PspX,
+  edgeiq: Icon.GemSpark,
+  play:   Icon.Bolt,
+  fuel:   Icon.GasPump,
+  core:   Icon.Pulse,
+  labs:   Icon.Pipe,
+  more:   Icon.Dots,
+};
+
+// Render the bottom-nav icon for a given tab id, tinted in the active
+// color and sized for the page header (smaller than the bottom nav's
+// 19px so it sits balanced with the title text).
+export function NavIconForTab({ tabId, color, size = 16 }) {
+  const navId = TAB_TO_NAV_ID[tabId];
+  const Cmp = NAV_TAB_ICON_CMP[navId];
+  if (!Cmp) return null;
+  return <Cmp color={color || C.blue} size={size} />;
+}
+
+// Public color export — same as the bottom-nav active blue. Lets Arnold.jsx
+// pull the matching color without re-defining it.
+export const TAB_ACTIVE_COLOR = C.blue;
+
+// Phase 4q.header.2 — per-tab accent color so each page header reads
+// thematically: bolt yellow on Play, pulse red on Core, gem purple on
+// EdgeIQ, etc. Used to tint the page-header icon (NOT the bottom-nav
+// active state, which stays consistent blue across all tabs).
+export const TAB_ACCENT_COLOR = {
+  weekly:           C.purple,  // EdgeIQ — gem
+  activity:         C.amber,   // Play   — bolt (yellow)
+  nutrition_mobile: C.green,   // Fuel   — nutrition theme
+  clinical:         C.red,     // Core   — pulse / heart
+  labs:             C.cyan,    // Labs   — clinical / pipe
+  // Drill-downs without their own primary slot — quieter accent.
+  daily:            C.blue,
+  races:            C.amber,
+  goals:            C.green,
+  supplements:      C.purple,
+  settings:         T3,
+};
+
 // ─── Shared styles ──────────────────────────────────────────────────────────
 const card = {
   background: CARD_BG,
@@ -580,15 +660,110 @@ function Header({ greeting, profileName }) {
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 9, color: C.blue, fontWeight: 800,
           }}>A</div>
-          <span style={{ fontSize: 9, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
         </div>
         <div style={{ fontSize: 14, fontWeight: 600, color: T2, marginTop: 3 }}>
           {greeting}, {profileName || 'friend'}
         </div>
       </div>
       <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: 9, color: T4 }}>{date}</div>
+        {/* Phase 4q.header.6 — date styling unified with the drill-down
+            tabs (Play/Fuel/Core/Labs/etc), defined in Arnold.jsx. Both
+            now read fontSize 11, weight 500, var(--text-muted), 0.04em
+            tracking, marginTop 4. */}
+        <div style={{
+          fontSize: 11, fontWeight: 500,
+          color: 'var(--text-muted)',
+          letterSpacing: '0.04em',
+          whiteSpace: 'nowrap',
+          marginTop: 4,
+        }}>{date}</div>
       </div>
+    </div>
+  );
+}
+
+// ─── PULL-TO-REFRESH ─────────────────────────────────────────────────────────
+// Standard mobile gesture: pull down from the top of the page past a
+// threshold to trigger a refresh. Capacitor doesn't ship a built-in
+// pull-to-refresh, so this is a touch-event implementation that:
+//   • Only activates when scrollY === 0 (the page is scrolled to top)
+//   • Tracks finger Y delta with damping so the indicator feels physical
+//   • Past the trigger threshold (80 px) commits to refresh on release
+//   • Below threshold snaps back to zero
+// During refresh the indicator pins to the top showing a spinner, then
+// fades when sync completes. The wrapped content slides down with the
+// indicator so the gesture feels grounded in the UI rather than detached.
+function usePullToRefresh(onRefresh, { threshold = 80, max = 140 } = {}) {
+  const [pullY, setPullY] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const startY = useRef(0);
+  const tracking = useRef(false);
+
+  const onTouchStart = (e) => {
+    if (refreshing) return;
+    if ((window.scrollY || document.documentElement.scrollTop || 0) > 0) {
+      tracking.current = false;
+      return;
+    }
+    tracking.current = true;
+    startY.current = e.touches[0].clientY;
+  };
+
+  const onTouchMove = (e) => {
+    if (!tracking.current || refreshing) return;
+    const dy = e.touches[0].clientY - startY.current;
+    if (dy <= 0) { setPullY(0); return; }
+    // Damping: feels natural and prevents over-pull
+    const damped = Math.min(max, dy * 0.55);
+    setPullY(damped);
+    // Block native scroll when we're actively pulling
+    if (dy > 4 && e.cancelable) e.preventDefault();
+  };
+
+  const onTouchEnd = async () => {
+    if (!tracking.current || refreshing) {
+      tracking.current = false;
+      return;
+    }
+    tracking.current = false;
+    if (pullY >= threshold) {
+      setRefreshing(true);
+      // Pin the indicator at threshold height while refreshing
+      setPullY(threshold);
+      try { await onRefresh(); } catch (err) { console.warn('[pull-to-refresh] failed', err); }
+      setRefreshing(false);
+      setPullY(0);
+    } else {
+      setPullY(0);
+    }
+  };
+
+  return { pullY, refreshing, threshold, onTouchStart, onTouchMove, onTouchEnd };
+}
+
+function PullToRefreshIndicator({ pullY, refreshing, threshold }) {
+  const progress = Math.min(1, pullY / threshold);
+  const ready = progress >= 1;
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0,
+      height: pullY,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      pointerEvents: 'none',
+      transition: refreshing ? 'none' : 'height 0.18s ease-out',
+      zIndex: 50,
+    }}>
+      <div style={{
+        width: 26, height: 26, borderRadius: '50%',
+        border: `2px solid ${ready || refreshing ? C.blue : 'rgba(140,150,170,0.35)'}`,
+        borderTopColor: refreshing ? 'transparent' : (ready ? C.blue : 'rgba(140,150,170,0.35)'),
+        transform: refreshing ? 'none' : `rotate(${progress * 360}deg)`,
+        animation: refreshing ? 'arnold-ptr-spin 0.85s linear infinite' : 'none',
+        opacity: Math.min(1, progress + (refreshing ? 1 : 0)),
+        transition: refreshing ? 'none' : 'transform 0.05s linear, border-color 0.18s',
+      }} />
+      <style>{`@keyframes arnold-ptr-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -787,16 +962,16 @@ export function DcyDetails({ dcyDaily }) {
         <div>
           <SectionHead>
             Fuel — N {(N * 100).toFixed(0)}%
-            {nut.forecastMode === 'projected' && (
+            {nut.forecastMode === 'partial' && (
               <span
-                title={`Today is in progress. N is a forecast blending ${Math.round((nut.forecastAlpha || 0) * 100)}% live intake with ${Math.round((1 - (nut.forecastAlpha || 0)) * 100)}% of your 14-day baseline.`}
+                title={`Today is in progress. N reflects what you've logged so far — it'll rise as you eat. Projected end-of-day total shown below.`}
                 style={{
                   marginLeft: 8, fontSize: 9, padding: '1px 6px', borderRadius: 6,
                   background: 'rgba(107,171,223,0.15)', color: C.blue,
                   letterSpacing: '0.04em', fontWeight: 600, textTransform: 'none',
                 }}
               >
-                Projected
+                In progress
               </span>
             )}
           </SectionHead>
@@ -809,15 +984,10 @@ export function DcyDetails({ dcyDaily }) {
           <Row label="Hydration" value={`${intake.waterL ?? '—'} / ${tgt.waterL ?? '—'} L`}
             hint={sub.hydro != null ? `${(sub.hydro * 100).toFixed(0)}%` : '—'}
             color={sub.hydro != null ? warnIf(sub.hydro * 100) : T1} />
-          {nut.forecastMode === 'projected' && nut.live && (
-            <>
-              <Row label="Logged so far"
-                value={`${nut.live.calories ?? '—'} kcal · ${nut.live.protein ?? '—'} g`}
-                hint={`${Math.round((nut.forecastElapsed || 0) * 100)}% of day elapsed`} />
-              <Row label="Blend"
-                value={`${Math.round((nut.forecastAlpha || 0) * 100)}% live · ${Math.round((1 - (nut.forecastAlpha || 0)) * 100)}% baseline`}
-                hint={`${nut.baselineDays || 0}-day avg`} />
-            </>
+          {nut.forecastMode === 'partial' && nut.projected && (
+            <Row label="Projected finish"
+              value={`${nut.projected.calories ?? '—'} kcal · ${nut.projected.protein ?? '—'} g`}
+              hint={`${Math.round((nut.forecastElapsed || 0) * 100)}% of day elapsed · ${nut.baselineDays || 0}-day avg`} />
           )}
           <Row label="BMR → TDEE" value={`${nut.bmr ?? '—'} → ${nut.tdee ?? '—'}`}
             hint={`bmr T${nut.bmrTier || '?'} · tdee T${nut.tdeeTier || '?'} · burn ${nut.activityBurn ?? 0} · TEF ${nut.tef ?? 0}`} />
@@ -954,10 +1124,19 @@ function CategoryLabel({ label, color }) {
 }
 
 // ─── METRIC TILE (Today value + semicircle gauge for 30d avg) ────────────────
-function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, avg30Label, gaugePct, color, statusIcon, statusIconColor, onTap }) {
+function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, avg30Label, gaugePct, color, statusIcon, statusIconColor, onTap, source, autoReasons }) {
   // Status is communicated through a tiny glyph next to the trend line:
   // The top accent stripe also gets stronger when status is set so a glance
   // across a row of tiles surfaces ones that need attention.
+  // ── Phase 4o.autopromote.3 — star indicator ──
+  // Filled star  ★ = manually pinned by the user (Trend tab star toggle)
+  // Hollow star  ☆ = auto-promoted by the scoring system
+  // The hollow star carries the top auto-promote reason as a title so the
+  // user can long-press / hover to see why the tile bubbled up.
+  const isAuto = source === 'auto';
+  const reasonText = isAuto && Array.isArray(autoReasons) && autoReasons.length
+    ? `Auto-promoted: ${autoReasons.slice(0, 2).join(' · ')}`
+    : null;
   return (
     <div onClick={onTap} style={{
       ...card, borderRadius: 14, padding: '8px 10px 6px',
@@ -965,6 +1144,24 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
     }}>
       {/* Top accent — stronger when status color is set, subtler otherwise */}
       <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.7 }} />
+
+      {/* Source star — top-right corner, very subtle */}
+      {source ? (
+        <span
+          title={reasonText || 'Pinned'}
+          aria-label={reasonText || 'Pinned'}
+          style={{
+            position: 'absolute', top: 5, right: 8,
+            fontSize: 10, lineHeight: 1,
+            color: isAuto ? T4 : color,
+            opacity: isAuto ? 0.55 : 0.85,
+            fontWeight: 600,
+            pointerEvents: 'none',
+          }}
+        >
+          {isAuto ? '☆' : '★'}
+        </span>
+      ) : null}
 
       {/* Label */}
       <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
@@ -977,10 +1174,10 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
             <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: T1 }}>{todayVal}</span>
             {todayUnit ? <span style={{ fontSize: 9, color: T3, marginLeft: 2 }}>{todayUnit}</span> : null}
           </div>
-          <div style={{ fontSize: 8, fontWeight: 600, color: trendColor || T3, marginTop: 3, height: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: trendColor || T3, marginTop: 3, height: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
             <span>{trendText || '\u00A0'}</span>
             {statusIcon ? (
-              <span style={{ fontSize: 9, fontWeight: 700, color: statusIconColor || T3, lineHeight: 1 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: statusIconColor || T3, lineHeight: 1 }}>
                 {statusIcon}
               </span>
             ) : null}
@@ -990,8 +1187,8 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
         {/* Right: semicircle arc + value below + label */}
         <div style={{ flexShrink: 0, width: 44, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <MiniArcGauge pct={gaugePct} color={color} />
-          <div style={{ fontSize: 10, fontWeight: 700, color, lineHeight: 1, marginTop: 0 }}>{avg30}</div>
-          <div style={{ fontSize: 7, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color, lineHeight: 1, marginTop: 0 }}>{avg30}</div>
+          <div style={{ fontSize: 9, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>
             {avg30Label || '30d avg'}
           </div>
         </div>
@@ -1486,9 +1683,9 @@ export function BottomNavBar({ activeNav, onNavTap }) {
               {NAV_ICONS[item.id]?.(iconColor)}
             </div>
 
-            {/* Label */}
+            {/* Label — 10px (was 8px) for legibility per WCAG floor */}
             <span style={{
-              fontSize: 8, fontWeight: isActive ? 700 : 500,
+              fontSize: 10, fontWeight: isActive ? 700 : 500,
               color: isActive ? C.blue : T4,
               letterSpacing: '0.02em', transition: 'color 0.2s',
             }}>
@@ -1715,6 +1912,13 @@ function MobileCoachingStrip() {
 function MobileHomeInner({ data, onOpenTab, initialView }) {
   // ── ALL data from single hook — no Arnold.jsx prop dependencies ──
   const D = useMobileData();
+  // Subscribe to storage version so tile-pin toggles from Trend (which
+  // mutate `startTilePrefs`) propagate here without a manual reload —
+  // Phase 4o.mobile.8 fix. The earlier setup memoized tilePrefs against
+  // a fresh `storage.get(...)` ref each render, but with no parent
+  // signal the parent never re-rendered, so the memo was never
+  // recomputed when the Trend toggle wrote new prefs.
+  const storageVersion = useStorageVersion();
   const [activeNav, setActiveNav] = useState(initialView || 'start');
   const [moreOpen, setMoreOpen] = useState(false);
 
@@ -1941,9 +2145,25 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   // Pull the user's per-category metric selections from storage; fall back
   // to DEFAULT_TILE_PREFS for first-run installs. The tile registry knows
   // how to compute each metric from the same data we already loaded.
+  // Re-reads on every storage version bump — so a star toggle from the
+  // Trend tab updates this Start screen the moment the user navigates back.
   const tilePrefs = useMemo(
-    () => normalizeTilePrefs(storage.get('startTilePrefs') || DEFAULT_TILE_PREFS),
-    [storage.get('startTilePrefs')]
+    () => {
+      const raw = storage.get('startTilePrefs');
+      const norm = normalizeTilePrefs(raw || DEFAULT_TILE_PREFS);
+      // Tile-sync diagnostic — fires every time storageVersion bumps so we
+      // can confirm the mobile Start screen IS re-reading tilePrefs after
+      // a Cloud Sync apply (and what the just-read value actually is).
+      try {
+        console.info('[tilesync][mobile] tilePrefs re-read', {
+          storageVersion,
+          rawHas: !!raw,
+          run: norm.run, strength: norm.strength, recovery: norm.recovery, body: norm.body,
+        });
+      } catch {}
+      return norm;
+    },
+    [storageVersion]
   );
   const tileCtx = useMemo(() => buildTileContext({
     activities: getUnifiedActivities(),
@@ -1963,11 +2183,47 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   const CATEGORY_COLOR = { run: C.blue, strength: C.purple, recovery: C.green, body: C.amber };
   const CATEGORY_TAP   = { run: 'activity', strength: 'activity', recovery: 'clinical', body: 'clinical' };
 
+  // ── Phase 4o.autopromote.2 — Auto-promote context ──
+  // Drives scoreTile()'s session-relevance + coaching-match bumps.
+  // sessionType: today's primary activity classification, or 'rest' if nothing logged.
+  // activePrompts: top coaching prompts so coachingMatch can fire when a
+  //   prompt is flagging this metric's pillar.
+  // today: ISO date string for stale-data freshness penalty.
+  const promoCtx = useMemo(() => {
+    const today = localDate();
+    // Classify today's activities into a single session-type label.
+    const acts = getUnifiedActivities().filter(a => (a.date || '').startsWith(today));
+    let sessionType = 'rest';
+    if (acts.length) {
+      const hasRun = acts.some(isRun);
+      const hasStrength = acts.some(isStrength);
+      const hasHIIT = acts.some(isHIIT);
+      if (hasRun && hasStrength) sessionType = 'mixed';
+      else if (hasHIIT && hasStrength) sessionType = 'hyrox';
+      else if (hasRun) sessionType = 'run';
+      else if (hasStrength) sessionType = 'strength';
+      else sessionType = 'mixed'; // mobility / yoga / other
+    }
+    let activePrompts = [];
+    try { activePrompts = getTopCoachingPrompts(5) || []; } catch {}
+    return { sessionType, activePrompts, today, tileCtx, maxSlots: 4 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageVersion, tileCtx]);
+
+  // Resolve manual pins → manual + auto-promoted ordered lists per category.
+  // Memoized on storageVersion + today so we re-run only when storage actually
+  // changes, not on every parent render. Each entry has { id, source, score?, reasons? }.
+  const resolvedTiles = useMemo(
+    () => resolveAllStartTiles(tilePrefs, TILE_METRICS, promoCtx),
+    [tilePrefs, promoCtx]
+  );
+
   const tilesForCategory = (category) => {
-    const ids = tilePrefs[category] || [];
+    const entries = resolvedTiles[category] || [];
     const color = CATEGORY_COLOR[category];
     const tapTab = CATEGORY_TAP[category];
-    return ids.map(id => {
+    return entries.map(entry => {
+      const id = entry.id;
       const m = getMetric(id);
       if (!m) return null;
       const result = evaluate(m, tileCtx); // runs compute + back-fills status/trend
@@ -1978,6 +2234,8 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
           avg30: '—', avg30Label: '',
           gaugePct: 0, tileColor: color, tapTab,
           metricId: id,
+          source: entry.source,
+          autoReasons: entry.reasons || null,
         };
       }
       // ── Status → subtle icon next to the trend line ──
@@ -2030,6 +2288,10 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         hrZones: result.hrZones || null,
         status: result.status || null,
         metricId: id,
+        // Phase 4o.autopromote.2 — passed through so the renderer can show
+        // a hollow vs filled star and surface the score reasons on long-press.
+        source: entry.source,
+        autoReasons: entry.reasons || null,
       };
     }).filter(Boolean);
   };
@@ -2107,34 +2369,60 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
           : (a.activityType || a.title || 'Activity');
         const mins = Math.round((Number(a.durationSecs) || (Number(a.durationMins) || 0) * 60) / 60);
         const miles = a.distanceMi ? `${Number(a.distanceMi).toFixed(1)} mi · ` : '';
-        const canon = activityKind(a);
-        const dedupKey = `${canon}|${(Number(a.distanceMi) || 0).toFixed(1)}|${mins}`;
+        // Dedup keys (Phase 4o.mobile.10) — return MULTIPLE candidate
+        // identifiers per item, treat ANY overlap as a match. Same-session
+        // copies in two storage locations rarely agree on every field:
+        //   • Garmin Worker imports get a `source.activityId`
+        //   • Manual FIT uploads lack the activityId but share `time`
+        //   • Both share duration + distance from the FIT itself
+        // The previous single-key approach picked one identifier and
+        // ignored the others, so a Garmin-worker copy keyed by
+        // activityId never collided with a manual-upload copy keyed
+        // by time. Multi-key matching fixes that.
+        const dedupKeys = [];
+        const aid = a.source?.activityId || a.activityId || null;
+        if (aid) dedupKeys.push(`gid:${aid}`);
+        const startTime = a.startTime || a.time || '';
+        if (startTime) dedupKeys.push(`t:${startTime}|${mins}`);
+        // Loose duration+distance fallback — almost always matches even
+        // when no shared identifier exists. False-positive risk: two
+        // separate strength sessions of identical minutes on the same
+        // day, both 0 distance — extremely rare in practice.
+        dedupKeys.push(`shape:${mins}m|${(Number(a.distanceMi) || 0).toFixed(2)}`);
         const iconType = iconTypeFor(a);
         return {
           kind,
           summary: `${miles}${mins} min`,
           iconType,
-          dedupKey,
+          dedupKeys,
         };
       };
       // 1. Structured activities (already filtered for HC ghost data).
       const acts = (storage.get('activities') || [])
         .filter(a => a && a.date === today && a.source !== 'health_connect');
-      const items = acts.map(summarize);
-      const seen = new Set(items.map(i => i.dedupKey));
+      const items = [];
+      const seen = new Set();
+      const addIfNew = (a) => {
+        const it = summarize(a);
+        // Multi-key match (Phase 4o.mobile.10): if ANY of the item's
+        // candidate identifiers overlap with an already-seen key, treat
+        // it as a duplicate and skip. This catches same-session copies
+        // that have an activityId in one store and only a timestamp in
+        // the other.
+        if ((it.dedupKeys || []).some(k => seen.has(k))) return;
+        (it.dedupKeys || []).forEach(k => seen.add(k));
+        items.push(it);
+      };
+      for (const a of acts) addIfNew(a);
 
       // 2. Today's FIT uploads from dailyLogs (UploadPill writes here).
       const todayLog = (storage.get('dailyLogs') || []).find(l => l && l.date === today);
       const fits = todayLog?.fitActivities || (todayLog?.fitData ? [todayLog.fitData] : []);
       for (const fd of fits) {
         if (!fd) continue;
-        const it = summarize({ ...fd, date: today });
-        if (!seen.has(it.dedupKey)) {
-          items.push(it);
-          seen.add(it.dedupKey);
-        }
+        addIfNew({ ...fd, date: today });
       }
-      return items.map(({ dedupKey, ...rest }) => rest);
+      return items.map(({ dedupKeys, ...rest }) => rest);
     } catch { return []; }
   })();
   const hasTraining = todayDoneItems.length > 0;
@@ -2185,18 +2473,51 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
     return null;
   }
 
+  // Pull-to-refresh — drag down from the top of the Start screen to force
+  // a full sync (Cloud pull/push, Garmin, Cronometer, FIT relay). Replaces
+  // the stop-gap manual sync button with a native-feeling gesture.
+  const handleRefresh = async () => {
+    try {
+      const { syncEverything } = await import('../core/full-sync.js');
+      await syncEverything({ force: true });
+    } catch (e) { console.warn('[pull-to-refresh] sync failed', e); }
+  };
+  const ptr = usePullToRefresh(handleRefresh);
+
   // ── RENDER ──
   return (
-    <div style={{
-      background: BG, color: T1, minHeight: '100vh',
-      fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
-      padding: '0 10px 76px',
-      WebkitFontSmoothing: 'antialiased',
-      // Reserve horizontal touches for our swipe handler (browser keeps
-      // vertical pans for scrolling). Without this, on iOS/Android the
-      // browser sometimes intercepts horizontal swipes for back-nav.
-      touchAction: 'pan-y',
-    }} {...swipeHandlers}>
+    <div
+      style={{
+        background: BG, color: T1, minHeight: '100vh',
+        fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
+        // Phase 4q.frame.1 — unified 12px outer frame across every mobile
+        // screen. Was 10px on Start, 24px on EdgeIQ — now both match the
+        // 12px that Play/Fuel/Core/Labs use via .arnold-main.
+        padding: '0 12px 76px',
+        // Phase 4q.signatures.7 — hard-clamp width and clip horizontal
+        // overflow so a misbehaving child can't push the page wider than
+        // viewport (which was shoving the right column of KRI tiles
+        // off-screen).
+        width: '100%',
+        maxWidth: '100vw',
+        boxSizing: 'border-box',
+        overflowX: 'hidden',
+        WebkitFontSmoothing: 'antialiased',
+        // Reserve horizontal touches for our swipe handler (browser keeps
+        // vertical pans for scrolling). Without this, on iOS/Android the
+        // browser sometimes intercepts horizontal swipes for back-nav.
+        touchAction: 'pan-y',
+        // Shift the whole content down by the pull distance so the gesture
+        // feels grounded — the page follows the finger.
+        transform: `translateY(${ptr.pullY}px)`,
+        transition: ptr.refreshing || ptr.pullY === 0 ? 'transform 0.18s ease-out' : 'none',
+      }}
+      onTouchStart={(e) => { ptr.onTouchStart(e); swipeHandlers.onTouchStart?.(e); }}
+      onTouchMove={(e) => { ptr.onTouchMove(e); }}
+      onTouchEnd={(e) => { ptr.onTouchEnd(e); swipeHandlers.onTouchEnd?.(e); }}
+      onTouchCancel={(e) => { ptr.onTouchEnd(e); swipeHandlers.onTouchCancel?.(e); }}
+    >
+      <PullToRefreshIndicator pullY={ptr.pullY} refreshing={ptr.refreshing} threshold={ptr.threshold} />
 
       <Header greeting={greeting} profileName={profileName} />
 
@@ -2217,16 +2538,42 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         raceDistance={nextRace?.distanceMi ? `${nextRace.distanceMi} mi` : nextRace?.distanceKm ? `${nextRace.distanceKm} km` : ''}
       />
 
-      <CoachingHeroCard />
+      {/* ── Phase 4p.plan — Planned Workout Tile (mobile only) ──
+          Sits between the Hero rail and the legacy coaching card. When
+          the user has a planned workout (or it's race day), this tile
+          shows context: weather + targets pre-workout, summary + recovery
+          post-workout. When there's no plan / rest day, returns null and
+          the CoachingHeroCard below renders as the fallback. */}
+      <PlannedWorkoutTile
+        profile={{ ...(storage.get('profile') || {}), ...G }}
+        plannedToday={todayPlanned()}
+        nextRace={nextRace}
+        storageVersion={storageVersion}
+        onTap={() => onOpenTab?.('plan')}
+      />
+
+      {(() => {
+        // Hide CoachingHeroCard when the planned-workout tile rendered
+        // something — it's already carrying the "what to do" message.
+        // Show it as the fallback only on rest days / no-plan days.
+        const ws = getPlannedWorkoutState({
+          plannedToday: todayPlanned(),
+          nextRace,
+          storageVersion,
+        });
+        if (ws.kind !== 'none') return null;
+        return <CoachingHeroCard />;
+      })()}
 
       {/* ── RUN ── */}
       <CategoryLabel label="Run" color={C.blue} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 6, marginBottom: 6 }}>
         {runTiles.map((t, i) => (
-          <MetricTile key={`run-${i}`}
+          <MetricTile key={`run-${t.metricId || i}`}
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
+            source={t.source} autoReasons={t.autoReasons}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -2234,12 +2581,13 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
 
       {/* ── STRENGTH ── */}
       <CategoryLabel label="Strength" color={C.purple} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 6, marginBottom: 6 }}>
         {strengthTiles.map((t, i) => (
-          <MetricTile key={`str-${i}`}
+          <MetricTile key={`str-${t.metricId || i}`}
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
+            source={t.source} autoReasons={t.autoReasons}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -2247,12 +2595,13 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
 
       {/* ── RECOVERY ── */}
       <CategoryLabel label="Recovery" color={C.green} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 6, marginBottom: 6 }}>
         {recoveryTiles.map((t, i) => (
-          <MetricTile key={`rec-${i}`}
+          <MetricTile key={`rec-${t.metricId || i}`}
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
+            source={t.source} autoReasons={t.autoReasons}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -2260,12 +2609,13 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
 
       {/* ── BODY ── */}
       <CategoryLabel label="Body" color={C.amber} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 6, marginBottom: 6 }}>
         {bodyTiles.map((t, i) => (
-          <MetricTile key={`body-${i}`}
+          <MetricTile key={`body-${t.metricId || i}`}
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
+            source={t.source} autoReasons={t.autoReasons}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -2294,13 +2644,25 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         totalSessions={totalSessions || 0}
       />
 
-      {/* Today's Plan — completion state merged in. Each planned row that has
-          a matching done activity gets a green outline + check + summary
-          metrics inline. Unmatched done activities render as additional
-          "unplanned" rows. Replaces the previously-separate "Today's Activity"
-          card under this one. */}
-      <div style={sectionHeader}>Today's Plan <div style={shLine} /></div>
-      <TodaysPlan items={planItems} doneItems={todayDoneItems} onTap={() => onOpenTab?.('plan')} />
+      {/* Today's Plan — Phase 4p.plan.6: hidden when the PlannedWorkoutTile
+          is showing (any non-'none' state) since the new tile already
+          carries the day's plan + completion state at the top of the
+          screen. We still render this section on rest days / no-plan
+          days as a minimal fallback. */}
+      {(() => {
+        const ws = getPlannedWorkoutState({
+          plannedToday: todayPlanned(),
+          nextRace,
+          storageVersion,
+        });
+        if (ws.kind !== 'none') return null;
+        return (
+          <>
+            <div style={sectionHeader}>Today's Plan <div style={shLine} /></div>
+            <TodaysPlan items={planItems} doneItems={todayDoneItems} onTap={() => onOpenTab?.('plan')} />
+          </>
+        );
+      })()}
 
       {/* Going about my day — ambient NEAT card. Adaptive: three-tile on
           rest days (ambient is the hero), single-row strip on training days. */}
@@ -2902,27 +3264,44 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
     <div style={{
       background: BG, color: T1, minHeight: '100vh',
       fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
-      padding: '0 10px 76px', WebkitFontSmoothing: 'antialiased',
+      // Phase 4q.frame.1 — single 12px outer frame across every mobile
+      // screen. Start, EdgeIQ, Play, Fuel, Core, Labs all sit at 12px
+      // from the screen edges. Drill-down tabs get 12px from `.arnold-main`
+      // (mobile.css). Mobile-active screens (Start + EdgeIQ) where main
+      // padding is zeroed get 12px directly on the wrapper.
+      padding: '0 12px 76px', WebkitFontSmoothing: 'antialiased',
     }}>
-      {/* Header — matches Start screen */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 0 8px' }}>
-        <div>
+      {/* Phase 4q.header.5 — Unified header matches drill-down tabs:
+          ARNOLD mark + colored gem icon + EdgeIQ label, with the date
+          on the right (matches Start/Play/Fuel/Core/Labs treatment).
+          Brand-mark colors unified (T3 ARNOLD, C.blue 'A') so the
+          stripe reads identically on every screen. */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, padding: '10px 0 8px' }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <div style={{
               width: 22, height: 22, borderRadius: 6,
               background: 'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',
               border: '1px solid rgba(91,155,213,0.12)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 9, color: C.blue, fontWeight: 800,
+              fontSize: 10, color: C.blue, fontWeight: 800,
             }}>A</div>
-            <span style={{ fontSize: 9, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: T2, marginTop: 3 }}>EdgeIQ</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5, minWidth: 0 }}>
+            <Icon.GemSpark color={C.purple} size={18} />
+            <span style={{
+              fontSize: 16, fontWeight: 600, color: T1,
+              letterSpacing: '0.01em',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>EdgeIQ</span>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-          <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 6, background: 'rgba(96,165,250,0.12)', color: C.blue }}>YTD</span>
-          <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 6, background: 'rgba(107,171,223,0.12)', color: C.blue }}>{totalMi.toFixed(0)} mi</span>
-        </div>
+        <span style={{
+          fontSize: 11, fontWeight: 500, color: T3,
+          letterSpacing: '0.04em',
+          whiteSpace: 'nowrap', marginTop: 4,
+        }}>{(()=>{const d=new Date();return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});})()}</span>
       </div>
 
       {/* ── CALIBRATION STRIP — today's target + drift tiles + path-to-target

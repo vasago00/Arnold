@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Session Signature — Background Remover v3</title>
+<style>
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #1a1a1a; color: #e8e6e0;
+    padding: 24px; max-width: 1200px; margin: 0 auto;
+    line-height: 1.4;
+  }
+  h1 { margin-top: 0; font-size: 22px; letter-spacing: 0.02em; }
+  p { color: #a8a59f; }
+  code { background: #2a2a2a; padding: 2px 6px; border-radius: 4px; color: #e8e6e0; }
+  strong { color: #e8e6e0; }
+
+  .drop {
+    display: block;
+    border: 2px dashed #555;
+    padding: 56px 24px;
+    text-align: center;
+    border-radius: 12px;
+    cursor: pointer;
+    margin: 24px 0 12px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .drop:hover, .drop.dragging { border-color: #5eead4; background: rgba(94,234,212,0.04); }
+
+  .controls {
+    background: #2a2a2a;
+    padding: 16px;
+    border-radius: 10px;
+    border: 0.5px solid rgba(255,255,255,0.06);
+    margin-bottom: 16px;
+    display: flex; gap: 16px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .controls label { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .controls input[type=range] { width: 200px; }
+  .controls .val {
+    font-family: ui-monospace, Menlo, monospace;
+    color: #5eead4; font-weight: 700; min-width: 38px;
+  }
+  .controls button {
+    background: #5eead4; color: #1a1a1a;
+    border: 0; padding: 8px 14px;
+    border-radius: 6px; cursor: pointer;
+    font-weight: 700; font-size: 12px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .controls button:hover { background: #2dd4bf; }
+  .controls button.muted { background: #3a3a3a; color: #e8e6e0; }
+  .controls button.muted:hover { background: #4a4a4a; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .cell {
+    background: #2a2a2a;
+    padding: 14px; border-radius: 10px;
+    border: 0.5px solid rgba(255,255,255,0.06);
+  }
+  .cell .name {
+    font-size: 12px; color: #a8a59f;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin-bottom: 8px; font-weight: 600;
+  }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .panel-wrap { position: relative; }
+  .panel-wrap .lbl-text {
+    font-size: 9px; color: #5eead4;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    font-weight: 700; margin-bottom: 4px;
+    text-align: center;
+  }
+  .panel {
+    background-color: #1f1f1f;
+    padding: 14px;
+    border-radius: 8px;
+    text-align: center;
+    aspect-ratio: 1 / 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .panel img { max-width: 80%; max-height: 80%; display: block; }
+  .swatches {
+    display: flex; gap: 4px; align-items: center;
+    margin-top: 6px; font-size: 10px; color: #a8a59f;
+    justify-content: center;
+  }
+  .swatch {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .cell button {
+    width: 100%; margin-top: 10px;
+    background: #5eead4; color: #1a1a1a;
+    border: 0; padding: 8px 14px;
+    border-radius: 6px; cursor: pointer;
+    font-weight: 700; font-size: 12px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .cell button:hover { background: #2dd4bf; }
+  .info {
+    background: rgba(94,234,212,0.06);
+    border: 0.5px solid rgba(94,234,212,0.2);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: #c8e6e0;
+  }
+</style>
+</head>
+<body>
+<h1>Session Signature — Background Remover v3</h1>
+<p>Some "transparent" PNGs from Gemini actually have the transparency-checkerboard rendered as <strong>opaque grayscale pixels</strong>, not a real alpha channel. This tool detects the background colors automatically (by sampling the 4 corners) and removes any pixel matching them — turning the fake-transparent areas into actually-transparent pixels.</p>
+<div class="info">
+  <strong>How to use:</strong> drop your 6 PNGs. The tool samples the corner colors automatically (shown as swatches under each preview). Tune <strong>Color tolerance</strong> if some background pixels survive (raise it) or figure pixels are getting eaten (lower it). Default 35 should work for most.
+</div>
+
+<label class="drop" id="drop">
+  <input type="file" id="file" accept="image/png" multiple style="display:none">
+  <strong style="font-size: 16px;">Click here</strong> or drop PNG file(s)
+</label>
+
+<div class="controls" id="controls" style="display:none;">
+  <label>
+    <span>Color tolerance</span>
+    <input type="range" id="tolerance" min="0" max="120" value="35">
+    <span class="val" id="toleranceVal">35</span>
+  </label>
+  <label>
+    <span>Alpha threshold</span>
+    <input type="range" id="threshold" min="0" max="100" value="20">
+    <span class="val" id="thresholdVal">20%</span>
+  </label>
+  <label>
+    <span>Mask bottom-right (Gemini watermark)</span>
+    <input type="range" id="watermark" min="0" max="30" value="14">
+    <span class="val" id="watermarkVal">14%</span>
+  </label>
+  <label style="cursor: pointer;">
+    <input type="checkbox" id="squarePad" checked>
+    <span>Pad non-square inputs to square (with magenta)</span>
+  </label>
+  <label style="cursor: pointer;">
+    <input type="checkbox" id="tightCrop" checked>
+    <span>Tight-crop to content + recenter (uniform scale)</span>
+  </label>
+  <label>
+    <span>Output size</span>
+    <select id="outputSize" style="background:#1a1a1a; color:#e8e6e0; border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:6px 10px; font-size:12px;">
+      <option value="0">Original (no resize)</option>
+      <option value="2048">2048 × 2048</option>
+      <option value="1024" selected>1024 × 1024</option>
+      <option value="768">768 × 768</option>
+      <option value="512">512 × 512</option>
+      <option value="256">256 × 256</option>
+    </select>
+  </label>
+  <button id="downloadAll">Download all</button>
+  <button class="muted" id="reset">Reset</button>
+</div>
+
+<div id="result" class="grid"></div>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const result = document.getElementById('result');
+const controls = document.getElementById('controls');
+const tolInput = document.getElementById('tolerance');
+const tolVal = document.getElementById('toleranceVal');
+const thInput = document.getElementById('threshold');
+const thVal = document.getElementById('thresholdVal');
+const wmInput = document.getElementById('watermark');
+const wmVal = document.getElementById('watermarkVal');
+const downloadAllBtn = document.getElementById('downloadAll');
+const resetBtn = document.getElementById('reset');
+
+let files = [];
+
+drop.addEventListener('click', () => fileInput.click());
+['dragenter','dragover'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('dragging'); }));
+['dragleave','drop'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('dragging'); }));
+drop.addEventListener('drop', e => {
+  if (e.dataTransfer.files.length) handleFiles(Array.from(e.dataTransfer.files));
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) handleFiles(Array.from(e.target.files));
+});
+
+tolInput.addEventListener('input', () => {
+  tolVal.textContent = tolInput.value;
+  files.forEach(f => recompute(f));
+});
+thInput.addEventListener('input', () => {
+  thVal.textContent = thInput.value + '%';
+  files.forEach(f => recompute(f));
+});
+wmInput.addEventListener('input', () => {
+  wmVal.textContent = wmInput.value + '%';
+  files.forEach(f => recompute(f));
+});
+
+downloadAllBtn.addEventListener('click', () => {
+  files.forEach((f, i) => setTimeout(() => downloadCanvas(f.cleanedCanvas, f.name), i * 250));
+});
+
+resetBtn.addEventListener('click', () => {
+  files = [];
+  result.innerHTML = '';
+  controls.style.display = 'none';
+  fileInput.value = '';
+});
+
+// ── Background-color detection ─────────────────────────────────────────────
+// Sample several pixels from each corner; cluster them into up to 2 distinct
+// "background" colors (so we handle checkerboard patterns with 2 alternating
+// shades). Returns array of { r, g, b }.
+function detectBackgroundColors(imageData) {
+  const { data, width, height } = imageData;
+  const samples = [];
+  const corners = [
+    [0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1],
+    // Sample a small ring inside each corner too, in case the very corner
+    // pixel is anti-aliased
+    [4, 4], [width - 5, 4], [4, height - 5], [width - 5, height - 5],
+    [10, 10], [width - 11, 10], [10, height - 11], [width - 11, height - 11],
+  ];
+  for (const [x, y] of corners) {
+    const idx = (y * width + x) * 4;
+    samples.push({ r: data[idx], g: data[idx + 1], b: data[idx + 2], a: data[idx + 3] });
+  }
+  // If alpha is already 0 in corners, no chroma-key needed.
+  const opaqueSamples = samples.filter(s => s.a > 200);
+  if (opaqueSamples.length === 0) return [];
+  // Cluster opaque samples into up to 2 groups (checkerboard typically has 2).
+  const clusters = [];
+  for (const s of opaqueSamples) {
+    let placed = false;
+    for (const c of clusters) {
+      if (Math.abs(s.r - c.r) < 25 && Math.abs(s.g - c.g) < 25 && Math.abs(s.b - c.b) < 25) {
+        // Average into cluster
+        c.r = (c.r * c.n + s.r) / (c.n + 1);
+        c.g = (c.g * c.n + s.g) / (c.n + 1);
+        c.b = (c.b * c.n + s.b) / (c.n + 1);
+        c.n += 1;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) clusters.push({ r: s.r, g: s.g, b: s.b, n: 1 });
+  }
+  // Sort by frequency, keep top 2
+  clusters.sort((a, b) => b.n - a.n);
+  return clusters.slice(0, 2).map(c => ({
+    r: Math.round(c.r), g: Math.round(c.g), b: Math.round(c.b),
+  }));
+}
+
+function handleFiles(fileList) {
+  fileList.forEach(file => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      // If square-pad is on AND image isn't square, pad to square with
+      // magenta first. The magenta padding gets chroma-keyed to alpha=0
+      // downstream, so the bowl ends up centered in a square transparent
+      // canvas — fixing aspect-ratio drift from Gemini outputs.
+      const squarePad = document.getElementById('squarePad')?.checked;
+      const needsPad = squarePad && img.width !== img.height;
+      const targetSize = Math.max(img.width, img.height);
+      const c = document.createElement('canvas');
+      c.width = needsPad ? targetSize : img.width;
+      c.height = needsPad ? targetSize : img.height;
+      const ctx = c.getContext('2d');
+      if (needsPad) {
+        // Fill canvas with pure magenta first, then center the image on it
+        ctx.fillStyle = 'rgb(255, 0, 255)';
+        ctx.fillRect(0, 0, targetSize, targetSize);
+        const offsetX = Math.round((targetSize - img.width) / 2);
+        const offsetY = Math.round((targetSize - img.height) / 2);
+        ctx.drawImage(img, offsetX, offsetY);
+      } else {
+        ctx.drawImage(img, 0, 0);
+      }
+      const originalImageData = ctx.getImageData(0, 0, c.width, c.height);
+      const bgColors = detectBackgroundColors(originalImageData);
+      const entry = {
+        name: file.name.replace(/\.[^.]+$/, ''),
+        img,
+        originalCanvas: c,
+        originalImageData,
+        bgColors,
+        cleanedCanvas: document.createElement('canvas'),
+        wasPadded: needsPad,
+        // Track where the ORIGINAL image sits within the (possibly padded)
+        // canvas — used by the watermark mask so it targets the bottom-right
+        // of the original image, not the bottom-right of the padded canvas.
+        originalBounds: needsPad
+          ? { x: Math.round((targetSize - img.width) / 2),
+              y: Math.round((targetSize - img.height) / 2),
+              w: img.width, h: img.height }
+          : { x: 0, y: 0, w: img.width, h: img.height },
+      };
+      entry.cleanedCanvas.width = c.width;
+      entry.cleanedCanvas.height = c.height;
+      files.push(entry);
+      addCell(entry);
+      recompute(entry);
+      controls.style.display = 'flex';
+    };
+    img.src = url;
+  });
+}
+
+function addCell(entry) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = entry.name + '.png';
+  cell.appendChild(name);
+
+  const compare = document.createElement('div');
+  compare.className = 'compare';
+
+  const beforeWrap = document.createElement('div');
+  beforeWrap.className = 'panel-wrap';
+  const beforeLbl = document.createElement('div');
+  beforeLbl.className = 'lbl-text';
+  beforeLbl.textContent = 'Before';
+  beforeWrap.appendChild(beforeLbl);
+  const beforePanel = document.createElement('div');
+  beforePanel.className = 'panel';
+  const beforeImg = document.createElement('img');
+  beforeImg.src = entry.originalCanvas.toDataURL('image/png');
+  beforePanel.appendChild(beforeImg);
+  beforeWrap.appendChild(beforePanel);
+
+  const afterWrap = document.createElement('div');
+  afterWrap.className = 'panel-wrap';
+  const afterLbl = document.createElement('div');
+  afterLbl.className = 'lbl-text';
+  afterLbl.textContent = 'After (on tile)';
+  afterWrap.appendChild(afterLbl);
+  const afterPanel = document.createElement('div');
+  afterPanel.className = 'panel';
+  const afterImg = document.createElement('img');
+  afterImg.id = 'after-' + entry.name;
+  afterPanel.appendChild(afterImg);
+  afterWrap.appendChild(afterPanel);
+
+  compare.appendChild(beforeWrap);
+  compare.appendChild(afterWrap);
+  cell.appendChild(compare);
+
+  // Detected background colors as visible swatches
+  const swatches = document.createElement('div');
+  swatches.className = 'swatches';
+  if (entry.bgColors.length === 0) {
+    swatches.textContent = 'Already alpha-transparent';
+  } else {
+    swatches.appendChild(document.createTextNode('Detected bg:'));
+    entry.bgColors.forEach(c => {
+      const sw = document.createElement('span');
+      sw.className = 'swatch';
+      sw.style.background = `rgb(${c.r},${c.g},${c.b})`;
+      swatches.appendChild(sw);
+    });
+  }
+  cell.appendChild(swatches);
+
+  const btn = document.createElement('button');
+  btn.textContent = 'Download cleaned';
+  btn.onclick = () => downloadCanvas(entry.cleanedCanvas, entry.name);
+  cell.appendChild(btn);
+
+  result.appendChild(cell);
+}
+
+function recompute(entry) {
+  const tolerance = +tolInput.value;
+  const alphaThreshold = Math.round(+thInput.value * 255 / 100);
+  const watermarkPct = +wmInput.value;
+  const dst = entry.cleanedCanvas;
+  const ctx = dst.getContext('2d');
+  ctx.clearRect(0, 0, dst.width, dst.height);
+
+  const srcData = entry.originalImageData;
+  const dstData = ctx.createImageData(srcData.width, srcData.height);
+  const data = srcData.data;
+  const out = dstData.data;
+  const bg = entry.bgColors;
+  const w = srcData.width;
+  const h = srcData.height;
+  // Watermark mask: square region at the bottom-right of the ORIGINAL
+  // image (not necessarily the padded canvas) that gets alpha-zeroed.
+  // Sized as a percentage of the original image's smaller dimension so
+  // it scales with input. 14% default covers the standard Gemini
+  // sparkle; raise to 18-22% if the watermark is larger or further from
+  // the corner; lower to 8-10% if it's eating into a figure.
+  // Phase 4r.fuel.3 — uses originalBounds so square-padded images mask
+  // the right region (original bottom-right, not padded-canvas corner).
+  const ob = entry.originalBounds || { x: 0, y: 0, w, h };
+  const wmSize = Math.round(Math.min(ob.w, ob.h) * watermarkPct / 100);
+  const wmCutoffX = ob.x + ob.w - wmSize;
+  const wmCutoffY = ob.y + ob.h - wmSize;
+  const wmRightEdge = ob.x + ob.w;
+  const wmBottomEdge = ob.y + ob.h;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const px = (i / 4) | 0;
+    const x = px % w;
+    const y = (px / w) | 0;
+    const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+    out[i] = r; out[i + 1] = g; out[i + 2] = b;
+
+    // 0. Watermark mask: if in bottom-right corner box of the ORIGINAL
+    //    image (translated to canvas coords), zero alpha.
+    if (wmSize > 0 &&
+        x >= wmCutoffX && x < wmRightEdge &&
+        y >= wmCutoffY && y < wmBottomEdge) {
+      out[i + 3] = 0;
+      continue;
+    }
+
+    // 1. Chroma-key: if pixel matches any background color within tolerance,
+    //    zero its alpha entirely (kills baked-in checkerboard pixels).
+    let isBg = false;
+    for (const c of bg) {
+      if (Math.abs(r - c.r) <= tolerance &&
+          Math.abs(g - c.g) <= tolerance &&
+          Math.abs(b - c.b) <= tolerance) {
+        isBg = true; break;
+      }
+    }
+    if (isBg) { out[i + 3] = 0; continue; }
+
+    // 2. Alpha threshold: kill any remaining low-alpha pixels (translucent halo).
+    if (a < alphaThreshold) { out[i + 3] = 0; continue; }
+
+    // 3. Otherwise keep original alpha (preserves figure smoothness).
+    out[i + 3] = a;
+  }
+  ctx.putImageData(dstData, 0, 0);
+
+  const afterImg = document.getElementById('after-' + entry.name);
+  if (afterImg) afterImg.src = dst.toDataURL('image/png');
+}
+
+function downloadCanvas(canvas, name) {
+  // Phase 4r.fuel.6 — tight-crop pipeline:
+  //   1. Find the bounding box of non-transparent pixels (the actual
+  //      bowl/figure)
+  //   2. Crop to that bbox with a small percentage margin
+  //   3. Center-pad to square (transparent) so the content sits in the
+  //      middle of a square canvas with consistent margin
+  //   4. Optionally resize to a uniform output size
+  // Net effect: every output has the visible content filling the same
+  // proportion of its square canvas regardless of source aspect ratio.
+  const tightCrop = document.getElementById('tightCrop')?.checked;
+  const targetSize = +document.getElementById('outputSize')?.value || 0;
+
+  let stageCanvas = canvas;
+
+  if (tightCrop) {
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const px = data.data;
+    let minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const a = px[(y * canvas.width + x) * 4 + 3];
+        if (a > 8) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX > minX && maxY > minY) {
+      const bboxW = maxX - minX + 1;
+      const bboxH = maxY - minY + 1;
+      // ~6% margin around content
+      const longEdge = Math.max(bboxW, bboxH);
+      const margin = Math.round(longEdge * 0.06);
+      const squareSide = longEdge + margin * 2;
+      const out = document.createElement('canvas');
+      out.width = squareSide;
+      out.height = squareSide;
+      const outCtx = out.getContext('2d');
+      // Center the bbox in a square canvas
+      const offsetX = Math.round((squareSide - bboxW) / 2);
+      const offsetY = Math.round((squareSide - bboxH) / 2);
+      outCtx.drawImage(canvas, minX, minY, bboxW, bboxH, offsetX, offsetY, bboxW, bboxH);
+      stageCanvas = out;
+    }
+  }
+
+  let exportCanvas = stageCanvas;
+  if (targetSize > 0 && (stageCanvas.width !== targetSize || stageCanvas.height !== targetSize)) {
+    exportCanvas = document.createElement('canvas');
+    exportCanvas.width = targetSize;
+    exportCanvas.height = targetSize;
+    const ctx = exportCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(stageCanvas, 0, 0, targetSize, targetSize);
+  }
+  exportCanvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + '.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, 'image/png');
+}
+</script>
+</body>
+</html>

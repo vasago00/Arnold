@@ -21,6 +21,182 @@
 
 import { canonicalActivityType } from '../dcyMath.js';
 import { isRun, isStrength as isStrengthAct } from '../activityClass.js';
+import { timeframesFromCollection, aggregateTimeframes } from './kriAggregate.js';
+
+// Phase 4m.2.7 — VDOT race-time predictor (Jack Daniels' lookup table).
+// Used by the Race Predictor metric as a fallback when Garmin doesn't
+// emit its own predicted-time block but does emit vO2MaxValue (most
+// modern watches do — Forerunner 2xx/9xx, Fenix, Epix, Venu).
+//
+// Each row is [VDOT, t5k_secs, t10k_secs, tHM_secs, tM_secs]. Values are
+// pulled directly from Daniels' published tables (Daniels' Running
+// Formula, 4th ed.). Linear interpolation between adjacent rows handles
+// non-integer VDOT values cleanly within ±2s of higher-order fits.
+const _VDOT_TABLE = [
+  [30, 1840, 3826,  8464, 17357],   // 30:40 / 63:46 / 2:21:04 / 4:49:17
+  [35, 1552, 3209,  7041, 14431],   // 25:52 / 53:29 / 1:57:21 / 4:00:31
+  [40, 1335, 2774,  6080, 12416],   // 22:15 / 46:14 / 1:41:20 / 3:26:56
+  [45, 1165, 2429,  5334, 10891],   // 19:25 / 40:29 / 1:28:54 / 3:01:31
+  [50, 1034, 2154,  4740,  9668],   // 17:14 / 35:54 / 1:19:00 / 2:41:08
+  [55,  929, 1937,  4260,  8684],   // 15:29 / 32:17 / 1:11:00 / 2:24:44
+  [60,  843, 1758,  3863,  7892],   // 14:03 / 29:18 / 1:04:23 / 2:11:32
+  [65,  771, 1608,  3528,  7225],   // 12:51 / 26:48 /   58:48  / 2:00:25
+  [70,  710, 1483,  3240,  6659],   // 11:50 / 24:43 /   54:00  / 1:50:59
+];
+const _VDOT_FIELD_IDX = { t5k: 1, t10k: 2, tHM: 3, tM: 4 };
+
+export function predictFromVDOT(vdot, field) {
+  if (vdot == null || !Number.isFinite(vdot)) return null;
+  const idx = _VDOT_FIELD_IDX[field];
+  if (!idx) return null;
+  if (vdot <= _VDOT_TABLE[0][0]) return _VDOT_TABLE[0][idx];
+  if (vdot >= _VDOT_TABLE[_VDOT_TABLE.length - 1][0]) return _VDOT_TABLE[_VDOT_TABLE.length - 1][idx];
+  for (let i = 0; i < _VDOT_TABLE.length - 1; i++) {
+    const v0 = _VDOT_TABLE[i][0];
+    const v1 = _VDOT_TABLE[i + 1][0];
+    if (vdot >= v0 && vdot <= v1) {
+      const t0 = _VDOT_TABLE[i][idx];
+      const t1 = _VDOT_TABLE[i + 1][idx];
+      const ratio = (vdot - v0) / (v1 - v0);
+      return Math.round(t0 + (t1 - t0) * ratio);
+    }
+  }
+  return null;
+}
+
+// Phase 4m.2.9 — Riegel's race-time predictor.
+// Peer-reviewed formula (Pete Riegel, American Scientist, 1981):
+//
+//     T₂ = T₁ × (D₂ / D₁)^1.06
+//
+// Where T₁/D₁ = a recent run's time/distance, T₂/D₂ = predicted time at the
+// target distance. The 1.06 exponent has been validated and gently refined
+// across studies (Vickers & Vertosick 2016 published a population-fit value
+// of ~1.07); we use the original 1.06.
+//
+// Compared to VDOT, Riegel naturally reflects current training state because
+// the anchor IS your current state. No "VO2max ceiling vs. race-day reality"
+// gap to calibrate — what you've been running is what you're forecasted on.
+//
+// Quality filter: anchor run must be ≥ 3 mi and ≥ 15 minutes. Excludes
+// warmups, sprint reps, and casual short runs that would over-extrapolate
+// (e.g. predicting a half-marathon from a 1-mile sprint is meaningless).
+export function riegelPredictFromRun(run, field) {
+  if (!run) return null;
+  const D1mi = Number(run.distanceMi || run.distance_mi);
+  if (!D1mi || D1mi < 3) return null;
+  const T1 = Number(run.durationSecs);
+  if (!T1 || T1 < 15 * 60) return null;
+  const D1km = D1mi * 1.60934;
+  const D2km = _FIELD_TO_KM[field];
+  if (!D2km) return null;
+  return Math.round(T1 * Math.pow(D2km / D1km, 1.06));
+}
+
+// Phase 4m.2.8 — Calibrated VDOT predictor (kept available as a secondary
+// option; not currently used by the Race Predictor metric, which uses
+// Riegel above. Available for future "ceiling forecast" features).
+// Raw VDOT assumes you're peaked and properly trained for the distance.
+// In reality, race-day finish times depend heavily on training volume and
+// long-run readiness. Underprepared runners with high VO2max but low
+// weekly mileage will run slower than VDOT predicts.
+//
+// We apply two penalties on top of the VDOT baseline:
+//   1. VOLUME PENALTY — compares trailing 8-week avg weekly km to the
+//      "racing target" volume for the distance:
+//        Half: ~42 km/wk (~26 mi),  Full: ~84 km/wk (~52 mi)
+//      Each percentage-point shortfall adds 0.40% to predicted time,
+//      capped at 30% total slowdown.
+//   2. LONG-RUN PENALTY — compares longest single run in the last 8 weeks
+//      to ~85% of race distance (the "have you been there?" check):
+//        Half: ~17 km long run,  Full: ~34 km long run
+//      Each percentage-point shortfall adds 0.30%, capped at 20%.
+//
+// Combined: a runner at 19 mi/wk + 8.4 mi long going into a half marathon
+// gets ~18-20% slowdown applied to their VDOT half-time. That puts the
+// prediction in race-realistic territory rather than VO2max-ceiling.
+//
+// FIELD_TO_KM maps the predictor field key to standard race distance.
+const _FIELD_TO_KM = { t5k: 5, t10k: 10, tHM: 21.1, tM: 42.2 };
+
+export function calibratedVDOTPredict(vo2max, field, ctx) {
+  const baseVDOT = predictFromVDOT(vo2max, field);
+  if (baseVDOT == null) return null;
+  const raceKm = _FIELD_TO_KM[field];
+  if (!raceKm) return baseVDOT;
+
+  // Trailing 8-week training context. Use the same ctx the metric receives
+  // so the prediction stays in sync with whatever data is loaded.
+  const acts = ctx?.activities || [];
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 56);
+  cutoff.setHours(0, 0, 0, 0);
+  const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
+  let totalKm = 0;
+  let longestKm = 0;
+  for (const a of acts) {
+    if (!isRun(a) || !a?.date || a.date < cutoffStr) continue;
+    const km = (Number(a.distanceMi || a.distance_mi) || 0) * 1.60934;
+    totalKm += km;
+    if (km > longestKm) longestKm = km;
+  }
+  const avgWeeklyKm = totalKm / 8;
+
+  // Recommended training thresholds for "racing the distance":
+  const recommendedWeeklyKm = raceKm * 2.0;     // Half ≈ 42 km/wk
+  const recommendedLongKm   = raceKm * 0.85;    // Half ≈ 18 km
+
+  const volumeShortfall  = Math.max(0, 1 - avgWeeklyKm / recommendedWeeklyKm);
+  const longRunShortfall = Math.max(0, 1 - longestKm  / recommendedLongKm);
+
+  const volumePenalty  = Math.min(volumeShortfall  * 0.40, 0.30);
+  const longRunPenalty = Math.min(longRunShortfall * 0.30, 0.20);
+  const totalPenalty   = volumePenalty + longRunPenalty;
+
+  return Math.round(baseVDOT * (1 + totalPenalty));
+}
+
+// Phase 4m.2 — Nutrition samples helper. Walks nutritionLog full-day entries
+// + legacy cronometer collection, returning dated {date, value} pairs for a
+// given macro key. Used by Body-category timeframes() functions.
+function _nutritionSamples(ctx, key) {
+  const samples = [];
+  for (const e of (ctx.nutritionLog || [])) {
+    if (e?.meal !== 'full-day' || !e?.date) continue;
+    // Cronometer Worker writes:
+    //   macros.{calories, protein, carbs, fat, fiber, sugar, water}
+    //   extended.{sodium, potassium, magnesium, calcium, iron, caffeine, alcohol}
+    // Manual entries may use bare `key` or `totals.key`. Walk all paths.
+    const v = Number(
+      e?.totals?.[key] ??
+      e?.macros?.[key] ??
+      e?.extended?.[key] ??
+      e?.[key]
+    );
+    if (Number.isFinite(v) && v > 0) samples.push({ date: e.date, value: v });
+  }
+  // Legacy cronometer collection — walk only if nutritionLog had no full-day rows
+  // (otherwise we'd double-count days where both are written).
+  if (!samples.length) {
+    for (const c of (ctx.cronometer || [])) {
+      if (!c?.date) continue;
+      // Legacy format may use "Sodium (mg)" style keys in totals
+      const legacyKeys = {
+        sodium: ['Sodium (mg)', 'sodium'],
+        potassium: ['Potassium (mg)', 'potassium'],
+        magnesium: ['Magnesium (mg)', 'magnesium'],
+      };
+      const candidates = legacyKeys[key] || [key];
+      let v = null;
+      for (const k of candidates) {
+        const x = Number(c?.[k] ?? c?.totals?.[k]);
+        if (Number.isFinite(x) && x > 0) { v = x; break; }
+      }
+      if (v != null) samples.push({ date: c.date, value: v });
+    }
+  }
+  return samples;
+}
 
 // ── Helpers used by multiple metrics ────────────────────────────────────────
 
@@ -326,10 +502,76 @@ export function evaluate(metric, ctx) {
 // ── Registry ────────────────────────────────────────────────────────────────
 
 export const TILE_METRICS = [
-  // ═══ RUN ═══════════════════════════════════════════════════════════════
+  // ═══ RUN — VOLUME ═════════════════════════════════════════════════════
+  {
+    id: 'weeklyMiles', label: 'Weekly Miles', category: 'run', unit: 'mi',
+    subgroup: 'volume',
+    polarity: 'higher-better',
+    // YTD = cumulative total (volume metric). Week & 8-wk = sum per week.
+    ytdMode: 'total',
+    historyOf: (ctx) => (ctx.activities || []).filter(isRun)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      .map(r => parseFloat(r.distanceMi || r.distance_mi) || 0)
+      .filter(v => v > 0),
+    compute: (ctx) => {
+      // For the mobile cockpit: this week's total miles.
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+      weekStart.setHours(0, 0, 0, 0);
+      const wStr = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')}`;
+      const total = (ctx.activities || [])
+        .filter(a => isRun(a) && a.date >= wStr)
+        .reduce((s, a) => s + (parseFloat(a.distanceMi || a.distance_mi) || 0), 0);
+      if (total <= 0) return null;
+      return { value: +total.toFixed(1), sublabel: 'this week' };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: (a) => isRun(a),
+        valueField: (a) => parseFloat(a.distanceMi || a.distance_mi) || null,
+        mode: 'total',
+        ytdMode: 'total',
+      }
+    ),
+  },
+  {
+    id: 'weeklyHours', label: 'Weekly Hours', category: 'run', unit: 'hrs',
+    subgroup: 'volume',
+    polarity: 'higher-better',
+    ytdMode: 'total',
+    historyOf: (ctx) => (ctx.activities || []).filter(isRun)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      .map(r => (r.durationSecs || 0) / 3600)
+      .filter(v => v > 0),
+    compute: (ctx) => {
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+      weekStart.setHours(0, 0, 0, 0);
+      const wStr = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')}`;
+      const total = (ctx.activities || [])
+        .filter(a => isRun(a) && a.date >= wStr)
+        .reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
+      if (total <= 0) return null;
+      return { value: +total.toFixed(1), sublabel: 'this week' };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: (a) => isRun(a),
+        valueField: (a) => (a.durationSecs || 0) / 3600 || null,
+        mode: 'total',
+        ytdMode: 'total',
+      }
+    ),
+  },
+
+  // ═══ RUN — MECHANICAL EFFICIENCY (common to easy + speed) ════════════
   {
     id: 'avgRunHR', label: 'Avg HR (Run)', category: 'run', unit: 'bpm',
+    subgroup: 'easy',
     polarity: 'lower-better', // for trend: dropping HR at same paces = improving fitness
+    ytdMode: 'avg',
     // No fixed thresholds — context-dependent (Z2 vs tempo). Status stays neutral.
     historyOf: (ctx) => (ctx.activities || []).filter(isRun)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -343,10 +585,21 @@ export const TILE_METRICS = [
         hrZones: Array.isArray(r.hrZones) && r.hrZones.length === 5 ? r.hrZones : null,
       };
     },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: (a) => isRun(a) && a.avgHR != null,
+        valueField: (a) => a.avgHR,
+        mode: 'avg',
+        ytdMode: 'avg',
+      }
+    ),
   },
   {
     id: 'cadence', label: 'Cadence', category: 'run', unit: 'spm',
+    subgroup: 'mechanical',
     polarity: 'higher-better',
+    ytdMode: 'avg',
     thresholds: { green: [170, 220], amber: [160, 170], red: [0, 160] },
     historyOf: (ctx) => (ctx.activities || []).filter(isRun)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -356,6 +609,10 @@ export const TILE_METRICS = [
       if (!r?.avgCadence) return null;
       return { value: Math.round(r.avgCadence), sublabel: r.date };
     },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => a.avgCadence, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
     id: 'racePredictor', label: 'Race Predictor', category: 'run', unit: '',
@@ -388,13 +645,113 @@ export const TILE_METRICS = [
     // Race Predictor only available if any activity has it. Older Forerunners
     // don't emit this; needs Garmin Wellness sync (Phase 4) for full coverage.
     available: (ctx) => (ctx.activities || []).some(a => a?.racePredictor),
+    // Phase 4m.2.5 — Race Predictor dynamically picks the prediction field
+    // matching the next race on the docket (5K → t5k, 10K → t10k, Half →
+    // tHM, Full → tM). If no upcoming race, fall back to half-marathon as
+    // the default forecast distance. Lower = faster = better.
+    subgroup: 'load',
+    polarity: 'lower-better',
+    ytdMode: 'avg',
+    formatter: (v) => {
+      if (v == null || !Number.isFinite(v) || v <= 0) return '—';
+      const h = Math.floor(v / 3600);
+      const m = Math.floor((v % 3600) / 60);
+      const s = Math.round(v % 60);
+      return h > 0
+        ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+        : `${m}:${String(s).padStart(2, '0')}`;
+    },
+    // Map the next race's distance (km) to the FIT racePredictor field key.
+    // Tolerances match the standard event distances allowing for course
+    // marker drift: 5K = 4-7km, 10K = 7-15km, Half = 15-30km, Full = 30km+.
+    timeframes: (ctx) => {
+      const upcoming = (ctx.races || [])
+        .filter(r => {
+          const d = r?.date ? new Date(`${r.date}T12:00:00`) : null;
+          return d && d >= new Date(new Date().setHours(0,0,0,0));
+        })
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      const next = upcoming[0];
+      const km = next ? (Number(next.distanceKm) || Number(next.distance_km) ||
+                         (Number(next.distanceMi) ? Number(next.distanceMi) * 1.60934 : null)) : null;
+      const fieldKey =
+        km == null    ? 'tHM' :       // no race scheduled → default half-marathon forecast
+        km <= 7       ? 't5k' :
+        km <= 15      ? 't10k' :
+        km <= 30      ? 'tHM' :
+                        'tM';
+      // Two sources, in priority order:
+      //   1. Garmin's own racePredictor block (most accurate — per-run, watch-derived)
+      //   2. Riegel's formula (peer-reviewed, 1981) anchored to each qualifying
+      //      run's actual pace. T2 = T1 × (D2/D1)^1.06.
+      //      Naturally reflects current training state — no VO2max-vs-VDOT gap
+      //      to calibrate, no heuristic fudge factors. (Phase 4m.2.9)
+      return timeframesFromCollection(
+        ctx.activities,
+        {
+          filter: a => isRun(a),
+          valueField: a => {
+            if (a?.racePredictor && a.racePredictor[fieldKey]) {
+              return Number(a.racePredictor[fieldKey]) || null;
+            }
+            return riegelPredictFromRun(a, fieldKey);
+          },
+          mode: 'avg',
+          ytdMode: 'avg',
+        }
+      );
+    },
+    // Race-name annotation rendered below the tile's label. Tells the user
+    // exactly which race the prediction is for (e.g. "for RBC Brooklyn Half").
+    descriptionFor: (ctx) => {
+      const upcoming = (ctx.races || [])
+        .filter(r => {
+          const d = r?.date ? new Date(`${r.date}T12:00:00`) : null;
+          return d && d >= new Date(new Date().setHours(0,0,0,0));
+        })
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      const next = upcoming[0];
+      if (!next) return 'no upcoming race · default Half forecast';
+      const name = next.name || 'upcoming race';
+      const dateStr = next.date
+        ? new Date(`${next.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : '';
+      return dateStr ? `for ${name} · ${dateStr}` : `for ${name}`;
+    },
+    // Override label dynamically based on next race. The renderer uses
+    // metric.label, so we expose this as a getter via labelFor(ctx). The
+    // base label stays generic for users without an upcoming race.
+    labelFor: (ctx) => {
+      const upcoming = (ctx.races || [])
+        .filter(r => {
+          const d = r?.date ? new Date(`${r.date}T12:00:00`) : null;
+          return d && d >= new Date(new Date().setHours(0,0,0,0));
+        })
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      const next = upcoming[0];
+      if (!next) return 'Race Predictor';
+      const km = Number(next.distanceKm) || Number(next.distance_km) ||
+                 (Number(next.distanceMi) ? Number(next.distanceMi) * 1.60934 : null);
+      const distLabel =
+        km == null    ? '' :
+        km <= 7       ? '5K' :
+        km <= 15      ? '10K' :
+        km <= 30      ? 'Half' :
+                        'Full';
+      return distLabel ? `Race Predictor · ${distLabel}` : 'Race Predictor';
+    },
   },
   {
     id: 'aerobicTE', label: 'Aerobic TE', category: 'run', unit: '/5',
+    subgroup: 'easy',
     polarity: 'target', target: 3.0,
-    // Sweet spot 2-4: maintaining/improving fitness. Below 2 = too easy,
-    // above 4 = overreaching for routine training.
+    ytdMode: 'avg',
     thresholds: { green: [2, 4], amber: [[1, 2], [4, 5]], red: [[0, 1], [5, 10]] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => Number(a.aerobicTrainingEffect) || null,
+        mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => (ctx.activities || []).filter(isRun)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(r => r.aerobicTrainingEffect).filter(v => v != null),
@@ -406,8 +763,20 @@ export const TILE_METRICS = [
   },
   {
     id: 'paceHrRatio', label: 'Pace : HR Ratio', category: 'run', unit: '',
-    // Pace in sec/mi divided by avg HR. Lower = better aerobic efficiency.
+    subgroup: 'easy',
     polarity: 'lower-better',
+    ytdMode: 'avg',
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isRun(a),
+        valueField: a => {
+          const sec = paceToSecs(a.avgPaceRaw || a.avgPacePerMi);
+          return a.avgHR && sec ? +(sec / a.avgHR).toFixed(3) : null;
+        },
+        mode: 'avg', ytdMode: 'avg',
+      }
+    ),
     historyOf: (ctx) => (ctx.activities || []).filter(isRun)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(r => {
@@ -426,11 +795,23 @@ export const TILE_METRICS = [
   },
   {
     id: 'zone2Weekly', label: 'Z2 Weekly', category: 'run', unit: 'min',
-    // Sum of seconds-in-Z2 across this week's runs. Foundation of endurance.
-    // Most coaches target ~80% of weekly HR-zone time in Z2 for base building.
+    subgroup: 'easy',
     polarity: 'higher-better',
-    // 240+ min/wk in Z2 is solid base; 120-240 building; <120 minimal aerobic.
+    // Weekly total — sum minutes-in-Z2 across the week's runs.
+    ytdMode: 'avg',
     thresholds: { green: [240, 99999], amber: [120, 240], red: [0, 120] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isRun(a) && Array.isArray(a?.hrZones) && a.hrZones.length === 5,
+        valueField: a => {
+          const z2Secs = a.hrZones[1] || 0;
+          return z2Secs > 0 ? z2Secs / 60 : null;  // minutes
+        },
+        mode: 'total',
+        ytdMode: 'avg',  // YTD = avg per week of Z2 minutes
+      }
+    ),
     historyOf: null, // Trend not meaningful for a "this-week" snapshot
     compute: (ctx) => {
       const monday = startOfWeekMonday();
@@ -452,8 +833,16 @@ export const TILE_METRICS = [
   },
   {
     id: 'aerobicDecoupling', label: 'Aerobic Decoupling', category: 'run', unit: '%',
+    subgroup: 'easy',
     polarity: 'lower-better',
+    ytdMode: 'avg',
     thresholds: { green: [0, 5], amber: [5, 10], red: [10, 100] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a) && a?.aerobicDecoupling != null,
+        valueField: a => Number(a.aerobicDecoupling),
+        mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => (ctx.activities || [])
       .filter(a => isRun(a) && a?.aerobicDecoupling != null)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -496,12 +885,169 @@ export const TILE_METRICS = [
       return { value: ratio, sublabel: `${mi7.toFixed(1)} / ${avg28Weekly.toFixed(1)} mi`, status };
     },
     available: (ctx) => (ctx.activities || []).filter(isRun).length >= 4,
+    // ACWR is a 28-day rolling number — sparkline shows the rolling-ratio
+    // weekly in the same bucket logic used for week aggregates.
+    ytdMode: 'avg',
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => a.distanceMi || a.distance_mi || null,
+        // ACWR's "value" per week is total miles — but the tile renders the
+        // CURRENT 28-day-rolling ratio, not weekly miles. Until we ship a
+        // proper rolling-ratio history, the sparkline shows weekly volume.
+        mode: 'total', ytdMode: 'avg' }
+    ),
+    thresholds: { green: [0.8, 1.3], amber: [[0.5, 0.8], [1.3, 1.5]], red: [[0, 0.5], [1.5, 99]] },
+  },
+
+  // ═══ RUN — LOAD / FORECAST additions (Phase 4m.2.4) ═══════════════════
+  {
+    id: 'longRun', label: 'Long Run', category: 'run', unit: 'mi',
+    subgroup: 'load',
+    polarity: 'higher-better',
+    // mode: 'max' picks the longest single run in each week.
+    // ytdMode: 'max' headlines the year's biggest run.
+    ytdMode: 'max',
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isRun(a),
+        valueField: a => parseFloat(a.distanceMi || a.distance_mi) || null,
+        mode: 'max',
+        ytdMode: 'max',
+      }
+    ),
+    compute: (ctx) => {
+      const runs = (ctx.activities || []).filter(isRun);
+      if (!runs.length) return null;
+      const longest = runs.reduce((m, r) => {
+        const d = parseFloat(r.distanceMi || r.distance_mi) || 0;
+        return d > (m?.d || 0) ? { d, date: r.date } : m;
+      }, null);
+      return longest ? { value: +longest.d.toFixed(1), sublabel: longest.date } : null;
+    },
+  },
+  {
+    id: 'weeklyLoad', label: 'Weekly Load', category: 'run', unit: 'TE',
+    subgroup: 'load',
+    polarity: 'higher-better',
+    // Sum of (aerobic + anaerobic Training Effect) across runs in the week.
+    // Garmin TE is a 0-5 scale per session, so a typical week sums to 8-15.
+    // Total per week, YTD = avg per week.
+    ytdMode: 'avg',
+    thresholds: { green: [8, 18], amber: [[4, 8], [18, 25]], red: [[0, 4], [25, 99]] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isRun(a),
+        valueField: a => {
+          const aero = Number(a.aerobicTrainingEffect) || 0;
+          const ana = Number(a.anaerobicTrainingEffect) || 0;
+          const total = aero + ana;
+          return total > 0 ? total : null;
+        },
+        mode: 'total',
+        ytdMode: 'avg',
+      }
+    ),
+    compute: (ctx) => {
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+      weekStart.setHours(0, 0, 0, 0);
+      const wStr = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')}`;
+      const total = (ctx.activities || [])
+        .filter(a => isRun(a) && a.date >= wStr)
+        .reduce((s, a) => s + (Number(a.aerobicTrainingEffect) || 0) + (Number(a.anaerobicTrainingEffect) || 0), 0);
+      if (total <= 0) return null;
+      return { value: +total.toFixed(1), sublabel: 'this week' };
+    },
+  },
+
+  // ═══ RUN — SPEED / ANAEROBIC (Phase 4m.2) ═════════════════════════════
+  {
+    id: 'avgRunPower', label: 'Avg Power', category: 'run', unit: 'W',
+    subgroup: 'speed',
+    polarity: 'higher-better',
+    ytdMode: 'avg',
+    historyOf: (ctx) => (ctx.activities || []).filter(a => isRun(a) && a.avgPowerW)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .map(r => r.avgPowerW),
+    compute: (ctx) => {
+      const r = (ctx.activities || []).filter(a => isRun(a) && a.avgPowerW)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+      if (!r?.avgPowerW) return null;
+      return { value: Math.round(r.avgPowerW), sublabel: r.date };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => a.avgPowerW, mode: 'avg', ytdMode: 'avg' }
+    ),
+  },
+  {
+    id: 'maxRunHR', label: 'Max HR (Run)', category: 'run', unit: 'bpm',
+    subgroup: 'speed',
+    polarity: 'higher-better', // higher = real anaerobic stimulus on speed days
+    ytdMode: 'avg',
+    historyOf: (ctx) => (ctx.activities || []).filter(a => isRun(a) && a.maxHR)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .map(r => r.maxHR),
+    compute: (ctx) => {
+      const r = (ctx.activities || []).filter(a => isRun(a) && a.maxHR)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+      if (!r?.maxHR) return null;
+      return { value: Math.round(r.maxHR), sublabel: r.date };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => a.maxHR, mode: 'avg', ytdMode: 'avg' }
+    ),
+  },
+  {
+    id: 'heartRateRecovery', label: 'HR Recovery', category: 'run', unit: 'bpm',
+    subgroup: 'speed',
+    polarity: 'higher-better', // bigger drop = better autonomic recovery
+    ytdMode: 'avg',
+    // Phase 4m.1.5 — fitParser now extracts `hrRecovery` (bpm drop in
+    // the 60s after peak HR) from session field or computed from records.
+    // Reads canonical field; CSV imports without this field render '—'.
+    historyOf: (ctx) => (ctx.activities || []).filter(a => isRun(a) && a.hrRecovery)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .map(r => r.hrRecovery),
+    compute: (ctx) => {
+      const r = (ctx.activities || []).filter(a => isRun(a) && a.hrRecovery)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+      if (!r?.hrRecovery) return null;
+      return { value: Math.round(r.hrRecovery), sublabel: r.date };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => a.hrRecovery, mode: 'avg', ytdMode: 'avg' }
+    ),
+  },
+  {
+    id: 'anaerobicTE', label: 'Anaerobic TE', category: 'run', unit: '/5',
+    subgroup: 'speed',
+    polarity: 'higher-better',
+    ytdMode: 'avg',
+    historyOf: (ctx) => (ctx.activities || []).filter(a => isRun(a) && a.anaerobicTrainingEffect)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .map(r => r.anaerobicTrainingEffect),
+    compute: (ctx) => {
+      const r = (ctx.activities || []).filter(a => isRun(a) && a.anaerobicTrainingEffect)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+      if (!r?.anaerobicTrainingEffect) return null;
+      return { value: +r.anaerobicTrainingEffect.toFixed(1), sublabel: r.date };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: a => isRun(a), valueField: a => a.anaerobicTrainingEffect, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
 
   // ═══ STRENGTH ══════════════════════════════════════════════════════════
   {
     id: 'epoc', label: 'EPOC (Load)', category: 'strength', unit: '',
-    polarity: 'neutral', // higher load = harder workout, neither inherently good/bad
+    polarity: 'neutral',
+    ytdMode: 'avg',
     historyOf: (ctx) => (ctx.activities || []).filter(isStrengthAct)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(s => s.totalTrainingLoad).filter(v => v != null),
@@ -510,10 +1056,15 @@ export const TILE_METRICS = [
       if (s?.totalTrainingLoad == null) return null;
       return { value: Math.round(s.totalTrainingLoad), sublabel: s.date };
     },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: isStrengthAct, valueField: a => a.totalTrainingLoad, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
     id: 'avgStrengthHR', label: 'Avg HR (Strength)', category: 'strength', unit: 'bpm',
     polarity: 'neutral',
+    ytdMode: 'avg',
     historyOf: (ctx) => (ctx.activities || []).filter(isStrengthAct)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(s => s.avgHR).filter(v => v != null),
@@ -526,10 +1077,15 @@ export const TILE_METRICS = [
         hrZones: Array.isArray(s.hrZones) && s.hrZones.length === 5 ? s.hrZones : null,
       };
     },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: isStrengthAct, valueField: a => a.avgHR, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
     id: 'peakStrengthHR', label: 'Peak HR', category: 'strength', unit: 'bpm',
     polarity: 'neutral',
+    ytdMode: 'avg',
     historyOf: (ctx) => (ctx.activities || []).filter(isStrengthAct)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(s => s.maxHR).filter(v => v != null),
@@ -538,6 +1094,10 @@ export const TILE_METRICS = [
       if (!s?.maxHR) return null;
       return { value: Math.round(s.maxHR), sublabel: s.date };
     },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: isStrengthAct, valueField: a => a.maxHR, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
     id: 'workRestRatio', label: 'Work : Rest', category: 'strength', unit: '',
@@ -547,6 +1107,15 @@ export const TILE_METRICS = [
     // Hypertrophy / Endurance) rather than the value being colored as
     // "good/bad" — the user's intent for that session decides which is right.
     polarity: 'neutral', // No good/bad direction — depends on training intent
+    ytdMode: 'avg',
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isStrengthAct(a) && a?.totalWorkSecs && a?.totalRestSecs,
+        valueField: a => +(a.totalRestSecs / a.totalWorkSecs).toFixed(2),
+        mode: 'avg', ytdMode: 'avg',
+      }
+    ),
     historyOf: (ctx) => (ctx.activities || []).filter(isStrengthAct)
       .filter(s => s?.totalWorkSecs && s?.totalRestSecs)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -578,6 +1147,7 @@ export const TILE_METRICS = [
   {
     id: 'activeStrengthCal', label: 'Active Cal', category: 'strength', unit: 'kcal',
     polarity: 'neutral',
+    ytdMode: 'avg',
     historyOf: (ctx) => (ctx.activities || []).filter(isStrengthAct)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(s => s.calories).filter(v => v != null),
@@ -586,10 +1156,17 @@ export const TILE_METRICS = [
       if (!s?.calories) return null;
       return { value: Math.round(s.calories), sublabel: s.date };
     },
+    // Session-level avg — week shows avg burn per session, useful as a
+    // session-intensity proxy (vs total kcal which is volume-driven).
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: isStrengthAct, valueField: a => a.calories, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
-    id: 'sessionDuration', label: 'Session Duration', category: 'strength', unit: '',
+    id: 'sessionDuration', label: 'Session Duration', category: 'strength', unit: 'min',
     polarity: 'neutral',
+    ytdMode: 'avg',
     historyOf: (ctx) => (ctx.activities || []).filter(isStrengthAct)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(s => s.durationSecs ? Math.round(s.durationSecs / 60) : null).filter(v => v != null),
@@ -604,12 +1181,44 @@ export const TILE_METRICS = [
         sublabel: s.date,
       };
     },
+    // Session-level avg in minutes for the trend.
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      { filter: isStrengthAct, valueField: a => a.durationSecs ? a.durationSecs / 60 : null, mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
     id: 'preTrainingCarbs', label: 'Pre-Training Carbs', category: 'strength', unit: 'g',
     polarity: 'higher-better',
-    // 30g+ within 2hr pre = adequate fueling for a strength session.
+    ytdMode: 'avg',
     thresholds: { green: [30, 200], amber: [15, 30], red: [0, 15] },
+    // Per-session pre-fuel: sum carbs from nutritionLog entries within
+    // the 2hr window before each strength session's start time.
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isStrengthAct(a) && a?.startTime,
+        valueField: a => {
+          const tMatch = String(a.startTime).match(/(\d{1,2}):(\d{2})/);
+          if (!tMatch) return null;
+          const [, hh, mm] = tMatch;
+          const sessionStart = new Date(`${a.date}T${hh.padStart(2, '0')}:${mm}:00`);
+          if (isNaN(sessionStart.getTime())) return null;
+          const windowStart = new Date(sessionStart.getTime() - 2 * 60 * 60 * 1000);
+          let carbs = 0; let any = false;
+          for (const e of (ctx.nutritionLog || [])) {
+            if (!e?.timestamp) continue;
+            const t = new Date(e.timestamp);
+            if (t >= windowStart && t <= sessionStart) {
+              carbs += Number(e?.macros?.carbs) || Number(e?.carbs) || 0;
+              any = true;
+            }
+          }
+          return any ? carbs : null;
+        },
+        mode: 'avg', ytdMode: 'avg',
+      }
+    ),
     // Sum carb intake in 2hr window before latest strength session start.
     compute: (ctx) => {
       const s = latestStrength(ctx.activities);
@@ -636,8 +1245,36 @@ export const TILE_METRICS = [
   {
     id: 'postTrainingProtein', label: 'Post-Training Protein', category: 'strength', unit: 'g',
     polarity: 'higher-better',
-    // 25g+ in the 60-min post window optimizes muscle protein synthesis.
+    ytdMode: 'avg',
     thresholds: { green: [25, 100], amber: [15, 25], red: [0, 15] },
+    // Per-session post-fuel: sum protein from nutritionLog entries within
+    // the 60-min window AFTER each strength session ends.
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.activities,
+      {
+        filter: a => isStrengthAct(a) && a?.startTime && a?.durationSecs,
+        valueField: a => {
+          const tMatch = String(a.startTime).match(/(\d{1,2}):(\d{2})/);
+          if (!tMatch) return null;
+          const [, hh, mm] = tMatch;
+          const sessionStart = new Date(`${a.date}T${hh.padStart(2, '0')}:${mm}:00`);
+          if (isNaN(sessionStart.getTime())) return null;
+          const sessionEnd = new Date(sessionStart.getTime() + a.durationSecs * 1000);
+          const windowEnd = new Date(sessionEnd.getTime() + 60 * 60 * 1000);
+          let protein = 0; let any = false;
+          for (const e of (ctx.nutritionLog || [])) {
+            if (!e?.timestamp) continue;
+            const t = new Date(e.timestamp);
+            if (t >= sessionEnd && t <= windowEnd) {
+              protein += Number(e?.macros?.protein) || Number(e?.protein) || 0;
+              any = true;
+            }
+          }
+          return any ? protein : null;
+        },
+        mode: 'avg', ytdMode: 'avg',
+      }
+    ),
     compute: (ctx) => {
       const s = latestStrength(ctx.activities);
       if (!s?.startTime || !s?.durationSecs) return null;
@@ -684,11 +1321,23 @@ export const TILE_METRICS = [
         : '7d avg';
       return { value: Math.round(v), sublabel: sourceTag };
     },
+    ytdMode: 'avg',
+    timeframes: (ctx) => {
+      const merged = mergedHrvByDate(ctx);
+      return timeframesFromCollection(
+        merged, { valueField: o => o.overnightHRV, mode: 'avg', ytdMode: 'avg' }
+      );
+    },
   },
   {
     id: 'rhr', label: 'RHR', category: 'recovery', unit: 'bpm',
     polarity: 'lower-better',
+    ytdMode: 'avg',
     thresholds: { green: [0, 55], amber: [55, 65], red: [65, 200] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.sleepData,
+      { valueField: s => s?.restingHR, mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => [...(ctx.sleepData || [])]
       .filter(s => s?.restingHR)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -702,9 +1351,105 @@ export const TILE_METRICS = [
     },
   },
   {
+    // Phase 4r.recovery.1 — RHR trend tile.
+    // The plain `rhr` tile shows last night's value. This one shows the
+    // 7-day running mean and compares it against the 28-day trimmed mean
+    // — early-warning signal for overtraining (RHR creeping up while
+    // load stays high), illness onset (RHR jumps overnight 24-48h
+    // before symptoms), and aerobic adaptation (RHR drifting down over
+    // weeks). Same data source as the rhr tile (sleepData.restingHR);
+    // different time window and emphasis.
+    //
+    // Coloring: green when 7-day delta is ±2bpm of 28-day baseline
+    // (normal variation), amber when 3-4bpm off, red when ≥5bpm off
+    // in either direction. The sign of the delta is in the sublabel
+    // so the user sees direction at a glance. Pillar: recovery.
+    id: 'rhrTrend', label: 'RHR Trend', category: 'recovery', unit: 'bpm',
+    polarity: 'lower-better',
+    pillar: 'recovery',
+    subgroup: 'hr',
+    thresholds: null,  // colored by delta in compute()
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.sleepData,
+      { valueField: s => s?.restingHR, mode: 'avg', ytdMode: 'avg' }
+    ),
+    historyOf: (ctx) => [...(ctx.sleepData || [])]
+      .filter(s => s?.restingHR)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .map(s => s.restingHR),
+    compute: (ctx) => {
+      const samples = [...(ctx.sleepData || [])]
+        .filter(s => s?.date && s?.restingHR != null)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      if (samples.length < 7) return null;
+      const inRange = v => Number.isFinite(v) && v >= 30 && v <= 100;
+      // Last 7 days mean (no trim — short window).
+      const last7 = samples.slice(0, 7).map(s => Number(s.restingHR)).filter(inRange);
+      if (last7.length < 4) return null;
+      const avg7 = last7.reduce((s, v) => s + v, 0) / last7.length;
+      // 28-day trimmed mean (drop top/bottom 10%).
+      const window28 = samples.slice(0, 28).map(s => Number(s.restingHR)).filter(inRange);
+      if (window28.length < 7) return null;
+      const sorted28 = [...window28].sort((a, b) => a - b);
+      const drop = Math.floor(sorted28.length * 0.10);
+      const kept28 = sorted28.slice(drop, sorted28.length - drop);
+      const trimmed28 = kept28.reduce((s, v) => s + v, 0) / kept28.length;
+      const delta = avg7 - trimmed28;
+      const absDelta = Math.abs(delta);
+      // Best/worst in last 90 days (advisory context).
+      const window90 = samples.slice(0, 90).map(s => ({ v: Number(s.restingHR), d: s.date })).filter(x => inRange(x.v));
+      let best = window90[0], worst = window90[0];
+      for (const x of window90) {
+        if (x.v < best.v) best = x;
+        if (x.v > worst.v) worst = x;
+      }
+      // Color logic — small drift is normal, sustained drift in either
+      // direction is the signal. Up = warning (overtraining/illness),
+      // down = positive (adaptation).
+      let color = 'var(--text-secondary, #888)';
+      let advisoryTone = null;
+      if (absDelta < 2)        { color = '#4ade80';  advisoryTone = 'normal'; }
+      else if (absDelta < 3.5) { color = '#fbbf24';  advisoryTone = delta > 0 ? 'monitor_up' : 'monitor_down'; }
+      else                     { color = delta > 0 ? '#f87171' : '#60a5fa';
+                                 advisoryTone = delta > 0 ? 'flag_up' : 'flag_down'; }
+      const sign = delta >= 0 ? '+' : '';
+      const advisory = (() => {
+        switch (advisoryTone) {
+          case 'normal':       return 'normal variation';
+          case 'monitor_up':   return 'monitor — sleep, stress';
+          case 'monitor_down': return 'aerobic adaptation?';
+          case 'flag_up':      return 'consider load / illness';
+          case 'flag_down':    return 'fitness improving';
+          default:             return null;
+        }
+      })();
+      return {
+        value: Math.round(avg7),
+        sublabel: `${sign}${delta.toFixed(1)} vs 28d (${Math.round(trimmed28)})${advisory ? ` · ${advisory}` : ''}`,
+        color,
+        // Extra context the tile expander can show:
+        meta: {
+          last7Avg:    +avg7.toFixed(1),
+          trimmed28:   +trimmed28.toFixed(1),
+          delta:       +delta.toFixed(1),
+          best90:      best ? { value: best.v, date: best.d } : null,
+          worst90:     worst ? { value: worst.v, date: worst.d } : null,
+          samplesUsed: { last7: last7.length, last28: window28.length },
+        },
+      };
+    },
+    available: (ctx) => Array.isArray(ctx.sleepData)
+      && ctx.sleepData.filter(s => s?.restingHR != null).length >= 7,
+  },
+  {
     id: 'sleepScore', label: 'Sleep Score', category: 'recovery', unit: '/100',
     polarity: 'higher-better',
+    ytdMode: 'avg',
     thresholds: { green: [80, 100], amber: [60, 80], red: [0, 60] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.sleepData,
+      { valueField: s => s?.sleepScore, mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => [...(ctx.sleepData || [])]
       .filter(s => s?.sleepScore != null)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -750,11 +1495,21 @@ export const TILE_METRICS = [
       || w?.bodyBatteryEnd != null
       || w?.bodyBatteryCharged != null
     ),
+    ytdMode: 'avg',
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.wellness,
+      { valueField: w => bodyBatteryDerived(w), mode: 'avg', ytdMode: 'avg' }
+    ),
   },
   {
     id: 'dailyStress', label: 'Daily Stress', category: 'recovery', unit: '/100',
     polarity: 'lower-better',
+    ytdMode: 'avg',
     thresholds: { green: [0, 30], amber: [30, 60], red: [60, 100] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.wellness,
+      { valueField: w => w?.avgStress, mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => (ctx.wellness || [])
       .filter(w => w?.avgStress != null)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -775,7 +1530,12 @@ export const TILE_METRICS = [
   {
     id: 'trainingReadiness', label: 'Training Readiness', category: 'recovery', unit: '/100',
     polarity: 'higher-better',
+    ytdMode: 'avg',
     thresholds: { green: [70, 100], amber: [40, 70], red: [0, 40] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.wellness,
+      { valueField: w => w?.trainingReadiness, mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => (ctx.wellness || [])
       .filter(w => w?.trainingReadiness != null)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -795,7 +1555,12 @@ export const TILE_METRICS = [
   {
     id: 'recoveryHours', label: 'Recovery Hours', category: 'recovery', unit: 'h',
     polarity: 'lower-better',
+    ytdMode: 'avg',
     thresholds: { green: [0, 12], amber: [12, 36], red: [36, 999] },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.wellness,
+      { valueField: w => w?.recoveryHours, mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => (ctx.wellness || [])
       .filter(w => w?.recoveryHours != null)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -814,10 +1579,44 @@ export const TILE_METRICS = [
   },
   {
     id: 'sleepRegularity', label: 'Sleep Regularity', category: 'recovery', unit: 'min',
-    // Standard deviation of sleep-onset time over last 7 nights, in minutes.
     polarity: 'lower-better',
-    // <30 min SD = consistent. 30-60 = average. >60 = chaotic.
+    ytdMode: 'avg',
     thresholds: { green: [0, 30], amber: [30, 60], red: [60, 999] },
+    // Per-night sample = the 7-night-prior onset-time SD as of that night.
+    // Aggregator then rolls those daily SD samples into week / 8-wk / YTD
+    // averages — answers "how consistent has my bedtime been on average
+    // across this period?".
+    timeframes: (ctx) => {
+      const allRows = (ctx.sleepData || []).filter(s => s?.date && (s.bedtime || s.sleepStart));
+      if (allRows.length < 3) return null;
+      const byDate = new Map();
+      for (const s of allRows) {
+        const t = String(s.bedtime || s.sleepStart);
+        const m = t.match(/(\d{1,2}):(\d{2})/);
+        if (!m) continue;
+        let mins = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        if (mins >= 18 * 60) mins -= 24 * 60; // late evening → negative for cleaner SD math
+        byDate.set(s.date, mins);
+      }
+      // For each night with data, compute the SD over the prior 7 nights.
+      const samples = [];
+      const sortedDates = [...byDate.keys()].sort();
+      for (const d of sortedDates) {
+        const dt = new Date(`${d}T12:00:00`);
+        const window = [];
+        for (let j = 0; j < 7; j++) {
+          const wd = new Date(dt);
+          wd.setDate(dt.getDate() - j);
+          const ds = `${wd.getFullYear()}-${String(wd.getMonth() + 1).padStart(2, '0')}-${String(wd.getDate()).padStart(2, '0')}`;
+          if (byDate.has(ds)) window.push(byDate.get(ds));
+        }
+        if (window.length < 3) continue;
+        const mean = window.reduce((s, v) => s + v, 0) / window.length;
+        const variance = window.reduce((s, v) => s + (v - mean) ** 2, 0) / window.length;
+        samples.push({ date: d, value: Math.round(Math.sqrt(variance)) });
+      }
+      return aggregateTimeframes(samples, { mode: 'avg', ytdMode: 'avg' });
+    },
     // historyOf: rolling 7-night SD computed at each of the last 30 days.
     // Mean of that series = "typical weekly bedtime consistency this month".
     // Averaging windowed-statistics (not raw values) so the 30d avg is
@@ -882,7 +1681,12 @@ export const TILE_METRICS = [
   // ═══ BODY ══════════════════════════════════════════════════════════════
   {
     id: 'totalCal', label: 'Calories', category: 'body', unit: 'kcal',
+    subgroup: 'fuel',
     polarity: 'target',
+    ytdMode: 'avg',
+    timeframes: (ctx) => aggregateTimeframes(
+      _nutritionSamples(ctx, 'calories'), { mode: 'avg', ytdMode: 'avg' }
+    ),
     // Both compute and historyOf use macroForDate so the Cronometer Worker's
     // full-day entries are picked up (they were being missed by the raw
     // todayLog reduce, which only summed manual entries).
@@ -903,7 +1707,12 @@ export const TILE_METRICS = [
   },
   {
     id: 'protein', label: 'Protein', category: 'body', unit: 'g',
+    subgroup: 'fuel',
     polarity: 'higher-better', // for protein, going OVER target is fine
+    ytdMode: 'avg',
+    timeframes: (ctx) => aggregateTimeframes(
+      _nutritionSamples(ctx, 'protein'), { mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => macroHistory30(ctx, 'protein'),
     compute: (ctx) => {
       const today = localToday();
@@ -921,7 +1730,12 @@ export const TILE_METRICS = [
   },
   {
     id: 'carbs', label: 'Carbs', category: 'body', unit: 'g',
+    subgroup: 'fuel',
     polarity: 'target',
+    ytdMode: 'avg',
+    timeframes: (ctx) => aggregateTimeframes(
+      _nutritionSamples(ctx, 'carbs'), { mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => macroHistory30(ctx, 'carbs'),
     compute: (ctx) => {
       const today = localToday();
@@ -939,7 +1753,12 @@ export const TILE_METRICS = [
   },
   {
     id: 'fat', label: 'Fat', category: 'body', unit: 'g',
+    subgroup: 'fuel',
     polarity: 'target',
+    ytdMode: 'avg',
+    timeframes: (ctx) => aggregateTimeframes(
+      _nutritionSamples(ctx, 'fat'), { mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => macroHistory30(ctx, 'fat'),
     compute: (ctx) => {
       const today = localToday();
@@ -957,7 +1776,12 @@ export const TILE_METRICS = [
   },
   {
     id: 'fiber', label: 'Fiber', category: 'body', unit: 'g',
+    subgroup: 'quality',
     polarity: 'higher-better',
+    ytdMode: 'avg',
+    timeframes: (ctx) => aggregateTimeframes(
+      _nutritionSamples(ctx, 'fiber'), { mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => macroHistory30(ctx, 'fiber'),
     compute: (ctx) => {
       const today = localToday();
@@ -975,38 +1799,129 @@ export const TILE_METRICS = [
   },
   {
     id: 'micronutrientScore', label: 'Micros', category: 'body', unit: '%',
+    subgroup: 'quality',
     polarity: 'higher-better',
+    ytdMode: 'avg',
     thresholds: { green: [80, 100], amber: [50, 80], red: [0, 50] },
+    // Per-day score = (# of tracked micros >= RDI) / (# tracked) × 100.
+    // Walks both the legacy cronometer collection (uses parens-style keys)
+    // AND the nutritionLog full-day extended block (worker shape) so users
+    // on either path get a populated tile.
+    timeframes: (ctx) => {
+      // RDI references (US adult male). Each entry maps both possible field
+      // names: legacy "Foo (unit)" and worker-flat camelCase.
+      const RDI_FIELDS = [
+        { rdi: 90,   keys: ['Vitamin C (mg)', 'vitaminC'] },
+        { rdi: 600,  keys: ['Vitamin D (IU)', 'vitaminD'] },
+        { rdi: 2.4,  keys: ['Vitamin B12 (µg)', 'vitaminB12'] },
+        { rdi: 420,  keys: ['Magnesium (mg)', 'magnesium'] },
+        { rdi: 3400, keys: ['Potassium (mg)', 'potassium'] },
+        { rdi: 8,    keys: ['Iron (mg)', 'iron'] },
+        { rdi: 11,   keys: ['Zinc (mg)', 'zinc'] },
+        { rdi: 1000, keys: ['Calcium (mg)', 'calcium'] },
+      ];
+      const scoreOne = (lookups) => {
+        let hit = 0, total = 0;
+        for (const { rdi, keys } of RDI_FIELDS) {
+          let v = null;
+          for (const k of keys) {
+            for (const src of lookups) {
+              const x = parseFloat(src?.[k]);
+              if (isFinite(x)) { v = x; break; }
+            }
+            if (v != null) break;
+          }
+          if (v == null) continue;
+          total++;
+          if (v >= rdi) hit++;
+        }
+        return total > 0 ? { hit, total } : null;
+      };
+      const samples = [];
+      const seenDates = new Set();
+      // 1) nutritionLog full-day entries (Worker source, current path)
+      for (const e of (ctx.nutritionLog || [])) {
+        if (e?.meal !== 'full-day' || !e?.date) continue;
+        const score = scoreOne([e?.extended, e?.macros, e?.totals, e]);
+        if (!score) continue;
+        seenDates.add(e.date);
+        samples.push({ date: e.date, value: Math.round((score.hit / score.total) * 100) });
+      }
+      // 2) Legacy cronometer collection — only for dates not already covered
+      for (const r of (ctx.cronometer || [])) {
+        if (!r?.date || seenDates.has(r.date)) continue;
+        const score = scoreOne([r?.totals, r]);
+        if (!score) continue;
+        samples.push({ date: r.date, value: Math.round((score.hit / score.total) * 100) });
+      }
+      return aggregateTimeframes(samples, { mode: 'avg', ytdMode: 'avg' });
+    },
     // Roll-up: percentage of tracked micronutrients hitting their RDI today.
+    // Reads from BOTH sources — the modern nutritionLog (Cronometer worker
+    // writes here, with extended micros under e.extended) AND the legacy
+    // cronometer collection. Mirrors the field-name handling in
+    // timeframes() above so users on either path get a populated tile.
     compute: (ctx) => {
       const today = localToday();
-      const todayCrono = (ctx.cronometer || []).find(r => r?.date === today);
-      const totals = todayCrono?.totals || todayCrono;
-      if (!totals) return null;
-      // Subset of important micros + their RDI (US adult male reference)
-      const RDI = {
-        'Vitamin C (mg)': 90, 'Vitamin D (IU)': 600, 'Vitamin B12 (µg)': 2.4,
-        'Magnesium (mg)': 420, 'Potassium (mg)': 3400, 'Iron (mg)': 8,
-        'Zinc (mg)': 11, 'Calcium (mg)': 1000,
+      // RDI references (US adult male). Each entry maps both possible
+      // field names: legacy "Foo (unit)" and worker-flat camelCase.
+      const RDI_FIELDS = [
+        { rdi: 90,   keys: ['Vitamin C (mg)', 'vitaminC'] },
+        { rdi: 600,  keys: ['Vitamin D (IU)', 'vitaminD'] },
+        { rdi: 2.4,  keys: ['Vitamin B12 (µg)', 'vitaminB12'] },
+        { rdi: 420,  keys: ['Magnesium (mg)', 'magnesium'] },
+        { rdi: 3400, keys: ['Potassium (mg)', 'potassium'] },
+        { rdi: 8,    keys: ['Iron (mg)', 'iron'] },
+        { rdi: 11,   keys: ['Zinc (mg)', 'zinc'] },
+        { rdi: 1000, keys: ['Calcium (mg)', 'calcium'] },
+      ];
+      // Resolve the value of a field across an ordered list of source
+      // objects, returning the first finite numeric hit. Worker entries
+      // typically expose micros under `extended`, legacy uses `totals`.
+      const lookupVal = (lookups, keys) => {
+        for (const k of keys) {
+          for (const src of lookups) {
+            const x = parseFloat(src?.[k]);
+            if (isFinite(x)) return x;
+          }
+        }
+        return null;
       };
-      let hit = 0; let total = 0;
-      for (const [k, rdi] of Object.entries(RDI)) {
-        const v = parseFloat(totals[k]);
-        if (!isFinite(v)) continue;
+      // Try modern nutritionLog full-day entry first, then legacy cronometer.
+      const todayLog = (ctx.nutritionLog || []).find(e => e?.meal === 'full-day' && e?.date === today);
+      const todayCrono = (ctx.cronometer || []).find(r => r?.date === today);
+      const lookups = todayLog
+        ? [todayLog?.extended, todayLog?.macros, todayLog?.totals, todayLog]
+        : todayCrono
+        ? [todayCrono?.totals, todayCrono]
+        : null;
+      if (!lookups) return null;
+      let hit = 0, total = 0;
+      for (const { rdi, keys } of RDI_FIELDS) {
+        const v = lookupVal(lookups, keys);
+        if (v == null) continue;
         total++;
         if (v >= rdi) hit++;
       }
       if (total === 0) return null;
       return { value: Math.round((hit / total) * 100), sublabel: `${hit}/${total} hit` };
     },
-    available: (ctx) => Array.isArray(ctx.cronometer) && ctx.cronometer.some(r => r?.totals || r?.['Magnesium (mg)']),
+    available: (ctx) =>
+      (Array.isArray(ctx.nutritionLog) && ctx.nutritionLog.some(e => e?.meal === 'full-day' && (e?.extended || e?.totals))) ||
+      (Array.isArray(ctx.cronometer)   && ctx.cronometer.some(r => r?.totals || r?.['Magnesium (mg)'])),
   },
   {
     id: 'weightTrend', label: 'Weight Trend', category: 'body', unit: 'lb',
+    subgroup: 'composition',
     // Polarity depends on user's goal direction. Without an explicit "cut"
     // / "bulk" / "maintain" flag in profile, treat as 'target' against the
     // user's targetWeight. If no target set, polarity falls to 'neutral'.
     polarity: 'target',
+    ytdMode: 'avg',
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.weightData,
+      { valueField: w => w?.weightLbs ?? w?.weight, mode: 'avg', ytdMode: 'avg' }
+    ),
     historyOf: (ctx) => [...(ctx.weightData || [])]
       .filter(w => w?.weightLbs)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -1032,7 +1947,12 @@ export const TILE_METRICS = [
   },
   {
     id: 'sodium', label: 'Sodium', category: 'body', unit: 'mg',
+    subgroup: 'quality',
     polarity: 'target',
+    ytdMode: 'avg',
+    timeframes: (ctx) => aggregateTimeframes(
+      _nutritionSamples(ctx, 'sodium'), { mode: 'avg', ytdMode: 'avg' }
+    ),
     // Sodium is in nutritionLog full-day entries' `extended` block (cronometer-
     // client.js) — macroForDate handles both the new path and the legacy
     // cronometer collection. Includes 30d history for the avg30 slot.
@@ -1061,6 +1981,155 @@ export const TILE_METRICS = [
       const t = r?.totals || r;
       return t && t['Sodium (mg)'] != null;
     }),
+  },
+
+  // ═══ BODY — COMPOSITION (Phase 4m.2) ═══════════════════════════════════
+  // Sources: ctx.weightData rows (DEXA / scale / manual). Each row may
+  // carry { date, weight, bodyFatPct, leanMass, bmi } depending on source.
+  {
+    id: 'bodyFatPct', label: 'Body Fat', category: 'body', unit: '%',
+    subgroup: 'composition',
+    polarity: 'lower-better',
+    ytdMode: 'avg',
+    // Scale rows often have bodyFatPct stored as 0 when the impedance read
+    // failed — guard with > 0 so we don't average in junk samples.
+    compute: (ctx) => {
+      const w = (ctx.weightData || [])
+        .filter(r => r?.bodyFatPct != null && Number(r.bodyFatPct) > 0)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+      if (!w) return null;
+      return { value: +Number(w.bodyFatPct).toFixed(1), sublabel: w.date };
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.weightData,
+      { valueField: r => {
+          const v = Number(r?.bodyFatPct);
+          return Number.isFinite(v) && v > 0 ? v : null;
+        },
+        mode: 'avg', ytdMode: 'avg' }
+    ),
+  },
+  {
+    id: 'leanMass', label: 'Lean Mass', category: 'body', unit: 'lb',
+    subgroup: 'composition',
+    polarity: 'higher-better',
+    ytdMode: 'avg',
+    // Priority chain (matches the existing Dashboard UI):
+    //   1. r.skeletalMuscleMassLbs — direct from Garmin Index scale
+    //   2. derived weightLbs × (1 - bodyFatPct/100)  — for rows with bf% but no muscle field
+    // Both must produce a positive result (junk-row guard).
+    compute: (ctx) => {
+      const sorted = [...(ctx.weightData || [])]
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      for (const w of sorted) {
+        const direct = Number(w?.skeletalMuscleMassLbs);
+        if (Number.isFinite(direct) && direct > 0 && direct < 300) {
+          return { value: +direct.toFixed(1), sublabel: w.date };
+        }
+        const wt = Number(w?.weightLbs ?? w?.weight);
+        const bf = Number(w?.bodyFatPct);
+        if (Number.isFinite(wt) && wt > 0 && Number.isFinite(bf) && bf > 0) {
+          return { value: +(wt * (1 - bf / 100)).toFixed(1), sublabel: w.date };
+        }
+      }
+      return null;
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.weightData,
+      {
+        valueField: r => {
+          const direct = Number(r?.skeletalMuscleMassLbs);
+          if (Number.isFinite(direct) && direct > 0 && direct < 300) return direct;
+          const wt = Number(r?.weightLbs ?? r?.weight);
+          const bf = Number(r?.bodyFatPct);
+          if (!Number.isFinite(wt) || wt <= 0 || !Number.isFinite(bf) || bf <= 0) return null;
+          return wt * (1 - bf / 100);
+        },
+        mode: 'avg', ytdMode: 'avg',
+      }
+    ),
+  },
+  {
+    id: 'bmi', label: 'BMI', category: 'body', unit: '',
+    subgroup: 'composition',
+    polarity: 'lower-better',
+    ytdMode: 'avg',
+    // Priority chain:
+    //   1. r.bmi from Garmin Index scale row (most reliable, already plausibility-checked)
+    //   2. computed from weight + profile height (fallback)
+    compute: (ctx) => {
+      const sorted = [...(ctx.weightData || [])]
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      for (const w of sorted) {
+        const direct = Number(w?.bmi);
+        if (Number.isFinite(direct) && direct >= 10 && direct <= 60) {
+          return { value: +direct.toFixed(1), sublabel: w.date };
+        }
+      }
+      // Fallback: compute from weight + profile height
+      const heightIn = parseFloat(ctx.profile?.heightInches) ||
+                       (parseFloat(ctx.profile?.heightFt) * 12 + parseFloat(ctx.profile?.heightIn || 0));
+      if (!heightIn) return null;
+      const w = sorted[0];
+      const wt = Number(w?.weightLbs ?? w?.weight);
+      if (!Number.isFinite(wt) || wt <= 0) return null;
+      return { value: +(703 * wt / (heightIn * heightIn)).toFixed(1), sublabel: w.date };
+    },
+    timeframes: (ctx) => {
+      const heightIn = parseFloat(ctx.profile?.heightInches) ||
+                       (parseFloat(ctx.profile?.heightFt) * 12 + parseFloat(ctx.profile?.heightIn || 0));
+      return timeframesFromCollection(
+        ctx.weightData,
+        {
+          valueField: r => {
+            const direct = Number(r?.bmi);
+            if (Number.isFinite(direct) && direct >= 10 && direct <= 60) return direct;
+            if (!heightIn) return null;
+            const wt = Number(r?.weightLbs ?? r?.weight);
+            return Number.isFinite(wt) && wt > 0 ? 703 * wt / (heightIn * heightIn) : null;
+          },
+          mode: 'avg', ytdMode: 'avg',
+        }
+      );
+    },
+  },
+  {
+    id: 'rmr', label: 'RMR', category: 'body', unit: 'kcal',
+    subgroup: 'quality',
+    polarity: 'higher-better',
+    ytdMode: 'avg',
+    // Katch-McArdle: RMR = 370 + 21.6 × LBM_kg
+    // Walk weight rows newest-first, find one with both weight + non-zero
+    // body fat, derive LBM from weight × (1 - bf/100). Skip rows where
+    // bf=0 (failed impedance read) so we don't return RMR(weight) by accident.
+    compute: (ctx) => {
+      const sorted = [...(ctx.weightData || [])]
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      for (const w of sorted) {
+        const wt = Number(w?.weightLbs ?? w?.weight);
+        const bf = Number(w?.bodyFatPct);
+        if (!Number.isFinite(wt) || wt <= 0 || !Number.isFinite(bf) || bf <= 0) continue;
+        const lbmLbs = wt * (1 - bf / 100);
+        const lbmKg = lbmLbs / 2.20462;
+        return { value: Math.round(370 + 21.6 * lbmKg), sublabel: w.date };
+      }
+      return null;
+    },
+    timeframes: (ctx) => timeframesFromCollection(
+      ctx.weightData,
+      {
+        valueField: r => {
+          const wt = Number(r?.weightLbs ?? r?.weight);
+          const bf = Number(r?.bodyFatPct);
+          // Need both, AND a non-zero body fat — otherwise we'd compute
+          // RMR from weight × 1 = weight, which is meaningless.
+          if (!Number.isFinite(wt) || wt <= 0 || !Number.isFinite(bf) || bf <= 0) return null;
+          const lbmKg = (wt * (1 - bf / 100)) / 2.20462;
+          return 370 + 21.6 * lbmKg;
+        },
+        mode: 'avg', ytdMode: 'avg',
+      }
+    ),
   },
 ];
 
@@ -1114,7 +2183,7 @@ export function normalizeTilePrefs(prefs) {
 // ── Context builder ─────────────────────────────────────────────────────────
 // Single function that gathers everything any metric might need from storage.
 // Called once per render rather than each metric reading storage individually.
-export function buildTileContext({ activities, sleepData, hrvData, weightData, nutritionLog, cronometer, dailyLogs, profile, wellness }) {
+export function buildTileContext({ activities, sleepData, hrvData, weightData, nutritionLog, cronometer, dailyLogs, profile, wellness, races }) {
   return {
     activities: activities || [],
     sleepData: sleepData || [],
@@ -1125,5 +2194,6 @@ export function buildTileContext({ activities, sleepData, hrvData, weightData, n
     dailyLogs: dailyLogs || [],
     profile: profile || {},
     wellness: wellness || [], // Phase 4 — empty until Garmin Connect Wellness sync ships
+    races: races || [],       // Phase 4m.2.5 — used by Race Predictor to pick the right distance
   };
 }

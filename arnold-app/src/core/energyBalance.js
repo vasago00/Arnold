@@ -26,6 +26,7 @@
 import { storage } from './storage.js';
 import { dailyTotals } from './nutrition.js';
 import { getGoals } from './goals.js';
+import { allActivities as allActivitiesDeduped } from './dcyMath.js';
 
 const LB_PER_KG       = 2.20462;
 const KG_PER_LB       = 0.45359;
@@ -182,34 +183,45 @@ export function computeRMR() {
 // ─── Activity calories for a given date ─────────────────────────────────────
 
 /**
- * Sum total kcal expended in workouts/runs for a given date. Uses the same
- * merged-and-deduplicated activity list as computeDailyScore — combines
- * arnold:activities and dailyLogs.fitActivities, drops health_connect ghost
- * rows. Each activity's `calories` field comes directly from the Garmin FIT
- * file (totalCalories session field) when available.
+ * Sum total kcal expended in workouts/runs for a given date.
+ *
+ * Phase 4r.energy.1 — was concatenating `activities` and
+ * `dailyLogs.fitActivities` raw, which double-counted whenever the same
+ * physical workout came in through more than one source (Garmin worker
+ * import + FIT upload + CSV stub). With Garmin reporting ~1,350 kcal
+ * for a 12.4mi run and three duplicate entries, the rolled-up activity
+ * kcal hit ~4,050 → eat-back 3,050 → 5,250 daily target. That's the
+ * bug the user saw.
+ *
+ * Now routes through `allActivities()` from dcyMath.js — the canonical
+ * deduped/source-prioritized list (dedup by date+canon-type, FIT entries
+ * filling empty slots or replacing CSV stubs, never double-counting).
  */
 export function dailyActivityCalories(dateStr) {
   const date = dateStr || localDate();
-  const allActivities = storage.get('activities') || [];
-  const dailyLogs     = storage.get('dailyLogs')  || [];
-
-  const fitActs = [];
-  for (const l of dailyLogs) {
-    if (!l?.date || l.date !== date) continue;
-    const fits = Array.isArray(l.fitActivities) && l.fitActivities.length
-      ? l.fitActivities
-      : (l.fitData ? [l.fitData] : []);
-    for (const fd of fits) if (fd) fitActs.push(fd);
-  }
-  const merged = [
-    ...allActivities.filter(a => a.date === date && a.source !== 'health_connect'),
-    ...fitActs,
-  ];
-
   let kcal = 0;
-  for (const a of merged) {
-    const c = parseFloat(a.calories);
-    if (c > 0 && c < 5000) kcal += c; // sanity bound — ignore broken values
+  try {
+    // Use the canonical deduped activity universe. Same source the
+    // unified Run/Strength volume tiles read from, so calorie sums
+    // can never disagree with what the rest of the app counts.
+    const all = allActivitiesDeduped();
+    for (const a of all) {
+      if (a?.date !== date) continue;
+      if (a?.source === 'health_connect') continue;  // ghost rows
+      const c = parseFloat(a?.calories);
+      if (c > 0 && c < 5000) kcal += c;  // sanity bound
+    }
+  } catch (e) {
+    console.warn('[energyBalance] dailyActivityCalories fallback:', e?.message || e);
+    // Fallback to raw read if the unified list throws (shouldn't happen,
+    // but better safe than zero).
+    const rows = storage.get('activities') || [];
+    for (const a of rows) {
+      if (a?.date !== date) continue;
+      if (a?.source === 'health_connect') continue;
+      const c = parseFloat(a?.calories);
+      if (c > 0 && c < 5000) kcal += c;
+    }
   }
   return Math.round(kcal);
 }
@@ -516,16 +528,27 @@ export function getDynamicCalorieTarget(dateStr, opts = {}) {
 }
 
 /**
- * Today's macro target adjusted for activity. Protein and fat stay constant
- * (LBM/hormonal floors don't move with daily training); carbs absorb the
- * activity-driven calorie increase since they're the substrate that needs
- * replacing post-exercise.
+ * Today's macro target adjusted for activity.
+ *
+ * Distributes the eat-back calories across all three macros proportional to
+ * the user's baseline split. So if the baseline is 30% protein / 40% carb /
+ * 30% fat and the user earns 500 eat-back kcal, the +500 is split:
+ *   • protein: +150 kcal → +37g     (30% × 500 / 4 kcal/g)
+ *   • carbs:   +200 kcal → +50g     (40% × 500 / 4 kcal/g)
+ *   • fat:     +150 kcal → +17g     (30% × 500 / 9 kcal/g)
+ *
+ * Why proportional (vs. carbs-only): users want to SEE all three targets
+ * move with their training day. Keeping the split intact preserves the
+ * user-set ratio. The previous "carbs-only" approach was nutritionally
+ * defensible (LBM-floored protein, hormonal-floored fat) but invisible —
+ * users on a hard day saw their carb target jump while protein/fat stayed
+ * static, which felt broken.
+ *
+ * If you specifically want LBM-floored protein semantics later, expose
+ * opts.proteinMode = 'fixed' to opt back in.
  */
 export function getDynamicMacroTarget(dateStr, opts = {}) {
   const dyn = getDynamicCalorieTarget(dateStr, opts);
-  // Use getGoals() so derived macro grams (dailyProteinTarget/CarbTarget/
-  // FatTarget) are computed from calories × split % AND non-derived fields
-  // like dailyFiberTarget fall back to their defaults.
   let baseProteinG = 0, baseCarbsG = 0, baseFatG = 0, baseFiberG = 0;
   try {
     const goals = getGoals();
@@ -535,15 +558,43 @@ export function getDynamicMacroTarget(dateStr, opts = {}) {
     baseFiberG   = parseFloat(goals.dailyFiberTarget)  || 0;
   } catch { /* ignore */ }
 
-  // Protein + fat unchanged; carbs absorb the eat-back delta (4 kcal/g)
-  const carbsG = baseCarbsG + Math.round(dyn.eatBackKcal / 4);
+  // Compute baseline split (% of baseline calories from each macro)
+  const baseProteinKcal = baseProteinG * 4;
+  const baseCarbsKcal   = baseCarbsG   * 4;
+  const baseFatKcal     = baseFatG     * 9;
+  const baseTotalKcal   = baseProteinKcal + baseCarbsKcal + baseFatKcal || 1;
+  const pPct = baseProteinKcal / baseTotalKcal;
+  const cPct = baseCarbsKcal   / baseTotalKcal;
+  const fPct = baseFatKcal     / baseTotalKcal;
+
+  // Allow caller to opt into the legacy carbs-only behaviour when the
+  // semantic priority is "protein/fat are floors, carbs are the swing".
+  const carbsOnly = opts.proteinMode === 'fixed';
+  const eat = dyn.eatBackKcal;
+
+  let proteinG, carbsG, fatG;
+  if (carbsOnly) {
+    proteinG = baseProteinG;
+    fatG     = baseFatG;
+    carbsG   = baseCarbsG + Math.round(eat / 4);
+  } else {
+    proteinG = baseProteinG + Math.round((eat * pPct) / 4);
+    carbsG   = baseCarbsG   + Math.round((eat * cPct) / 4);
+    fatG     = baseFatG     + Math.round((eat * fPct) / 9);
+  }
+
   return {
     ...dyn,
-    proteinG: baseProteinG,
+    proteinG,
     carbsG,
-    fatG: baseFatG,
+    fatG,
     fiberG: baseFiberG,
     baseProteinG, baseCarbsG, baseFatG,
+    // Expose the deltas for UIs that want to surface the eat-back math
+    // ("Activity +500 kcal → +37g protein · +50g carbs · +17g fat").
+    eatBackProteinG: proteinG - baseProteinG,
+    eatBackCarbsG:   carbsG   - baseCarbsG,
+    eatBackFatG:     fatG     - baseFatG,
   };
 }
 

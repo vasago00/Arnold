@@ -3,6 +3,7 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
+import { storage } from './storage.js';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // ─── Date extraction from filename ───────────────────────────────────────────
@@ -378,6 +379,64 @@ const WEATHER_CODES = {
   81:'Heavy showers',95:'Thunderstorm'
 };
 
+// Phase 4q.weather.2 — resolve the device's location via navigator.geolocation
+// and cache the coords for 24h. Falls back to NYC if permission is denied,
+// the API is unavailable, or the request times out. Works in both the web
+// build and the Capacitor WebView (no native plugin required).
+const FALLBACK_LOCATION = { latitude: 40.7128, longitude: -74.0060, source: 'fallback-nyc' };
+const LOCATION_FRESH_MS = 24 * 60 * 60 * 1000; // re-prompt at most once per day
+const LOCATION_TIMEOUT_MS = 8000;
+
+async function getDeviceLocation() {
+  // Hot cache check
+  try {
+    const cached = storage.get('weatherLocation');
+    if (cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < LOCATION_FRESH_MS) {
+      return cached;
+    }
+  } catch {}
+
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    return FALLBACK_LOCATION;
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(result);
+    };
+    const tId = setTimeout(() => finish(FALLBACK_LOCATION), LOCATION_TIMEOUT_MS);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        clearTimeout(tId);
+        const loc = {
+          latitude:  pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          fetchedAt: Date.now(),
+          source:    'device',
+        };
+        try { storage.set('weatherLocation', loc, { skipValidation: true }); } catch {}
+        finish(loc);
+      },
+      (err) => {
+        clearTimeout(tId);
+        // Cache the fallback for the same TTL so we don't spam permission
+        // prompts; the user can re-grant after the 24h window.
+        const fallback = { ...FALLBACK_LOCATION, fetchedAt: Date.now(), source: `fallback-${err?.code || 'err'}` };
+        try { storage.set('weatherLocation', fallback, { skipValidation: true }); } catch {}
+        console.warn('[weather] Geolocation failed:', err?.message || err?.code);
+        finish(fallback);
+      },
+      // maximumAge: accept a positionn the OS already has up to 5 minutes old
+      // enableHighAccuracy: false — city-level is plenty for weather
+      { timeout: LOCATION_TIMEOUT_MS - 500, enableHighAccuracy: false, maximumAge: 5 * 60 * 1000 }
+    );
+  });
+}
+
 export async function fetchWeatherForDate(dateStr) {
   const _now = new Date();
   const today = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
@@ -387,26 +446,66 @@ export async function fetchWeatherForDate(dateStr) {
     ? 'https://archive-api.open-meteo.com/v1/archive'
     : 'https://api.open-meteo.com/v1/forecast';
 
-  const url = `${baseUrl}?latitude=40.7128&longitude=-74.0060&daily=temperature_2m_max,temperature_2m_min,weathercode,windspeed_10m_max,precipitation_sum&timezone=America%2FNew_York&start_date=${dateStr}&end_date=${dateStr}`;
+  // Phase 4q.weather.2 — pull live device coords + let Open-Meteo auto-pick
+  // the timezone for those coords (timezone=auto). Falls back to NYC if
+  // geolocation is denied/unavailable.
+  // Phase 4q.weather.3 — also pull `current` block (forecast endpoint only)
+  // so the chip can show the actual NOW temperature instead of a daily
+  // min-max range.
+  const loc = await getDeviceLocation();
+  const params = [
+    `latitude=${loc.latitude}`,
+    `longitude=${loc.longitude}`,
+    `daily=temperature_2m_max,temperature_2m_min,weathercode,windspeed_10m_max,precipitation_sum`,
+    `timezone=auto`,
+    `start_date=${dateStr}`,
+    `end_date=${dateStr}`,
+  ];
+  if (!isPast) {
+    params.push('current=temperature_2m,weathercode,windspeed_10m');
+  }
+  const url = `${baseUrl}?${params.join('&')}`;
 
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather API error: ${res.status}`);
     const data = await res.json();
     const daily = data.daily;
+    const current = data.current;
     if (!daily || !daily.temperature_2m_max) return null;
+
+    const tempMaxC = daily.temperature_2m_max[0];
+    const tempMinC = daily.temperature_2m_min[0];
+    const dailyCode = daily.weathercode[0];
+
+    // Current temp falls back to daily mid-point if `current` block isn't
+    // available (archive endpoint, or rare API hiccup).
+    const currentTempC = (current && current.temperature_2m != null)
+      ? current.temperature_2m
+      : (tempMaxC + tempMinC) / 2;
+    const currentCode = (current && current.weathercode != null)
+      ? current.weathercode
+      : dailyCode;
 
     return {
       date: dateStr,
-      tempMaxF: Math.round(daily.temperature_2m_max[0] * 9/5 + 32),
-      tempMinF: Math.round(daily.temperature_2m_min[0] * 9/5 + 32),
-      tempMaxC: daily.temperature_2m_max[0],
-      tempMinC: daily.temperature_2m_min[0],
-      condition: WEATHER_CODES[daily.weathercode[0]] || 'Mixed conditions',
+      // Current readings (preferred for display).
+      currentTempC: +Number(currentTempC).toFixed(1),
+      currentTempF: Math.round(currentTempC * 9/5 + 32),
+      currentCondition: WEATHER_CODES[currentCode] || 'Mixed conditions',
+      // Daily aggregates (still surfaced for context-aware logic).
+      tempMaxF: Math.round(tempMaxC * 9/5 + 32),
+      tempMinF: Math.round(tempMinC * 9/5 + 32),
+      tempMaxC,
+      tempMinC,
+      condition: WEATHER_CODES[dailyCode] || 'Mixed conditions',
       windMph: Math.round(daily.windspeed_10m_max[0] * 0.621371),
       windKph: daily.windspeed_10m_max[0],
       precipitationMm: daily.precipitation_sum[0],
-      source: isPast ? 'historical' : 'forecast'
+      source: isPast ? 'historical' : 'forecast',
+      locationSource: loc.source,
+      latitude:  loc.latitude,
+      longitude: loc.longitude,
     };
   } catch (err) {
     console.error('Weather fetch failed:', err);

@@ -249,6 +249,16 @@ async function syncSleep() {
 // ── Sync: Weight ────────────────────────────────────────────────────────────
 
 async function syncWeight() {
+  // Phase 4r.energy.4 — when the Garmin worker is configured, prefer
+  // the direct Garmin weight client (richer body-comp, intra-day
+  // timestamps, no HC aggregation lossiness). HC weight stays as the
+  // fallback for users without worker config.
+  try {
+    // eslint-disable-next-line no-undef
+    const isGarmin = typeof window !== 'undefined' && !!(localStorage.getItem('arnold:cloud-sync:endpoint') || '').trim();
+    if (isGarmin) return { synced: 0, skipped: 'garmin_worker_preferred' };
+  } catch { /* fall through to HC sync */ }
+
   const lastSync = hcBridge.getLastSyncTime('weight');
   const startDate = lastSync ? isoDate(lastSync) : daysAgo(DEFAULT_LOOKBACK_DAYS);
   const endDate = isoDate(new Date());
@@ -257,43 +267,64 @@ async function syncWeight() {
   if (!records.length) return { synced: 0 };
 
   const existing = storage.get('weight') || [];
-  const existingByDate = new Map(existing.map(w => [w.date, w]));
+  // Phase 4r.energy.2 — dedup by (date, time) instead of date alone.
+  // Multiple weigh-ins per day are legitimate signals (e.g. morning vs
+  // post-run reveals sweat loss / hydration state) — collapsing to one
+  // row threw that data away. Keys now look like '2026-05-10|09:05'.
+  const keyOf = w => `${w?.date || ''}|${w?.time || ''}`;
+  const existingByKey = new Map(existing.map(w => [keyOf(w), w]));
 
   let added = 0;
   for (const rec of records) {
-    const date = isoDate(rec.time);
-    if (existingByDate.has(date)) {
-      const ex = existingByDate.get(date);
-      if (ex.source === 'health_connect') continue;
+    const dt = rec.time instanceof Date ? rec.time : new Date(rec.time);
+    if (!Number.isFinite(dt.getTime())) continue;
+    const date = isoDate(dt);
+    // HH:MM in local time — same shape Garmin Connect's intra-day list uses.
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mm = String(dt.getMinutes()).padStart(2, '0');
+    const time = `${hh}:${mm}`;
+    const key = `${date}|${time}`;
+    // Skip if we already have an HC reading at this exact timestamp
+    // (idempotent re-sync). A non-HC reading at the same date+time is
+    // preferred over HC; don't overwrite it.
+    if (existingByKey.has(key)) {
+      const ex = existingByKey.get(key);
+      if (ex.source === 'health_connect' || ex.source !== 'health_connect') continue;
     }
 
     const weightLbs = Math.round(rec.weightKg * KG_TO_LBS * 10) / 10;
 
+    // Phase 4r.energy.2 — BMI is no longer computed here. The previous
+    // code computed `weightLbs / heightIn² × 703` using
+    // `profile.heightInches || profile.height`. When `profile.height` was
+    // stored as feet (a bare 5), the formula evaluated 188.5/25×703 ≈
+    // 5300 — wildly off. The BMI tile already computes from
+    // weight + profile.heightInches as a fallback when stored bmi is
+    // missing or out of the [10, 60] sanity range, so leaving bmi=null
+    // here lets the tile own that math correctly. One canonical path,
+    // no duplicate computation, no unit confusion.
     const record = {
       date,
+      time,
       weightLbs,
       weightKg: Math.round(rec.weightKg * 10) / 10,
-      bodyFatPct: null, // Garmin doesn't write BF to HC
-      bmi: null,        // Can be computed from height in profile
+      bodyFatPct: null,  // Garmin doesn't write BF through HC
+      bmi: null,         // tile computes from profile height
       source: 'health_connect',
     };
 
-    // Compute BMI if profile has height
-    try {
-      const profile = storage.get('profile') || {};
-      const heightIn = parseFloat(profile.heightInches) || parseFloat(profile.height);
-      if (heightIn && heightIn > 0) {
-        record.bmi = Math.round((weightLbs / (heightIn * heightIn)) * 703 * 10) / 10;
-      }
-    } catch { /* ignore */ }
-
-    existingByDate.set(date, record);
+    existingByKey.set(key, record);
     added++;
   }
 
   if (added > 0) {
-    const merged = Array.from(existingByDate.values())
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // Sort by (date desc, time desc) — newest reading first, consistent
+    // with how the rest of the app reads "most recent".
+    const merged = Array.from(existingByKey.values()).sort((a, b) => {
+      const dCmp = (b.date || '').localeCompare(a.date || '');
+      if (dCmp !== 0) return dCmp;
+      return (b.time || '').localeCompare(a.time || '');
+    });
     storage.set('weight', merged);
   }
 

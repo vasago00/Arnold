@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Session Signature Sheet Splitter</title>
+<style>
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #1a1a1a; color: #e8e6e0;
+    padding: 24px; max-width: 1100px; margin: 0 auto;
+    line-height: 1.4;
+  }
+  h1 { margin-top: 0; font-size: 22px; letter-spacing: 0.02em; }
+  p { color: #a8a59f; }
+  code { background: #2a2a2a; padding: 2px 6px; border-radius: 4px; color: #e8e6e0; }
+  .drop {
+    display: block;
+    border: 2px dashed #555;
+    padding: 56px 24px;
+    text-align: center;
+    border-radius: 12px;
+    cursor: pointer;
+    margin: 24px 0;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .drop:hover, .drop.dragging { border-color: #5eead4; background: rgba(94,234,212,0.04); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+  .cell {
+    background: #2a2a2a;
+    padding: 14px; border-radius: 10px; text-align: center;
+    border: 0.5px solid rgba(255,255,255,0.06);
+  }
+  .cell img {
+    max-width: 100%;
+    background: linear-gradient(45deg, #1f1f1f 25%, transparent 25%, transparent 75%, #1f1f1f 75%) 0 0/20px 20px,
+                linear-gradient(45deg, #1f1f1f 25%, #2a2a2a 25%, #2a2a2a 75%, #1f1f1f 75%) 10px 10px/20px 20px;
+    border-radius: 6px;
+    image-rendering: -webkit-optimize-contrast;
+  }
+  button {
+    background: #5eead4; color: #1a1a1a;
+    border: 0; padding: 8px 14px;
+    border-radius: 6px; cursor: pointer;
+    font-weight: 700; font-size: 12px;
+    margin-top: 10px; letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  button:hover { background: #2dd4bf; }
+  .label {
+    font-size: 11px; color: #a8a59f;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin-top: 8px; font-weight: 600;
+  }
+  .toolbar {
+    display: flex; gap: 8px; align-items: center;
+    margin: 12px 0 0;
+  }
+  .toolbar button { margin: 0; }
+  .layout-toggle {
+    background: #3a3a3a; color: #e8e6e0;
+  }
+  .layout-toggle.active { background: #5eead4; color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>Session Signature Sheet Splitter</h1>
+<p>Drop your Gemini-generated sheet image below. The image is split into 6 cells using a 3-column × 2-row grid and downloaded as <code>run.png</code>, <code>strength.png</code>, <code>hiit.png</code>, <code>mobility.png</code>, <code>cross.png</code>, <code>race.png</code>.</p>
+<p style="font-size: 13px;"><strong>Layout assumed (default):</strong> top row = run, strength, hiit · bottom row = mobility, cross, race. If your sheet has a different order, click "Reassign" on any cell to relabel.</p>
+
+<label class="drop" id="drop">
+  <input type="file" id="file" accept="image/png,image/jpeg,image/webp" style="display:none">
+  <strong style="font-size: 16px;">Click here</strong> or drop your sheet image
+</label>
+
+<div id="result"></div>
+
+<script>
+const NAMES = ['run','strength','hiit','mobility','cross','race'];
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const result = document.getElementById('result');
+
+drop.addEventListener('click', () => fileInput.click());
+['dragenter','dragover'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('dragging'); }));
+['dragleave','drop'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('dragging'); }));
+drop.addEventListener('drop', e => {
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+function handleFile(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => split(img);
+  img.src = url;
+}
+
+function downloadCanvas(canvas, name) {
+  canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + '.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, 'image/png');
+}
+
+function split(img) {
+  const cellW = img.width / 3;
+  const cellH = img.height / 2;
+  result.innerHTML = '';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'toolbar';
+  const allBtn = document.createElement('button');
+  allBtn.textContent = 'Download all 6';
+  toolbar.appendChild(allBtn);
+  result.appendChild(toolbar);
+
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  result.appendChild(grid);
+
+  const canvases = [];
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 3; col++) {
+      const idx = row * 3 + col;
+      const name = NAMES[idx];
+      const c = document.createElement('canvas');
+      c.width = Math.round(cellW);
+      c.height = Math.round(cellH);
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, c.width, c.height);
+      canvases.push({ canvas: c, name });
+
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const preview = document.createElement('img');
+      preview.src = c.toDataURL('image/png');
+      cell.appendChild(preview);
+      const lbl = document.createElement('div');
+      lbl.className = 'label';
+      lbl.textContent = name + '.png';
+      cell.appendChild(lbl);
+      const btn = document.createElement('button');
+      btn.textContent = 'Download';
+      btn.onclick = () => downloadCanvas(c, name);
+      cell.appendChild(btn);
+      grid.appendChild(cell);
+    }
+  }
+
+  allBtn.onclick = () => {
+    canvases.forEach((c, i) => setTimeout(() => downloadCanvas(c.canvas, c.name), i * 250));
+  };
+}
+</script>
+</body>
+</html>

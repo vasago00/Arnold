@@ -32,7 +32,7 @@
 //   - Arrays merged by identity field when detectable (date / id),
 //     otherwise whole-value LWW.
 
-import { KEYS, storage, onStorageChange, setCloudApplying } from './storage.js';
+import { KEYS, storage, onStorageChange, setCloudApplying, notifyStorageChanged, setSuppressCloudPush, isCloudPushSuppressed } from './storage.js';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const MAGIC = new Uint8Array([65, 82, 78, 79, 76, 68, 0, 1]); // "ARNOLD\x00\x01"
@@ -58,9 +58,20 @@ const CFG_SALT = CFG_PREFIX + 'salt';
 const CFG_VERSIONS = CFG_PREFIX + 'versions';
 const CFG_LAST_PULL = CFG_PREFIX + 'last-pull';
 const CFG_LAST_REMOTE_ETAG = CFG_PREFIX + 'last-remote-etag';
+// Phase 4o.cloudsync.1 — persist the most recent pull failure so the
+// Cloud Sync panel can surface it. Stored as JSON: { code, message, t }.
+const CFG_LAST_PULL_ERROR = CFG_PREFIX + 'last-pull-error';
 
-// Passphrase / key cached in sessionStorage (cleared on tab close).
-const SESSION_PASS = CFG_PREFIX + 'pass';
+// Passphrase / key cached. Phase 4o.cloudsync.3 — switched from
+// sessionStorage to localStorage so Capacitor cold-boots don't erase the
+// passphrase. localStorage on Capacitor is sandboxed to this app
+// (same trust boundary as the encrypted health data already stored there),
+// but persists across app kills — meaning Cloud Sync pulls keep working
+// without forcing the user to re-enter the passphrase every launch.
+// SESSION_PASS reads still happen as a soft fallback so any older session
+// still upgrades cleanly.
+const PERSIST_PASS = CFG_PREFIX + 'pass';
+const SESSION_PASS = PERSIST_PASS; // legacy alias — sessionStorage fallback only
 let _derivedKey = null;
 let _deviceId = null;
 let _pushTimer = null;
@@ -155,7 +166,11 @@ export function setPairingConfig({ endpoint, token, pairId, salt }) {
 export function clearPairingConfig() {
   [CFG_ENDPOINT, CFG_TOKEN, CFG_DEVICE_ID, CFG_PAIR_ID, CFG_SALT,
    CFG_VERSIONS, CFG_LAST_PULL, CFG_LAST_REMOTE_ETAG].forEach(k => localStorage.removeItem(k));
+  // Clear both passphrase tiers — localStorage (Phase 4o.cloudsync.3
+  // persistent) and sessionStorage (legacy) — so unpairing fully wipes auth.
+  try { localStorage.removeItem(PERSIST_PASS); } catch {}
   try { sessionStorage.removeItem(SESSION_PASS); } catch {}
+  _passInMem = null;
   _derivedKey = null;
 }
 
@@ -169,6 +184,12 @@ export async function setPassphrase(passphrase, { remember = true } = {}) {
   if (!passphrase || passphrase.length < 8) throw new Error('passphrase too short (8+ chars)');
   _passInMem = passphrase;
   if (remember) {
+    // Persist to localStorage so the passphrase survives cold boots on
+    // Capacitor (the actual fix). Also write to sessionStorage for
+    // belt-and-braces — it's harmless and helps any code path still
+    // looking there. Both are app-sandboxed; same trust boundary as the
+    // encrypted health data already stored locally.
+    try { localStorage.setItem(PERSIST_PASS, passphrase); } catch {}
     try { sessionStorage.setItem(SESSION_PASS, passphrase); } catch {}
   }
   // Derive immediately so the key is cached even if sessionStorage gets evicted.
@@ -181,6 +202,12 @@ export async function setPassphrase(passphrase, { remember = true } = {}) {
 
 function _readPass() {
   if (_passInMem) return _passInMem;
+  // Prefer localStorage (persistent across launches), fall back to
+  // sessionStorage (older sessions that pre-date the persist switch).
+  try {
+    const fromPersist = localStorage.getItem(PERSIST_PASS);
+    if (fromPersist) return fromPersist;
+  } catch {}
   try { return sessionStorage.getItem(SESSION_PASS); } catch { return null; }
 }
 
@@ -527,6 +554,41 @@ function applySnapshot(remote, opts = {}) {
         continue;
       }
 
+      // ── Always-apply keys (Phase 4o.mobile.12, fixed in cloudsync.5) ──
+      // User UI configuration like Start-tile selections still bypasses
+      // the array-merge path, but MUST still respect LWW timestamps.
+      // Without the timestamp gate, an in-flight pull (whose server data
+      // pre-dates a just-saved local change) would overwrite the user's
+      // newest selection with an older snapshot — exactly the data-loss
+      // bug we hit when web reopens and grabs mobile's stale state.
+      // Rule:
+      //   • differ + remoteT > localT  → write remote (genuine update)
+      //   • differ + remoteT ≤ localT  → keep local (pending push will sync)
+      //   • !differ                    → skip
+      const ALWAYS_APPLY = new Set(['startTilePrefs']);
+      if (ALWAYS_APPLY.has(name)) {
+        const differ = JSON.stringify(remoteVal) !== JSON.stringify(localVal);
+        console.info('[tilesync][apply] ' + name, {
+          differ,
+          remoteT,
+          localT,
+          remoteNewer: remoteT > localT,
+          remoteSample: remoteVal && typeof remoteVal === 'object' ? Object.keys(remoteVal) : remoteVal,
+          localSample: localVal && typeof localVal === 'object' ? Object.keys(localVal) : localVal,
+        });
+        if (differ && remoteT > localT) {
+          storage.set(name, remoteVal, { skipValidation: true });
+          console.info('[tilesync][apply] ' + name + ' WROTE remote → local (remoteT newer)');
+          applied++;
+        } else if (differ) {
+          console.info('[tilesync][apply] ' + name + ' KEPT local (local newer or tied) — pending push will publish');
+        } else {
+          console.info('[tilesync][apply] ' + name + ' SKIPPED (already equal)');
+        }
+        newVersions[fullKey] = Math.max(localT, remoteT);
+        continue;
+      }
+
       // Default LWW path for everything else
       if (remoteT <= localT) continue;
       const merged = Array.isArray(remoteVal) ? mergeArrays(localVal, remoteVal, remoteT) : remoteVal;
@@ -538,6 +600,23 @@ function applySnapshot(remote, opts = {}) {
     setCloudApplying(false);
   }
   setVersions(newVersions);
+  // Phase 4o.mobile.11 — fire ONE synthetic change event after the
+  // apply completes so React hooks (useStorageVersion) see the cloud-
+  // pulled changes and re-render. Without this, components were stuck
+  // showing stale data until the next genuine local write or reload.
+  // The suppressCloudPush flag tells our own onStorageChange listener
+  // (which schedules pushes) to skip — so we don't immediately re-push
+  // the data we just pulled.
+  if (applied > 0) {
+    setSuppressCloudPush(true);
+    try {
+      notifyStorageChanged('__cloud_apply__');
+    } finally {
+      // Release on next microtask so the synchronous listener chain
+      // sees the suppression flag, but later writes don't.
+      Promise.resolve().then(() => setSuppressCloudPush(false));
+    }
+  }
   return applied;
 }
 
@@ -552,6 +631,19 @@ async function pushNow() {
   try {
     const key = await getDerivedKey();
     const snapshot = buildSnapshot();
+    // Tile-sync diagnostic — confirm startTilePrefs is in the outgoing
+    // snapshot, and what its value/timestamp look like at the moment of push.
+    try {
+      const tpKey = KEYS.startTilePrefs; // canonical key — avoids string drift
+      const tp = snapshot?.keys?.[tpKey];
+      console.info('[tilesync][push] outgoing snapshot startTilePrefs:', {
+        key: tpKey,
+        present: !!tp,
+        t: tp?.t,
+        valueKeys: tp?.v && typeof tp.v === 'object' ? Object.keys(tp.v) : null,
+        sample: tp?.v,
+      });
+    } catch {}
     const padded = padSnapshot(snapshot);
     const blob = await encryptBlob(padded, key, hexToBytes(cfg.salt));
 
@@ -581,8 +673,22 @@ async function pushNow() {
 
 async function pullNow(opts = {}) {
   const cfg = getPairingConfig();
-  if (!cfg.paired) return { skipped: 'not_paired' };
-  if (!hasPassphrase()) return { skipped: 'no_passphrase' };
+  // Tile-sync diagnostic — log entry every time pull is invoked, with the
+  // gating state. Tells us if pull is being called at all and which early
+  // exit (if any) is firing on this device.
+  console.info('[tilesync][pull-entry]', {
+    paired: cfg.paired,
+    hasPass: hasPassphrase(),
+    force: !!opts.force,
+  });
+  if (!cfg.paired) {
+    console.info('[tilesync][pull-exit] skipped: not_paired');
+    return { skipped: 'not_paired' };
+  }
+  if (!hasPassphrase()) {
+    console.info('[tilesync][pull-exit] skipped: no_passphrase');
+    return { skipped: 'no_passphrase' };
+  }
 
   const force = !!opts.force;
   emit('pull:start', force ? { force: true } : {});
@@ -591,6 +697,7 @@ async function pullNow(opts = {}) {
     // server always returns the body — we want to overwrite local even when
     // ETag suggests "no change since last pull".
     const lastEtag = force ? '' : (localStorage.getItem(CFG_LAST_REMOTE_ETAG) || '');
+    console.info('[tilesync][pull-fetch]', { lastEtag: lastEtag || '(none)', force });
     const res = await fetch(`${cfg.endpoint}/s/${cfg.pairId}`, {
       method: 'GET',
       headers: {
@@ -598,11 +705,14 @@ async function pullNow(opts = {}) {
         ...(lastEtag ? { 'If-None-Match': `"${lastEtag}"` } : {}),
       },
     });
+    console.info('[tilesync][pull-response]', { status: res.status, etag: res.headers.get('X-Updated-At') || '(none)' });
     if (res.status === 304) {
+      console.info('[tilesync][pull-exit] 304 unchanged — etag match, no apply');
       emit('pull:unchanged', {});
       return { unchanged: true };
     }
     if (res.status === 404) {
+      console.info('[tilesync][pull-exit] 404 empty — no blob on server');
       emit('pull:empty', {});
       return { empty: true };
     }
@@ -613,11 +723,56 @@ async function pullNow(opts = {}) {
     const buf = await res.arrayBuffer();
     const passphrase = _readPass();
     if (!passphrase) throw new Error('passphrase not set');
-    const { json } = await decryptBlob(buf, passphrase);
+    let json;
+    try {
+      json = (await decryptBlob(buf, passphrase)).json;
+    } catch (decryptErr) {
+      // Phase 4o.cloudsync.1 — AES-GCM OperationError = passphrase
+      // mismatch. Surface it specifically so the UI can prompt for
+      // re-entry instead of just logging silently. Also clear the
+      // in-memory cached pass so the next attempt actually re-derives.
+      const isAuthFail = decryptErr?.name === 'OperationError'
+        || /operation/i.test(decryptErr?.message || '');
+      if (isAuthFail) {
+        _passInMem = null;
+        _derivedKey = null;
+        // Phase 4o.cloudsync.3 — also wipe the persisted passphrase so a
+        // bad cached passphrase doesn't haunt every cold boot. The user's
+        // re-entry will repopulate localStorage via setPassphrase().
+        try { localStorage.removeItem(PERSIST_PASS); } catch {}
+        try { sessionStorage.removeItem(SESSION_PASS); } catch {}
+        try { localStorage.setItem(CFG_LAST_PULL_ERROR, JSON.stringify({
+          code: 'decrypt_failed',
+          message: 'Passphrase mismatch — the cloud blob was encrypted with a different passphrase than the one on this device.',
+          t: now(),
+        })); } catch {}
+      } else {
+        try { localStorage.setItem(CFG_LAST_PULL_ERROR, JSON.stringify({
+          code: 'decrypt_error',
+          message: decryptErr?.message || String(decryptErr),
+          t: now(),
+        })); } catch {}
+      }
+      throw decryptErr;
+    }
     const snapshot = JSON.parse(json);
+    // Tile-sync diagnostic — confirm startTilePrefs is in the inbound snapshot.
+    try {
+      const tpKey = KEYS.startTilePrefs;
+      const tp = snapshot?.keys?.[tpKey];
+      console.info('[tilesync][pull] inbound snapshot startTilePrefs:', {
+        key: tpKey,
+        present: !!tp,
+        t: tp?.t,
+        valueKeys: tp?.v && typeof tp.v === 'object' ? Object.keys(tp.v) : null,
+        sample: tp?.v,
+      });
+    } catch {}
     const applied = applySnapshot(snapshot, { force });
     localStorage.setItem(CFG_LAST_REMOTE_ETAG, updatedAt);
     localStorage.setItem(CFG_LAST_PULL, String(now()));
+    // Clear any prior error on a successful pull.
+    localStorage.removeItem(CFG_LAST_PULL_ERROR);
     emit('pull:ok', { applied, bytes: buf.byteLength, updatedAt, force });
     return { ok: true, applied, bytes: buf.byteLength, force };
   } catch (err) {
@@ -629,7 +784,37 @@ async function pullNow(opts = {}) {
 }
 
 export async function push() { return _inFlight ? _inFlight : (_inFlight = pushNow().finally(() => _inFlight = null)); }
-export async function pull() { return pullNow(); }
+
+// Phase 4o.cloudsync.2 — pull concurrency guard. Multiple paths trigger
+// pulls (startCloudSync initial, visibilitychange, periodic timer,
+// fullSync orchestrator). Without de-dup, four concurrent pulls fire
+// four fetches, four decrypts, four applies, racing each other. The
+// shared in-flight promise makes them all wait on the same network
+// round-trip + apply.
+let _pullInFlight = null;
+export async function pull() {
+  if (_pullInFlight) return _pullInFlight;
+  _pullInFlight = pullNowWithRetry().finally(() => { _pullInFlight = null; });
+  return _pullInFlight;
+}
+
+// Decrypt errors can be transient (Cloudflare edge cache returning a
+// momentarily stale blob during a push, network glitch corrupting bytes
+// before TLS catches it, etc). Retry once after a short delay before
+// surfacing to the user as a passphrase mismatch.
+async function pullNowWithRetry() {
+  const first = await pullNow();
+  if (first?.error && /operation/i.test(first.error)) {
+    await new Promise(r => setTimeout(r, 500));
+    const second = await pullNow();
+    // If second succeeds, treat as success.
+    if (!second?.error) return second;
+    // If second also fails the same way, surface to the user.
+    return second;
+  }
+  return first;
+}
+
 // Force pull — bypasses LWW, overwrites local entirely with remote.
 // Use when devices have drifted and you want to reset one to match remote.
 export async function forcePull() { return pullNow({ force: true }); }
@@ -654,8 +839,19 @@ export async function startCloudSync() {
   if (!cfg.paired) return { skipped: 'not_paired' };
 
   // Bump version on every local write, then debounce-push.
+  // Skip the push side when this notification originated from a cloud
+  // pull (Phase 4o.mobile.11) — the synthetic post-apply notify is
+  // there to wake React hooks, not to upload the same data we just
+  // pulled. The fullKey '__cloud_apply__' marker also identifies it.
   onStorageChange((fullKey) => {
+    if (fullKey === '__cloud_apply__' || isCloudPushSuppressed()) return;
     bumpVersion(fullKey, now());
+    // Tile-sync diagnostic — confirm storage writes are reaching the cloud-
+    // sync listener and scheduling a push (this is the bridge from togglePin
+    // on web to the actual network upload).
+    if (fullKey === KEYS.startTilePrefs) {
+      console.info('[tilesync][listener] startTilePrefs change observed → version bumped, push scheduled');
+    }
     if (hasPassphrase()) schedulePush();
   });
 
@@ -692,6 +888,11 @@ export function getSyncStatus() {
   const versions = getVersions();
   const lastPull = parseInt(localStorage.getItem(CFG_LAST_PULL) || '0', 10);
   const etag = localStorage.getItem(CFG_LAST_REMOTE_ETAG) || '';
+  let lastPullError = null;
+  try {
+    const raw = localStorage.getItem(CFG_LAST_PULL_ERROR);
+    if (raw) lastPullError = JSON.parse(raw);
+  } catch {}
   return {
     paired: cfg.paired,
     hasPassphrase: hasPassphrase(),
@@ -702,7 +903,14 @@ export function getSyncStatus() {
     trackedKeys: Object.keys(versions).length,
     lastPull,
     remoteUpdatedAt: etag ? parseInt(etag, 10) : 0,
+    lastPullError,  // { code, message, t } | null
   };
+}
+
+// Clear the persisted pull error — UI calls this when user dismisses the
+// banner or after a successful re-entry of passphrase.
+export function clearLastPullError() {
+  try { localStorage.removeItem(CFG_LAST_PULL_ERROR); } catch {}
 }
 
 // ── Self-test (call from console / init) ────────────────────────────────────
