@@ -444,14 +444,27 @@ function effectiveIntake(dateStr) {
 }
 
 export function fuelAdequacy(dateStr) {
-  const { intake: totals, date } = effectiveIntake(dateStr);
+  const eff = effectiveIntake(dateStr);
+  const { intake: totals, date, baseline } = eff;
   const intakeCal = Number(totals.calories) || 0;
   const intakeProtein = Number(totals.protein) || 0;
   // dailyTotals.water is in mL — convert to L for goal comparison.
   const intakeWaterL = (Number(totals.water) || 0) / 1000;
 
-  // Nothing logged AND no baseline to forecast from → pre-data fallback.
-  if (intakeCal === 0 && intakeProtein === 0 && intakeWaterL === 0) return 1;
+  // Phase 4r.dcy.2 — distinguish "user doesn't track nutrition" from
+  // "user tracks but hasn't eaten yet today". Phase 4r.dcy.1 fixed the
+  // *projection* side (no more forecasting today's intake from past
+  // patterns) but left this short-circuit, which returned N=1 every
+  // morning before breakfast and hid the very signal the user asked
+  // for: "the DCY needs to tell me to eat."
+  //
+  //   • Tracker (≥3 days of logged history) + 0 intake today → N = 0
+  //     so DCY drags down until food is logged.
+  //   • Non-tracker (no baseline) + 0 intake → N = 1 neutral, so the
+  //     score isn't penalized for someone who's not using the feature.
+  const hasBaselineHistory = (baseline?.daysWithData || 0) >= 3;
+  const isEmptyDay = intakeCal === 0 && intakeProtein === 0 && intakeWaterL === 0;
+  if (isEmptyDay) return hasBaselineHistory ? 0 : 1;
 
   const goals = getGoals();
   const proteinGoal = Number(goals.dailyProteinTarget) || 0;
@@ -467,8 +480,9 @@ export function fuelAdequacy(dateStr) {
     { w: N_WEIGHT_PROTEIN, v: nPro },
     { w: N_WEIGHT_HYDRO,   v: nHyd },
   ]);
-  // If every input was null/zero we still want a sane default.
-  if (N == null) return 1;
+  // Same tracker-vs-non-tracker fallback when geomMean has no usable
+  // inputs (e.g. user only logged water with no calorie target set).
+  if (N == null) return hasBaselineHistory ? 0 : 1;
   return +N.toFixed(3);
 }
 

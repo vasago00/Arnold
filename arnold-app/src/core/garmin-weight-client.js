@@ -57,25 +57,47 @@
 
 import { storage } from './storage.js';
 import { getGarminAuth, isGarminConfigured } from './garmin-client.js';
+import { localDate, ymd } from './time.js';
 
 const CFG_ENDPOINT = 'arnold:cloud-sync:endpoint';
 const CFG_TOKEN    = 'arnold:cloud-sync:token';
 const KG_TO_LBS    = 2.20462;
-const SYNC_FLAG    = 'arnold:garmin-weight-sync';
+
+// Timestamp-based throttle (Phase 4r.energy.7). Replaces the old per-day
+// flag (`arnold:garmin-weight-sync:YYYY-MM-DD`) which had two bugs:
+//   1. The key was set once on first successful sync of the day and
+//      blocked any intra-day re-sync — so a morning weigh-in pulled OK,
+//      but any later weigh-in didn't propagate until next-day boot.
+//   2. The key date was written with localDateStr here but read with
+//      `new Date().toISOString().slice(0,10)` (UTC) in Arnold.jsx boot,
+//      so the two ends diverged after 20:00 ET when UTC flipped.
+// New shape: a single key holding lastOkAt as a timestamp. TTL governs
+// auto-sync cadence; pull-to-refresh passes force:true to bypass.
+const SYNC_LAST_OK_KEY = 'arnold:garmin-weight-sync:lastOkAt';
+const SYNC_TTL_MS      = 30 * 60 * 1000;          // 30 min — matches wellness
+const LEGACY_FLAG_PREFIX = 'arnold:garmin-weight-sync:';
+
+// One-time cleanup of pre-4r.energy.7 daily-flag keys. Iterates localStorage
+// once at module load and removes any key matching the old shape
+// `arnold:garmin-weight-sync:YYYY-MM-DD`. The new key uses the same prefix
+// but a non-date suffix (`:lastOkAt`), so the filter is shape-based.
+(function cleanupLegacyDailyFlags() {
+  try {
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LEGACY_FLAG_PREFIX) && /:\d{4}-\d{2}-\d{2}$/.test(k)) {
+        toRemove.push(k);
+      }
+    }
+    toRemove.forEach(k => localStorage.removeItem(k));
+  } catch {}
+})();
 
 function getWorkerConfig() {
   const endpoint = (localStorage.getItem(CFG_ENDPOINT) || '').replace(/\/$/, '');
   const token    = localStorage.getItem(CFG_TOKEN) || '';
   return { endpoint, token };
-}
-
-// Format a Date or ISO string as YYYY-MM-DD in LOCAL time. Critical: don't
-// use toISOString() which converts to UTC and may flip the date for late-PM
-// or early-AM readings near midnight.
-function localDateStr(d) {
-  const dt = d instanceof Date ? d : new Date(d);
-  if (!Number.isFinite(dt.getTime())) return null;
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
 function localTimeStr(d) {
@@ -108,7 +130,7 @@ function normalizeWeighIn(rec) {
   else if (Number.isFinite(rec.date))    dt = new Date(rec.date);
   else if (rec.timestampLocal)           dt = new Date(rec.timestampLocal);
   else if (rec.calendarDate)             dt = new Date(rec.calendarDate);
-  const dateStr = dt && Number.isFinite(dt.getTime()) ? localDateStr(dt) : (rec.calendarDate || null);
+  const dateStr = dt && Number.isFinite(dt.getTime()) ? ymd(dt) : (rec.calendarDate || null);
   const time    = dt && Number.isFinite(dt.getTime()) ? localTimeStr(dt) : null;
   const date    = dateStr;
   if (!date) return null;
@@ -147,16 +169,26 @@ function normalizeWeighIn(rec) {
 // Public: pull recent weight readings from the Worker, normalize, merge into
 // `weight` storage. Idempotent — already-seen readings (matched by samplePk
 // or by date+time+weight triple) are skipped.
-export async function syncRecentWeight({ daysBack = 30, onProgress } = {}) {
+export async function syncRecentWeight({ daysBack = 30, force = false, onProgress } = {}) {
   if (!isGarminConfigured()) return { ok: false, error: 'not_configured' };
   const auth = getGarminAuth();
   const { endpoint, token } = getWorkerConfig();
   if (!auth || !endpoint || !token) return { ok: false, error: 'no_config' };
 
+  // TTL gate — auto-sync (force=false) short-circuits if a successful
+  // sync occurred within SYNC_TTL_MS. Manual refresh (force=true, from
+  // pull-to-refresh / explicit user gesture) always proceeds.
+  if (!force) {
+    const lastOkAt = Number(localStorage.getItem(SYNC_LAST_OK_KEY)) || 0;
+    if (lastOkAt && (Date.now() - lastOkAt) < SYNC_TTL_MS) {
+      return { ok: true, skipped: 'fresh', lastOkAt, fetched: 0, added: 0 };
+    }
+  }
+
   const now = new Date();
   const start = new Date(now.getTime() - daysBack * 86400 * 1000);
-  const startDate = localDateStr(start);
-  const endDate   = localDateStr(now);
+  const startDate = ymd(start);
+  const endDate   = ymd(now);
   onProgress?.({ phase: 'fetching', startDate, endDate });
 
   let res;
@@ -253,8 +285,11 @@ export async function syncRecentWeight({ daysBack = 30, onProgress } = {}) {
   });
   if (added + replaced > 0) {
     storage.set('weight', merged, { skipValidation: true });
-    try { localStorage.setItem(`${SYNC_FLAG}:${endDate}`, '1'); } catch {}
   }
+  // Stamp the successful sync unconditionally — an empty response is still
+  // "we asked Garmin and they had nothing new", which is enough to satisfy
+  // the TTL gate. Otherwise quiet days would re-hit the API every reload.
+  try { localStorage.setItem(SYNC_LAST_OK_KEY, String(Date.now())); } catch {}
 
   return {
     ok: true,
@@ -266,10 +301,13 @@ export async function syncRecentWeight({ daysBack = 30, onProgress } = {}) {
   };
 }
 
-// TTL check — skip re-sync if we already synced today.
-export function hasSyncedWeightToday() {
+// Freshness check — true if a successful sync occurred within SYNC_TTL_MS.
+// Replaces the old "synced today" semantics. New code should call this
+// directly; the legacy name is aliased below for any stale imports.
+export function hasFreshWeightSync() {
   try {
-    const today = localDateStr(new Date());
-    return localStorage.getItem(`${SYNC_FLAG}:${today}`) === '1';
+    const lastOkAt = Number(localStorage.getItem(SYNC_LAST_OK_KEY)) || 0;
+    return lastOkAt > 0 && (Date.now() - lastOkAt) < SYNC_TTL_MS;
   } catch { return false; }
 }
+export const hasSyncedWeightToday = hasFreshWeightSync;

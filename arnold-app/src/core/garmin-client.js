@@ -30,13 +30,10 @@
 // worker > hc, since Worker has the real sleepScore.
 
 import { storage, KEYS } from './storage.js';
+import { localDate, ymd } from './time.js';
 
 const CFG_ENDPOINT = 'arnold:cloud-sync:endpoint';
 const CFG_TOKEN    = 'arnold:cloud-sync:token';
-
-function localDate(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 // ── Auth getters / setters ──────────────────────────────────────────────────
 
@@ -412,7 +409,7 @@ export async function fetchGarminRange(startDate, endDate, { onProgress } = {}) 
 
   const results = [];
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const ds = localDate(d);
+    const ds = ymd(d);
     onProgress?.(ds);
     const r = await fetchGarminDay(ds);
     results.push(r);
@@ -447,7 +444,7 @@ export async function backfillRecentBlanks({ daysBack = 14, onProgress, force = 
 
   const datesToFill = [];
   for (let d = new Date(cutoff); d <= today; d.setDate(d.getDate() + 1)) {
-    const ds = localDate(d);
+    const ds = ymd(d);
     if (force) { datesToFill.push(ds); continue; }
     const sr = sleepByDate.get(ds);
     const wr = wellnessByDate.get(ds);

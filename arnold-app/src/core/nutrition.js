@@ -9,10 +9,10 @@
 // breakfast, lunch, dinner, snack.
 
 import { storage } from './storage.js';
-
-// Local date helper — avoids UTC rollover bug with toISOString()
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// Phase 4r.utc.2 — canonical local-date helpers from core/time.js.
+// localDate() returns today's YYYY-MM-DD; ymd(d) formats any Date.
+import { localDate, ymd } from './time.js';
+import { parseLocalDate } from './dateUtils.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -163,7 +163,7 @@ export function weeklyAverages(refDate = new Date()) {
   for (let i = 0; i < 7; i++) {
     const d = new Date(refDate);
     d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     const t = dailyTotals(ds);
     if (t.calories > 0 || t.protein > 0 || t.entryCount > 0) {
       avgs.daysWithData++;
@@ -203,8 +203,8 @@ export function weeklyAverages(refDate = new Date()) {
 const MIN_LOGGED_KCAL = 500;
 
 export function nutritionBaseline(refDate = new Date(), lookbackDays = 14, { minKcal = MIN_LOGGED_KCAL } = {}) {
-  const anchor = refDate instanceof Date ? refDate : new Date(refDate);
-  const anchorStr = localDate(anchor);
+  const anchor = refDate instanceof Date ? refDate : (parseLocalDate(refDate) || new Date());
+  const anchorStr = ymd(anchor);
   const agg = { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, water: 0, daysWithData: 0 };
 
   // Walk back day-by-day, skipping the anchor itself so today's partial data
@@ -212,7 +212,7 @@ export function nutritionBaseline(refDate = new Date(), lookbackDays = 14, { min
   for (let i = 1; i <= lookbackDays; i++) {
     const d = new Date(anchor);
     d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     if (ds === anchorStr) continue;
     const t = dailyTotals(ds);
     if ((t.calories || 0) < minKcal) continue; // skip partial / empty days
@@ -287,8 +287,8 @@ function getActiveWindow() {
  */
 export function partialDayState(date = new Date(), now = new Date(), opts = {}) {
   const win = { ...getActiveWindow(), ...opts };
-  const targetStr = typeof date === 'string' ? date : localDate(date);
-  const nowStr    = localDate(now);
+  const targetStr = typeof date === 'string' ? date : ymd(date);
+  const nowStr    = ymd(now);
   const activeHours = win.bedtimeHour - win.wakeHour;
 
   // Not today → day is final, not a forecast.

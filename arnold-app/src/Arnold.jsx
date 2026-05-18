@@ -38,8 +38,10 @@ import { resolveAllStartTiles } from "./core/derive/autoPromote.js";
 import { KRITile, InlineKRIStat } from "./components/KRITile.jsx";
 import { normalizeTilePrefs } from "./core/derive/tileMetrics.js";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
+import { CalendarTab } from "./components/CalendarTab.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
+import { summarizeRecentSignatures } from "./core/derive/recoverySignature.js";
 import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar, DcyDetails, NavIconForTab, TAB_LABEL, TAB_ACTIVE_COLOR, TAB_ACCENT_COLOR } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
@@ -51,6 +53,7 @@ import { getCatalog as getSupCatalog, getStack as getSupStack, getAdherence as g
 import { AVATAR_LIBRARY } from "./core/avatars.js";
 import { getGoals } from "./core/goals.js";
 import { WeeklyPlanner } from "./components/WeeklyPlanner.jsx";
+import { Workbench } from "./components/Workbench.jsx";
 import { todayPlanned, checkTodayCompletion } from "./core/planner.js";
 import { trainingAnnotations, dailyAnnotations } from "./core/aiAnnotations.js";
 import { AnnotationStrip } from "./components/AnnotationStrip.jsx";
@@ -520,10 +523,10 @@ const TABS=[
   {id:"training", label:"EdgeIQ",icon:"◈"},
   {id:"daily",    label:"Daily",  icon:"⊕"},
   {id:"weekly",   label:"Trend",  icon:"◈"},
+  {id:"races",    label:"Calendar", icon:"▦"},
+  {id:"goals",    label:"Plan",   icon:"◎"},
   {id:"labs",     label:"Labs",   icon:"⬡"},
-  {id:"clinical", label:"Body",   icon:"◉"},
-  {id:"races",    label:"Races",  icon:"⚑"},
-  {id:"goals",    label:"Goals",  icon:"◎"},
+  {id:"clinical", label:"Core",   icon:"◉"},
   {id:"supplements",label:"Stack",icon:"◈"},
   {id:"settings", label:"Profile",icon:"◎"},
 ];
@@ -556,7 +559,11 @@ export default function App(){
 
   // ── Mobile nav handler (for drill-down tabs — when MobileHome is NOT active) ──
   const handleMobileNav=(item)=>{
-    const tabMap={edgeiq:'weekly',play:'activity',fuel:'nutrition_mobile',core:'clinical',labs:'labs'};
+    // Phase 4r.nav.2 — Calendar promoted to primary nav. 'calendar' id
+    // routes to the existing 'races' tab (Arnold.jsx tab id is still
+    // 'races' for legacy storage compatibility; the UI just labels it
+    // Calendar everywhere). Labs moved to the More overflow sheet.
+    const tabMap={edgeiq:'weekly',play:'activity',fuel:'nutrition_mobile',core:'clinical',calendar:'races',labs:'labs'};
     if(item.id==='more'){setMobileMoreOpen(true);return;}
     if(tabMap[item.id]){
       // Track which mobile nav triggered this tab so Dashboard can decide
@@ -571,19 +578,27 @@ export default function App(){
   };
 
   // ── Map current tab to active nav id for mobile ──
+  // Phase 4r.nav.2 — 'races' tab now highlights the Calendar nav slot;
+  // 'labs' tab routes to More since Labs lives in the overflow sheet.
   const mobileActiveId=(()=>{
     if(tab==='weekly')return'edgeiq';
     if(tab==='activity')return'play';
     if(tab==='nutrition_mobile')return'fuel';
     if(tab==='daily')return'play'; // legacy daily → play
     if(tab==='clinical')return'core';
-    if(tab==='labs')return'labs';
-    if(tab==='goals'||tab==='supplements'||tab==='races')return'more';
+    if(tab==='races')return'calendar';
+    if(tab==='labs'||tab==='goals'||tab==='supplements')return'more';
     return'start';
   })();
 
   // ── Swipe navigation for drill-down tabs ──
-  const SWIPE_ORDER=['start','edgeiq','play','fuel','core','labs'];
+  // Phase 4r.calendar.24 — stale SWIPE_ORDER was still pointing to
+  // 'labs' which had been removed from NAV_ITEMS in 4r.nav.2.
+  // Result: swiping forward from Core crashed in handleMobileNav
+  // (item.id on undefined) because NAV_ITEMS.find returned undefined.
+  // Also: Calendar was unreachable via swipe. Now it sits between
+  // Fuel and Core per 4r.calendar.24 reorder.
+  const SWIPE_ORDER=['start','edgeiq','play','fuel','calendar','core'];
   // Single swipe handler for ALL mobile screens (Start, EdgeIQ, Play, Fuel,
   // Core, Labs). Earlier the gate `!mobileHomeActive` disabled it on Start &
   // EdgeIQ, leaving those screens with no working swipe — and MobileHome.jsx
@@ -765,6 +780,96 @@ export default function App(){
         }
       } catch (e) { console.warn('[migrate] HIIT/Run reclassify failed:', e); }
 
+      // ── Re-bin HIIT activities' hrZones (Phase 4r.viz.32) ──
+      // Pre-Phase 4r.viz.32, the parser refused to fall back to
+      // watch-recorded timeInHrZone when bpm-record binning returned null
+      // (which happens often for sport=hiit, where the FR955 doesn't
+      // always write record samples). Result: HIIT activities ended up
+      // with hrZones=null. Now we clear hrZones on stored HIIT activities
+      // so the Garmin worker re-fetches and the new parser populates
+      // them from the activity DTO. Run on next app load only.
+      try {
+        const reBinFlag = 'arnold:migration:hiit-hrzones-rebin-2026-05-15';
+        if (!localStorage.getItem(reBinFlag)) {
+          const acts = storage.get('activities') || [];
+          let cleared = 0;
+          const updated = acts.map(a => {
+            const isHIIT = a.activityType === 'HIIT' || a.isHIIT === true ||
+                           /\bhyrox\b/i.test(a.activityName || '');
+            if (!isHIIT) return a;
+            if (a.hrZones == null) return a;   // already null — worker will fetch
+            // Quick sanity: keep the existing array if it sums to a
+            // non-trivial duration (>5 min) — that means it's real data.
+            const arr = Array.isArray(a.hrZones) ? a.hrZones : [];
+            const total = arr.reduce((s, v) => s + (Number(v) || 0), 0);
+            if (total > 300) return a;          // looks legit, keep it
+            cleared++;
+            const { hrZones, ...rest } = a;
+            return rest;
+          });
+          if (cleared > 0) {
+            storage.set('activities', updated, { skipValidation: true });
+            console.log(`[migrate] cleared empty hrZones from ${cleared} HIIT activities — worker will re-populate on next sync`);
+          }
+          localStorage.setItem(reBinFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] HIIT hrZones rebin failed:', e); }
+
+      // ── HYROX / sport=hiit reclassification (Phase 4r.viz.27) ──
+      // FitParser pre-Phase 4r.viz.27 didn't recognize sport==='hiit' or
+      // HYROX-named activities — they fell through to 'Other' or got tagged
+      // as 'Strength' via the old STRENGTH_RE that included "hyrox". Walk
+      // stored activities once, reclassify anything matching HYROX/HIIT
+      // sport heuristics to activityType='HIIT' so the activity card
+      // routes through the HIIT profile (anaer TE, EPOC, work:rest, etc.).
+      try {
+        const hyroxFlag = 'arnold:migration:hyrox-hiit-fix-2026-05-15';
+        if (!localStorage.getItem(hyroxFlag)) {
+          const acts = storage.get('activities') || [];
+          let fixed = 0;
+          const repaired = acts.map(a => {
+            const name = (a.activityName || '').toLowerCase();
+            const sport = (a.sport || '').toLowerCase();
+            const sub   = (a.subSport || '').toLowerCase();
+            const isHyrox = /\bhyrox\b/.test(name);
+            const isHiitSport = sport === 'hiit' || sub === 'hiit' || sport === 'cardio';
+            if (!isHyrox && !isHiitSport) return a;
+            // Only update if it isn't already HIIT.
+            if (a.activityType === 'HIIT' && a.isHIIT === true) return a;
+            fixed++;
+            return {
+              ...a,
+              activityType: 'HIIT',
+              isHIIT: true,
+              isRun: a.distanceMi > 0,         // HIIT runs count as runs too
+              isStrength: false,
+            };
+          });
+          if (fixed > 0) {
+            storage.set('activities', repaired, { skipValidation: true });
+            console.log(`[migrate] reclassified ${fixed} HYROX/sport=hiit activities → activityType=HIIT`);
+          }
+          localStorage.setItem(hyroxFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] HYROX HIIT reclassify failed:', e); }
+
+      // ── User-set RHR goal (Phase 4r.cockpit.5) ──
+      // User confirmed their target RHR is 42 bpm (lower-is-better goal).
+      // Set it in goals storage so the Signal Cockpit RHR tile shows the
+      // right progress bar. Guarded by a flag — won't overwrite future
+      // edits the user makes via the Goals Hub.
+      try {
+        const rhrFlag = 'arnold:migration:rhr-goal-42-2026-05-15';
+        if (!localStorage.getItem(rhrFlag)) {
+          const goals = storage.get('goals') || {};
+          if (goals.targetRHR !== 42) {
+            storage.set('goals', { ...goals, targetRHR: 42 }, { skipValidation: true });
+            console.log(`[migrate] set targetRHR goal to 42 bpm`);
+          }
+          localStorage.setItem(rhrFlag, '1');
+        }
+      } catch (e) { console.warn('[migrate] RHR goal set failed:', e); }
+
       // ── One-time migration: derive sleepStart/wakeTime from GMT timestamps ──
       // Phase 4g added these fields to the Garmin worker normalizer + HC sync,
       // but rows already in storage lack them. Sleep Regularity tile reads
@@ -907,7 +1012,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.adapt.3 · rebound-debt-advisory-2026-05-11','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.utc.2 · full-utc-sweep-15-localdate-consolidated-36-bare-newdate-fixed-2026-05-18','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
 
       // ── Garmin Wellness backfill (Phase 4c) ──
       // If the user has configured Garmin credentials + the Cloud Sync Worker,
@@ -922,7 +1027,11 @@ export default function App(){
       // Run once-per-day so we don't hammer the worker on every reload:
       // a single ISO-day key in localStorage gates re-runs.
       try {
-        const gFlag = `arnold:garmin-backfill:${new Date().toISOString().slice(0,10)}`;
+        // Phase 4r.utc.1 — use local date for daily flag keys.
+        // toISOString().slice(0,10) returns UTC date; in evening ET that's
+        // already tomorrow, so the flag was set for the wrong day and the
+        // sync could re-fire across midnight.
+        const gFlag = `arnold:garmin-backfill:${td()}`;
         if (!localStorage.getItem(gFlag)) {
           // Fire-and-forget — don't block boot.
           import('./core/garmin-client.js').then(({ isGarminConfigured, backfillRecentBlanks, fetchGarminVO2Max }) => {
@@ -953,7 +1062,7 @@ export default function App(){
       // imports, and parses any new ones via the existing fitParser.
       // Manual FIT upload remains available as a fallback / one-off path.
       try {
-        const aFlag = `arnold:garmin-activities-sync:${new Date().toISOString().slice(0,10)}`;
+        const aFlag = `arnold:garmin-activities-sync:${td()}`;  // Phase 4r.utc.1 — local date
         if (!localStorage.getItem(aFlag)) {
           import('./core/garmin-activities-client.js').then(({ syncRecentActivities }) => {
             return import('./core/garmin-client.js').then(({ isGarminConfigured }) => {
@@ -977,28 +1086,25 @@ export default function App(){
       // Cloud Sync Worker. Replaces the Health Connect path, which was
       // collapsing same-day weigh-ins and stripping body-comp fields.
       //
-      // Requires Worker endpoint POST /garmin/weight (see
-      // garmin-weight-client.js for the contract). Fails silently when the
-      // endpoint isn't deployed — HC sync continues as the fallback.
+      // Throttle lives inside garmin-weight-client.js (30-min timestamp TTL,
+      // Phase 4r.energy.7). Boot calls without force — the client's own
+      // gate decides whether to hit the network. Pull-to-refresh in
+      // full-sync.js passes force:true to bypass. No more per-day flag,
+      // no more UTC/local-date mismatch.
       try {
-        const wFlag = `arnold:garmin-weight-sync:${new Date().toISOString().slice(0,10)}`;
-        if (!localStorage.getItem(wFlag)) {
-          import('./core/garmin-weight-client.js').then(({ syncRecentWeight }) => {
-            return syncRecentWeight({ daysBack: 30 })
-              .then(r => {
-                if (r?.ok) {
-                  console.log(`[garmin-weight] fetched=${r.fetched} added=${r.added} replaced=${r.replaced || 0} skipped=${r.skipped}`);
-                  localStorage.setItem(wFlag, '1');
-                } else if (r?.error && r.error !== 'not_configured' && r.error !== 'no_config') {
-                  // 404 / http_404 = worker endpoint not deployed yet — silent
-                  if (!String(r.error).startsWith('http_404')) {
-                    console.warn('[garmin-weight] sync:', r.error, r.detail || '');
-                  }
+        import('./core/garmin-weight-client.js').then(({ syncRecentWeight }) => {
+          return syncRecentWeight({ daysBack: 30 })
+            .then(r => {
+              if (r?.ok && r?.skipped !== 'fresh') {
+                console.log(`[garmin-weight] fetched=${r.fetched} added=${r.added} replaced=${r.replaced || 0} skipped=${r.skipped}`);
+              } else if (r?.error && r.error !== 'not_configured' && r.error !== 'no_config') {
+                if (!String(r.error).startsWith('http_404')) {
+                  console.warn('[garmin-weight] sync:', r.error, r.detail || '');
                 }
-              })
-              .catch(e => console.warn('[garmin-weight] sync failed:', e));
-          });
-        }
+              }
+            })
+            .catch(e => console.warn('[garmin-weight] sync failed:', e));
+        });
       } catch (e) { console.warn('[garmin-weight] init failed:', e); }
 
       // ── HR zone bpm boundaries (Phase 4r.zones.2) ───────────────────────
@@ -1400,8 +1506,8 @@ export default function App(){
         {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} setTab={setTab}/></div>}
         {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></div>}
         {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></div>}
-        {tab==="races"&&<div className="arnold-tab-panel"><RacesTab showToast={showToast}/></div>}
-        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}>{!isMobileApp && <div style={S.st}>Goals</div>}<WeeklyPlanner showToast={showToast}/><GoalsHub showToast={showToast}/><StartTilePickerSection data={data}/></div></div>}
+        {tab==="races"&&<div className="arnold-tab-panel"><CalendarTab showToast={showToast}/></div>}
+        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}>{!isMobileApp && <div style={S.st}>Plan</div>}<WeeklyPlanner showToast={showToast}/><Workbench showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
         {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
       </main>
@@ -1418,7 +1524,10 @@ export default function App(){
           <div style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(16,18,24,0.98)',borderRadius:'20px 20px 0 0',padding:'20px 16px env(safe-area-inset-bottom, 16px)',animation:'mobileSheetUp 0.25s ease-out'}} onClick={e=>e.stopPropagation()}>
             <div style={{width:36,height:4,borderRadius:2,background:'rgba(255,255,255,0.15)',margin:'0 auto 16px'}}/>
             <div style={{display:'grid',gridTemplateColumns:'1fr',gap:8}}>
-              {[{label:'Cloud Sync',desc:'Pair devices, Health Connect, Cronometer',tab:'settings'}].map(m=>(
+              {[
+                {label:'Labs',desc:'Blood panels, biomarkers, lab history',tab:'labs'},
+                {label:'Cloud Sync',desc:'Pair devices, Health Connect, Cronometer',tab:'settings'},
+              ].map(m=>(
                 <button key={m.label} onClick={()=>{setMobileMoreOpen(false);setTab(m.tab);}} style={{padding:'16px 14px',borderRadius:14,background:'rgba(107,171,223,0.10)',border:'1px solid rgba(107,171,223,0.25)',color:'#e2e8f0',cursor:'pointer',textAlign:'left',display:'flex',flexDirection:'column',gap:4}}>
                   <span style={{fontSize:14,fontWeight:600,color:'#6BABDF'}}>{m.label}</span>
                   <span style={{fontSize:12,color:'rgba(226,232,240,0.6)'}}>{m.desc}</span>
@@ -2495,16 +2604,16 @@ function HomeCockpit({data,setTab}){
   // previously read only `hrv` and missed the worker-sourced values entirely.
   // Build a unified by-date set with worker rows winning per date.
   const d7=new Date();d7.setDate(today.getDate()-7);
-  const recentSleep=sleepData.filter(s=>new Date(s.date)>=d7);
+  const recentSleep=sleepData.filter(s=>s.date&&parseLocalDate(s.date)>=d7);
   const mergedHrvLast7 = (() => {
     const byDate = new Map();
     for (const h of (hrvData || [])) {
-      if (h?.date && new Date(h.date) >= d7 && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
+      if (h?.date && parseLocalDate(h.date) >= d7 && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
         byDate.set(h.date, Number(h.overnightHRV));
       }
     }
     for (const s of (sleepData || [])) {
-      if (s?.date && new Date(s.date) >= d7 && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
+      if (s?.date && parseLocalDate(s.date) >= d7 && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
         byDate.set(s.date, Number(s.overnightHRV)); // worker wins over legacy
       }
     }
@@ -2547,7 +2656,7 @@ function HomeCockpit({data,setTab}){
 
   // ── Race countdown ──
   const nextRace=(()=>{try{const races=JSON.parse(localStorage.getItem('arnold:races')||'[]');const now2=new Date();now2.setHours(0,0,0,0);return races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=now2;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date))[0]||null;}catch{return null;}})();
-  const raceDaysLeft=nextRace?Math.ceil((new Date(nextRace.date)-new Date(new Date().setHours(0,0,0,0)))/86400000):null;
+  const raceDaysLeft=nextRace?Math.ceil((parseLocalDate(nextRace.date)-new Date(new Date().setHours(0,0,0,0)))/86400000):null;
 
   // ── Race readiness (uses trainingIntelligence) ──
   const raceReady=nextRace?raceReadiness(activities,nextRace.distanceKm||(nextRace.distanceMi?nextRace.distanceMi*1.609:21.1),nextRace.date):null;
@@ -2642,7 +2751,7 @@ function HomeCockpit({data,setTab}){
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
               <div>
                 <div style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>{nextRace.name||'Next Race'}</div>
-                <div style={{fontSize:10,color:'var(--text-muted)'}}>{new Date(nextRace.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {nextRace.distanceMi?`${nextRace.distanceMi} mi`:(nextRace.distanceKm?`${nextRace.distanceKm} km`:'')}</div>
+                <div style={{fontSize:10,color:'var(--text-muted)'}}>{parseLocalDate(nextRace.date)?.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})} · {nextRace.distanceMi?`${nextRace.distanceMi} mi`:(nextRace.distanceKm?`${nextRace.distanceKm} km`:'')}</div>
               </div>
               <div style={{textAlign:'right'}}>
                 <div style={{fontSize:28,fontWeight:600,color:raceDaysLeft<=7?'#fbbf24':'var(--text-primary)',lineHeight:1}}>{raceDaysLeft===0?'Today':raceDaysLeft}</div>
@@ -2793,7 +2902,7 @@ function HomeCockpit({data,setTab}){
           {label:'EdgeIQ',icon:'◈',tab:'training',color:'#a78bfa'},
           {label:'Daily Log',icon:'⊕',tab:'daily',color:'#60a5fa'},
           {label:'Body',icon:'◉',tab:'clinical',color:'#fbbf24'},
-          {label:'Races',icon:'⚑',tab:'races',color:'#4ade80'},
+          {label:'Calendar',icon:'▦',tab:'races',color:'#4ade80'},
         ].map(q=>(
           <button key={q.tab} onClick={()=>setTab(q.tab)} style={{background:'var(--bg-surface)',border:'0.5px solid var(--border-default)',borderRadius:8,padding:'10px 8px',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
             <span style={{fontSize:18,color:q.color}}>{q.icon}</span>
@@ -3185,10 +3294,10 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // ── Recovery panel variables (Phase 4l Stage 2.4) ──
   const d7Trend=new Date(now);d7Trend.setDate(d7Trend.getDate()-7);
   const d30Trend=new Date(now);d30Trend.setDate(d30Trend.getDate()-30);
-  const recentHRV7=hrvData.filter(h=>h?.date&&new Date(h.date)>=d7Trend&&h.overnightHRV);
-  const recentHRV30=hrvData.filter(h=>h?.date&&new Date(h.date)>=d30Trend&&h.overnightHRV);
-  const recentSleep7=sleepData.filter(s=>s?.date&&new Date(s.date)>=d7Trend);
-  const recentSleep30=sleepData.filter(s=>s?.date&&new Date(s.date)>=d30Trend);
+  const recentHRV7=hrvData.filter(h=>h?.date&&parseLocalDate(h.date)>=d7Trend&&h.overnightHRV);
+  const recentHRV30=hrvData.filter(h=>h?.date&&parseLocalDate(h.date)>=d30Trend&&h.overnightHRV);
+  const recentSleep7=sleepData.filter(s=>s?.date&&parseLocalDate(s.date)>=d7Trend);
+  const recentSleep30=sleepData.filter(s=>s?.date&&parseLocalDate(s.date)>=d30Trend);
   const avgHRV7=recentHRV7.length?Math.round(recentHRV7.reduce((s,h)=>s+h.overnightHRV,0)/recentHRV7.length):null;
   const avgHRV30=recentHRV30.length?Math.round(recentHRV30.reduce((s,h)=>s+h.overnightHRV,0)/recentHRV30.length):null;
   const recentSleepDur7=recentSleep7.filter(s=>s.durationMinutes);
@@ -3227,11 +3336,11 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
     const daysBackToMon=(day===0?6:day-1);
     const ws=new Date(now);ws.setDate(now.getDate()-7*(7-i)-daysBackToMon);ws.setHours(0,0,0,0);
     const we=new Date(ws);we.setDate(ws.getDate()+7);
-    const wAll=activities.filter(a=>{const d=new Date(a.date);return d>=ws&&d<we;});
+    const wAll=activities.filter(a=>{const d=a.date&&parseLocalDate(a.date);return d&&d>=ws&&d<we;});
     const wRuns=wAll.filter(isRunAct);
     const mi=wRuns.reduce((s,a)=>s+(a.distanceMi||0),0);
     const hrs=wAll.reduce((s,a)=>s+(a.durationSecs||0),0)/3600;
-    const wSleep=sleepData.filter(s=>{const d=new Date(s.date);return d>=ws&&d<we;});
+    const wSleep=sleepData.filter(s=>{const d=s.date&&parseLocalDate(s.date);return d&&d>=ws&&d<we;});
     const sScores=wSleep.filter(s=>s.sleepScore).map(s=>s.sleepScore);
     const sleepScore=sScores.length?Math.round(sScores.reduce((a,b)=>a+b,0)/sScores.length):null;
     const rhrs=wSleep.filter(s=>s.restingHR).map(s=>s.restingHR);
@@ -3241,7 +3350,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
     // sleepData rows (overnightHRV field). Sleep wins on date conflicts —
     // same priority as the Recovery > HRV KRI tile uses via mergedHrvByDate.
     const hrvByDate=new Map();
-    for(const h of hrvData){const d=new Date(h.date);if(d>=ws&&d<we&&h?.overnightHRV)hrvByDate.set(h.date,Number(h.overnightHRV));}
+    for(const h of hrvData){const d=h?.date&&parseLocalDate(h.date);if(d&&d>=ws&&d<we&&h?.overnightHRV)hrvByDate.set(h.date,Number(h.overnightHRV));}
     for(const s of wSleep){if(s?.overnightHRV)hrvByDate.set(s.date,Number(s.overnightHRV));}
     const hrvs=[...hrvByDate.values()].filter(v=>Number.isFinite(v));
     const hrv=hrvs.length?Math.round(hrvs.reduce((a,b)=>a+b,0)/hrvs.length):null;
@@ -3249,7 +3358,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
     const paces=wRuns.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
     const pace=paces.length?paces.reduce((a,b)=>a+b,0)/paces.length:null;
     // Avg weight this week
-    const wWeight=weightData.filter(w=>{const d=new Date(w.date);return d>=ws&&d<we;});
+    const wWeight=weightData.filter(w=>{const d=w.date&&parseLocalDate(w.date);return d&&d>=ws&&d<we;});
     const wts=wWeight.map(w=>parseFloat(w.weightLbs)).filter(v=>v>0);
     const weight=wts.length?wts.reduce((a,b)=>a+b,0)/wts.length:null;
     return {mi,hrs,sleepScore,rhr,hrv,pace,weight};
@@ -3310,7 +3419,10 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // the user a single coherent picture of what shows on Start without
   // having to switch devices to check.
   const promoCtxWeb = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    // Phase 4r.utc.1 — was new Date().toISOString().slice(0,10) which
+    // returns UTC date. Evening ET → tomorrow's date string → no
+    // activities match → sessionType incorrectly stays 'rest'.
+    const today = td();
     const todays = (activities || []).filter(a => (a.date || '').startsWith(today));
     let sessionType = 'rest';
     if (todays.length) {
@@ -3881,6 +3993,146 @@ function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, t
   );
 }
 
+// ─── Race Prep Banner ─────────────────────────────────────────────────────
+// Phase 4r.race.9 — Fuel-tab landing for the race card's "Plan items in
+// Fuel" link. Compact strip that shows when a race is in the next 21 days.
+// Tap → expands into a textarea + a structured-items mini-list, persisted
+// to localStorage per race key.
+function RacePrepBanner({ race, daysLeft }) {
+  const raceKey = race?.id || `${race?.name || ''}|${race?.date || ''}`;
+  const notesKey = `arnold:race-fuel-notes:${raceKey}`;
+  const itemsKey = `arnold:race-custom-fuel:${raceKey}`;
+  const [open, setOpen] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [items, setItems] = useState([]);
+  const [newName, setNewName] = useState('');
+  const [newQty, setNewQty] = useState('');
+  const [newWhen, setNewWhen] = useState('during');
+
+  useEffect(() => {
+    try {
+      const n = localStorage.getItem(notesKey) || '';
+      setNotes(n);
+      const i = JSON.parse(localStorage.getItem(itemsKey) || '[]');
+      if (Array.isArray(i)) setItems(i);
+    } catch {}
+  }, [notesKey, itemsKey]);
+  useEffect(() => {
+    try {
+      if (notes && notes.trim()) localStorage.setItem(notesKey, notes);
+      else localStorage.removeItem(notesKey);
+    } catch {}
+  }, [notesKey, notes]);
+  useEffect(() => {
+    try {
+      if (items.length) localStorage.setItem(itemsKey, JSON.stringify(items));
+      else localStorage.removeItem(itemsKey);
+    } catch {}
+  }, [itemsKey, items]);
+
+  const accent = '#fbbf24';
+  const addItem = () => {
+    if (!newName.trim()) return;
+    setItems(prev => [...prev, { when: newWhen, name: newName.trim(), qty: newQty.trim() || '1' }]);
+    setNewName(''); setNewQty('');
+  };
+  const removeItem = (i) => setItems(prev => prev.filter((_, j) => j !== i));
+
+  return (
+    <div style={{
+      position: 'relative',
+      background: 'var(--bg-surface)',
+      border: '0.5px solid var(--border-default)',
+      borderRadius: 'var(--radius-md)',
+      // Phase 4r.viz.16 — dramatically tighter vertical padding (1px) +
+      // smaller title font (13→11) to drop strip height.
+      padding: open ? '8px 12px 10px 14px' : '1px 10px 1px 12px',
+      marginBottom: 10,
+      width: '100%',
+      boxSizing: 'border-box',
+      overflow: 'hidden',
+    }}>
+      {/* Phase 4r.viz.12 — same checkered flag stripe as the Play race
+          card for visual consistency across both surfaces. */}
+      <span style={{
+        position: 'absolute',
+        left: 0, top: 0, bottom: 0, width: 6,
+        backgroundImage: 'conic-gradient(#111 25%, #fff 0 50%, #111 0 75%, #fff 0)',
+        backgroundSize: '6px 6px',
+        backgroundRepeat: 'repeat',
+      }}/>
+      <button type="button" onClick={() => setOpen(v => !v)}
+        style={{all:'unset',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',width:'100%',gap:8,lineHeight:1.15}}>
+        <span style={{display:'flex',alignItems:'center',gap:8,minWidth:0}}>
+          <span style={{fontSize:11,fontWeight:500,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+            ⚑ {(race.name || 'race').replace(/\s*\([^)]*\)\s*$/, '')}
+          </span>
+          <span style={{fontSize:10,color:accent,fontFamily:'var(--font-mono)',flexShrink:0}}>{daysLeft}d</span>
+          <span style={{fontSize:10,color:'var(--text-muted)',flexShrink:0}}>race prep</span>
+        </span>
+        <span style={{fontFamily:'var(--font-mono)',color:'var(--text-muted)',fontSize:11,flexShrink:0}}>
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+
+      {open && (
+        <div style={{marginTop:10,display:'flex',flexDirection:'column',gap:10}}>
+          {/* Structured items list */}
+          {items.length > 0 && (
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>
+              {items.map((it, i) => (
+                <div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:12,padding:'4px 6px',background:'var(--bg-elevated)',borderRadius:4}}>
+                  <span style={{
+                    fontFamily:'var(--font-mono)',fontSize:10,
+                    color: it.when === 'pre' ? '#fb923c' : '#22d3ee',
+                    minWidth:42,textTransform:'uppercase',letterSpacing:'0.04em',
+                  }}>{it.when}</span>
+                  <span style={{flex:1,color:'var(--text-primary)'}}>{it.name}</span>
+                  <span style={{color:'var(--text-muted)',fontFamily:'var(--font-mono)',fontSize:11}}>{it.qty}</span>
+                  <button onClick={() => removeItem(i)}
+                    style={{all:'unset',cursor:'pointer',color:'var(--text-muted)',padding:'2px 4px',fontSize:13}}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Add row */}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+            <select value={newWhen} onChange={e => setNewWhen(e.target.value)}
+              style={{fontSize:11,padding:'4px 6px',background:'var(--bg-input)',color:'var(--text-primary)',border:'0.5px solid var(--border-default)',borderRadius:4}}>
+              <option value="pre">pre</option>
+              <option value="during">during</option>
+            </select>
+            <input type="text" placeholder="e.g. Maurten 100 gel" value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addItem(); } }}
+              style={{flex:1,minWidth:100,fontSize:12,padding:'5px 7px',background:'var(--bg-input)',color:'var(--text-primary)',border:'0.5px solid var(--border-default)',borderRadius:4,outline:'none'}}/>
+            <input type="text" placeholder="qty" value={newQty}
+              onChange={e => setNewQty(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addItem(); } }}
+              style={{width:50,fontSize:12,padding:'5px 7px',background:'var(--bg-input)',color:'var(--text-primary)',border:'0.5px solid var(--border-default)',borderRadius:4,outline:'none',fontFamily:'var(--font-mono)'}}/>
+            <button type="button" onClick={addItem}
+              style={{all:'unset',cursor:'pointer',padding:'5px 10px',fontSize:12,fontWeight:500,color:'#0b0f14',background:accent,borderRadius:4}}>Add</button>
+          </div>
+          {/* Free-form notes */}
+          <textarea value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Free-form notes — race-morning checklist, drop-bag contents, anything you want to remember…"
+            style={{
+              width:'100%',minHeight:60,resize:'vertical',
+              fontSize:12,padding:'6px 8px',
+              background:'var(--bg-input)',color:'var(--text-primary)',
+              border:'0.5px solid var(--border-default)',borderRadius:4,
+              outline:'none',fontFamily:'var(--font-sans)',lineHeight:1.4,
+              boxSizing:'border-box',
+            }}/>
+          <div style={{fontSize:10,color:'var(--text-muted)',lineHeight:1.4}}>
+            Saved per-race. Pre-race carbs + post-race recovery already auto-computed in the race tile.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOG TODAY + WORKOUT LOG
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4202,99 +4454,458 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
   const miniVal={fontSize:13,fontWeight:500,color:'var(--text-primary)',lineHeight:1.2};
   const miniLbl={fontSize:9,color:'var(--text-muted)',marginTop:2};
 
+  // Phase 4r.viz.1 — Tabler-style outline icons rendered as inline SVG so we
+  // don't take a dependency on @tabler/icons-react for a handful of glyphs.
+  // Paths traced from the Tabler outline set (MIT). Each path assumes a 24x24
+  // viewBox and renders at the size passed in.
+  const ICON_PATHS = {
+    route: 'M3 19h2a2 2 0 0 0 2 -2v-2a2 2 0 0 1 2 -2h6a2 2 0 0 0 2 -2v-2a2 2 0 0 1 2 -2h2 M3 5h2 M19 19h2',
+    stopwatch: 'M9 3h6 M12 8v5l3 2 M12 21a8 8 0 1 0 0 -16 a8 8 0 0 0 0 16z',
+    heartbeat: 'M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572 M3 13h2l2 -3l2 6l2 -4l2 3h6',
+    shoe: 'M4 17h13a4 4 0 0 0 4 -4a1 1 0 0 0 -1 -1h-3l-3 -5l-4 1l-4 -2l-1 11z M16 8l-2 2 M5 12l-1 5',
+    'wave-sine': 'M3 12c.6 -5.3 1.7 -8 3.3 -8c2.4 0 2.4 16 4.7 16s2.4 -16 4.7 -16c1.7 0 2.7 2.7 3.3 8',
+    'clock-hour-4': 'M12 8v4l2 1 M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0',
+    'heart-rate-monitor': 'M3 4h18v12h-18z M7 20h10 M9 16v4 M15 16v4 M7 10l2 -2l2 4l2 -6l2 4h2',
+    mountain: 'M3 20l4.5 -8l3 4l3.5 -6l7 10z',
+    flame: 'M12 12c2 -2.96 0 -7 -1 -8c0 3.038 -1.773 4.741 -3 6c-1.226 1.26 -2 3.24 -2 5a6 6 0 1 0 12 0c0 -1.532 -1.056 -3.94 -2 -5c-1.786 3 -2.791 3 -4 2z',
+    bolt: 'M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11',
+    'target-arrow': 'M12 21a9 9 0 1 1 0 -18a9 9 0 0 1 0 18z M12 17a5 5 0 1 1 0 -10a5 5 0 0 1 0 10z M12 13a1 1 0 1 1 0 -2a1 1 0 0 1 0 2',
+    droplet: 'M12 3l5.5 8.5a6.5 6.5 0 1 1 -11 0z',
+    bottle: 'M14 4a3 3 0 0 0 -4 0l0 3l-1.5 1.5a3 3 0 0 0 -0.5 1.5v9a2 2 0 0 0 2 2h4a2 2 0 0 0 2 -2v-9a3 3 0 0 0 -0.5 -1.5l-1.5 -1.5v-3z',
+    hourglass: 'M6.5 7h11 M6.5 17h11 M6 20v-2a6 6 0 0 1 12 0v2 M6 4v2a6 6 0 0 0 12 0v-2 M5 4h14 M5 20h14',
+    'arrow-up-right': 'M17 7l-10 10 M8 7h9v9',
+    'arrow-right': 'M5 12h14 M13 18l6 -6 M13 6l6 6',
+    'arrow-down-right': 'M7 7l10 10 M17 8v9h-9',
+    // Phase 4r.viz.7 — discipline-specific glyphs.
+    'barbell':   'M2 12h2 M20 12h2 M5 8v8 M19 8v8 M7 10v4 M17 10v4 M7 12h10',
+    'repeat':    'M17 1l4 4 -4 4 M3 11v-1a4 4 0 0 1 4 -4h14 M7 23l-4 -4 4 -4 M21 13v1a4 4 0 0 1 -4 4h-14',
+    'bike':      'M5 18a3 3 0 1 0 6 0 a3 3 0 0 0 -6 0 M19 18a3 3 0 1 0 6 0 a3 3 0 0 0 -6 0 M12 19l0 -4l-4 -3l5 -4l3 4h4',
+    'gauge':     'M12 21a9 9 0 1 0 -9 -9 a9 9 0 0 0 9 9z M12 12l5 -3 M12 12l-3 3',
+    'swim':      'M3 7c1 0 1.5 -1 3 -1s2 1 4 1s2 -1 4 -1s2 1 4 1s2.5 -1 3 -1 M3 12c1 0 1.5 -1 3 -1s2 1 4 1s2 -1 4 -1s2 1 4 1s2.5 -1 3 -1 M3 17c1 0 1.5 -1 3 -1s2 1 4 1s2 -1 4 -1s2 1 4 1s2.5 -1 3 -1',
+    'walk':      'M13 4a1 1 0 1 0 2 0 a1 1 0 0 0 -2 0 M7 21l3 -4 M16 21l-2 -4l-3 -3l1 -6 M6 12l2 -3l4 -1l3 3l3 1',
+    'lotus':     'M12 6a2 2 0 1 0 0 -4 a2 2 0 0 0 0 4 M12 8v10 M6 18c-2 -3 -3 -6 -1 -8c1 4 4 5 7 4 M18 18c2 -3 3 -6 1 -8c-1 4 -4 5 -7 4',
+    'footprints':'M7 14a3 3 0 0 0 6 0v-3a3 3 0 0 0 -6 0z M11 9a3 3 0 0 0 6 0v-3a3 3 0 0 0 -6 0z M5 19l1 3 M19 19l1 3',
+    'activity':  'M3 12h4l3 -8 l4 16 l3 -8 h4',
+  };
+  const TIcon = ({ name, size = 22, color = 'currentColor', style }) => {
+    const d = ICON_PATHS[name];
+    if (!d) return null;
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+        strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={style}>
+        {d.split(' M ').map((seg, i) => (
+          <path key={i} d={i === 0 ? seg : `M ${seg}`} />
+        ))}
+      </svg>
+    );
+  };
+
+  // Phase 4r.viz.1 — trend chip. Compares the current value against the 30-day
+  // same-activity-type median (HIIT vs HIIT, easy vs easy). `direction` is
+  // 'lower-better' for pace + vert osc (smaller is improving) and
+  // 'higher-better' for cadence + aerobic TE. HR uses 'lower-better' (lower
+  // HR at same effort = efficiency gain).
+  const computeTrend = (currentVal, baselineVal, direction = 'lower-better') => {
+    if (currentVal == null || baselineVal == null || !Number.isFinite(currentVal) || !Number.isFinite(baselineVal)) return null;
+    const delta = (currentVal - baselineVal) / baselineVal;
+    const threshold = 0.03; // ±3%
+    if (Math.abs(delta) < threshold) return 'flat';
+    const better = direction === 'lower-better' ? delta < 0 : delta > 0;
+    return better ? 'good' : 'bad';
+  };
+  const sameTypeBaseline = (acts, currentRow, field, daysBack = 30) => {
+    if (!Array.isArray(acts) || !currentRow) return null;
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - daysBack);
+    const type = currentRow.activityType || '';
+    const isCurrentRun = !!currentRow.isRun;
+    const samples = acts
+      .filter(a => {
+        if (!a || a === currentRow) return false;
+        if (a[field] == null || !Number.isFinite(parseFloat(a[field]))) return false;
+        const d = a.date ? new Date(a.date + 'T12:00:00') : null;
+        if (!d || d < cutoff) return false;
+        // Match by run vs strength + type fragment so HIIT lumps with HIIT, easy with easy.
+        if (isCurrentRun && !a.isRun) return false;
+        if (!isCurrentRun && a.isRun) return false;
+        return true;
+      })
+      .map(a => parseFloat(a[field]));
+    if (samples.length < 3) return null;
+    const sorted = samples.sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  };
+  const TrendChip = ({ trend }) => {
+    if (!trend) return null;
+    const cfg = {
+      good: { icon: 'arrow-up-right', color: '#22c55e', bg: 'rgba(34,197,94,0.18)' },
+      flat: { icon: 'arrow-right', color: '#f59e0b', bg: 'rgba(245,158,11,0.18)' },
+      bad: { icon: 'arrow-down-right', color: '#ef4444', bg: 'rgba(239,68,68,0.18)' },
+    }[trend];
+    return (
+      <div style={{position:'absolute',top:6,right:6,background:cfg.bg,padding:'2px 4px',borderRadius:4,display:'inline-flex',alignItems:'center'}}>
+        <TIcon name={cfg.icon} size={11} color={cfg.color}/>
+      </div>
+    );
+  };
+  // Hero metric tile — icon over value over label, optional trend chip.
+  const HeroTile = ({ icon, color, value, label, trend, tint }) => (
+    <div style={{
+      background: tint || 'rgba(255,255,255,0.03)',
+      border: `0.5px solid ${color}33`,
+      borderRadius: 10, padding: '12px 8px 10px', textAlign: 'center',
+      flex: 1, position: 'relative', minWidth: 0,
+    }}>
+      <TrendChip trend={trend}/>
+      <div style={{height:30,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <TIcon name={icon} size={26} color={color}/>
+      </div>
+      <div style={{color:'var(--text-primary)',fontSize:15,fontWeight:500,marginTop:4,lineHeight:1}}>{value ?? '—'}</div>
+      <div style={{color:'var(--text-muted)',fontSize:10,marginTop:3,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{label}</div>
+    </div>
+  );
+  // Mini tile — icon left, value+label stacked right. Used in the lower run
+  // metrics and hydration rows so visual language is consistent across the card.
+  const IconMiniTile = ({ icon, color, value, label, dim }) => (
+    <div style={{
+      background:'var(--bg-elevated)', borderRadius:8, padding:'8px 9px',
+      display:'flex',alignItems:'center',gap:8,flex:1,minWidth:0,
+      opacity: dim ? 0.55 : 1,
+    }}>
+      <TIcon name={icon} size={18} color={color}/>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{color:'var(--text-primary)',fontSize:13,fontWeight:500,lineHeight:1.1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{value}</div>
+        <div style={{color:'var(--text-muted)',fontSize:9,marginTop:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{label}</div>
+      </div>
+    </div>
+  );
+
+  // ── Phase 4r.viz.11 — Plan-driven metric profiles ─────────────────────────
+  // The plan type determines which metrics show (the "story" of the workout),
+  // not the data itself. If user planned easy_run and HR was elevated, it
+  // stays easy_run and the elevated HR shows up as a "failed-easy" signal.
+  //
+  // Each profile returns: { row1: HeroTile[], row2: IconMiniTile[] }
+  // Tiles with null value are filtered out before render.
+  const _fmt1 = v => (v != null && Number.isFinite(+v)) ? (+v).toFixed(1) : null;
+  const _fmtInt = v => (v != null && Number.isFinite(+v)) ? String(Math.round(+v)) : null;
+  const _fmtPct = v => (v != null && Number.isFinite(+v)) ? `${Math.round(+v)}%` : null;
+
+  // Pace seconds-per-mile helper for trend computation.
+  const _paceToSec = p => {
+    if (!p || typeof p !== 'string') return null;
+    const m = p.match(/(\d+):(\d{1,2})/);
+    if (!m) return null;
+    return parseInt(m[1])*60 + parseInt(m[2]);
+  };
+
+  // Cardiac drift % from records — first-half avg HR vs second-half avg HR.
+  // Returns null if records aren't available or run was too short.
+  const _cardiacDrift = (fd) => {
+    const recs = fd._records || fd.records || null;
+    if (!Array.isArray(recs) || recs.length < 120) return null;
+    const half = Math.floor(recs.length / 2);
+    const first = recs.slice(0, half).map(r => r.heartRate).filter(Number.isFinite);
+    const second = recs.slice(half).map(r => r.heartRate).filter(Number.isFinite);
+    if (first.length < 30 || second.length < 30) return null;
+    const avg1 = first.reduce((a,b)=>a+b,0) / first.length;
+    const avg2 = second.reduce((a,b)=>a+b,0) / second.length;
+    return ((avg2 - avg1) / avg1) * 100;
+  };
+
+  // Determine planType for an activity. Use today's plan if it lines up,
+  // else default by activity flags.
+  const _resolvePlanType = (fd, plannedToday) => {
+    const plan = plannedToday?.type;
+    const matches = (pt) => {
+      if (['easy_run','long_run','tempo','intervals'].includes(pt)) return fd.isRun && !fd.isHIIT && !fd.isWalk;
+      if (pt === 'hiit') return fd.isHIIT || (fd.isRun && !fd.distanceMi);
+      if (pt === 'strength') return fd.isStrength;
+      if (pt === 'mobility') return fd.isMobility;
+      if (pt === 'cross') return fd.isCycle || fd.isSwim || fd.isWalk;
+      return false;
+    };
+    if (plan && matches(plan)) return plan;
+    // Default by flags.
+    if (fd.isHIIT) return 'hiit';
+    if (fd.isMobility) return 'mobility';
+    if (fd.isStrength) return 'strength';
+    if (fd.isCycle) return 'cycle';
+    if (fd.isSwim) return 'swim';
+    if (fd.isWalk) return 'walk';
+    if (fd.isRun) return 'easy_run';
+    return 'easy_run';
+  };
+
+  // Build the row1 + row2 tile lists for a given planType + activity.
+  // Tiles with null values are dropped at render time so missing data
+  // doesn't show "—" — the row just gets shorter.
+  const _buildActivityProfile = (planType, fd) => {
+    // Derive zone percentages from the activity's hrZones array (seconds
+    // per zone). The activity object stores hrZones (an array from the
+    // FIT parser); this builds the {z1..z5} percentage object that the
+    // tile profile expects. Falls back to fd.zones if present (some
+    // older paths populate it directly).
+    const z = (() => {
+      if (fd.zones && (fd.zones.z2 != null || fd.zones.z4 != null)) return fd.zones;
+      const hz = fd.hrZones;
+      if (!Array.isArray(hz) || hz.length !== 5) return {};
+      const total = hz.reduce((s, v) => s + (Number(v) || 0), 0);
+      if (total <= 0) return {};
+      const pct = n => Math.round((n / total) * 100);
+      return { z1: pct(hz[0]), z2: pct(hz[1]), z3: pct(hz[2]), z4: pct(hz[3]), z5: pct(hz[4]) };
+    })();
+    const z2 = Number.isFinite(+z.z2) ? +z.z2 : null;
+    const z34 = (Number.isFinite(+z.z3) ? +z.z3 : 0) + (Number.isFinite(+z.z4) ? +z.z4 : 0);
+    const z45 = (Number.isFinite(+z.z4) ? +z.z4 : 0) + (Number.isFinite(+z.z5) ? +z.z5 : 0);
+    const aeroTE = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+    const anaerTE = fd.anaerobicTrainingEffect ?? fd.anaerobicTE;
+    const decoupling = fd.aerobicDecoupling ?? fd.decoupling ?? null;
+    const drift = _cardiacDrift(fd);
+    const hrRecovery = fd.hrRecoveryDrop1min ?? fd.hrRecovery1min ?? null;
+    const tss = fd.trainingStressScore ?? null;
+    const calories = fd.calories ?? null;
+    const avgHR = safeN(fd.avgHR,'avgHR');
+    const maxHR = safeN(fd.maxHR,'maxHR');
+    const avgCad = safeN(fd.avgCadence,'avgCadence');
+    const vert = fd.avgVerticalOscillation ?? null;
+
+    const TILE = {
+      // Headline tiles (Row 1 candidates)
+      distance:   () => fd.distanceMi   ? { icon:'route',           color:'#60a5fa', label:'Distance · mi', value: fd.distanceMi.toFixed(1), tint:'rgba(96,165,250,0.06)' } : null,
+      pace:       () => fd.avgPacePerMi ? { icon:'stopwatch',       color:'#4ade80', label:'Pace · /mi',    value: fd.avgPacePerMi,           tint:'rgba(74,222,128,0.06)' } : null,
+      avgHR:      () => avgHR           ? { icon:'heartbeat',       color:'#f87171', label:'Avg HR · bpm',  value: safeDisp(fd.avgHR,'avgHR'),tint:'rgba(248,113,113,0.06)' } : null,
+      maxHRHero:  () => maxHR           ? { icon:'heart-rate-monitor', color:'#ef4444', label:'Max HR · bpm',value: safeDisp(fd.maxHR,'maxHR'),tint:'rgba(239,68,68,0.06)' } : null,
+      cadence:    () => avgCad          ? { icon:'shoe',            color:'#a78bfa', label:'Cadence · spm', value: safeDisp(fd.avgCadence,'avgCadence'), tint:'rgba(167,139,250,0.06)' } : null,
+      vertOsc:    () => vert            ? { icon:'wave-sine',       color:'#fbbf24', label:'Vert osc · cm', value: vert.toFixed(1),           tint:'rgba(251,191,36,0.06)' } : null,
+      elevation:  () => fd.totalAscentFt? { icon:'mountain',        color:'#94a3b8', label:'Elev · ft',     value: String(fd.totalAscentFt),  tint:'rgba(148,163,184,0.06)' } : null,
+      duration:   () => (fd.duration && fd.duration !== '—') ? { icon:'clock-hour-4', color:'#94a3b8', label:'Duration', value: fd.duration, tint:'rgba(148,163,184,0.06)' } : null,
+      z2pct:      () => z2 != null      ? { icon:'target-arrow',    color:'#4ade80', label:'Z2 time',       value: _fmtPct(z2),               tint:'rgba(74,222,128,0.06)' } : null,
+      z34pct:     () => z34             ? { icon:'target-arrow',    color:'#fbbf24', label:'Z3–Z4 time',    value: _fmtPct(z34),              tint:'rgba(251,191,36,0.06)' } : null,
+      z45pct:     () => z45             ? { icon:'activity',        color:'#fb7185', label:'Z4–Z5 time',    value: _fmtPct(z45),              tint:'rgba(251,113,133,0.06)' } : null,
+      cardiacDrift: () => drift != null ? { icon:'activity',        color: drift > 5 ? '#fb7185' : '#4ade80', label:'Cardiac drift', value: `${drift>=0?'+':''}${drift.toFixed(1)}%`, tint:'rgba(251,113,133,0.06)' } : null,
+      gap:        () => fd.avgGapPerMi  ? { icon:'mountain',        color:'#fbbf24', label:'GAP · /mi',     value: fd.avgGapPerMi,            tint:'rgba(251,191,36,0.06)' } : null,
+      anaerTE:    () => anaerTE         ? { icon:'activity',        color:'#fb7185', label:'Anaer TE',      value: anaerTE.toFixed(1),        tint:'rgba(251,113,133,0.06)' } : null,
+      decouplingHero: () => decoupling != null ? { icon:'wave-sine', color: decoupling > 5 ? '#fb7185' : '#4ade80', label:'Aero decoupling', value: `${decoupling.toFixed(1)}%`, tint:'rgba(74,222,128,0.06)' } : null,
+      hrRecovery: () => hrRecovery      ? { icon:'heartbeat',       color:'#22d3ee', label:'HR recovery 1m', value: `−${Math.round(hrRecovery)}`, tint:'rgba(34,211,238,0.06)' } : null,
+      sets:       () => fd.setsCount    ? { icon:'barbell',         color:'#a78bfa', label:'Sets',          value: String(fd.setsCount),      tint:'rgba(167,139,250,0.06)' } : null,
+      reps:       () => fd.totalReps    ? { icon:'repeat',          color:'#fbbf24', label:'Reps',          value: String(fd.totalReps),      tint:'rgba(251,191,36,0.06)' } : null,
+      bodyBatt:   () => fd.bodyBatteryDrain ? { icon:'gauge',       color:'#94a3b8', label:'Body batt',     value: `−${fd.bodyBatteryDrain}`, tint:'rgba(148,163,184,0.06)' } : null,
+      avgPower:   () => fd.avgPowerW    ? { icon:'bolt',            color:'#fbbf24', label:'Avg power · W', value: String(fd.avgPowerW),      tint:'rgba(251,191,36,0.06)' } : null,
+      normPower:  () => fd.normalizedPower ? { icon:'bolt',         color:'#fb923c', label:'Norm power · W',value: String(fd.normalizedPower), tint:'rgba(251,146,60,0.06)' } : null,
+      avgSpeed:   () => (fd.distanceMi && fd.durationSecs) ? { icon:'gauge', color:'#22d3ee', label:'Avg · mph', value: (fd.distanceMi / (fd.durationSecs/3600)).toFixed(1), tint:'rgba(34,211,238,0.06)' } : null,
+      cadenceRpm: () => avgCad          ? { icon:'repeat',          color:'#a78bfa', label:'Cadence · rpm', value: String(avgCad),            tint:'rgba(167,139,250,0.06)' } : null,
+      // Hero-size version of calories (the r2_calories tile is for row 2
+      // small-format). Used as a HIIT fallback when zone time / HR
+      // recovery aren't recorded by the watch.
+      caloriesHero: () => calories      ? { icon:'flame',           color:'#fb923c', label:'Calories',      value: String(calories),          tint:'rgba(251,146,60,0.06)' } : null,
+      // Row 2 (context) tiles — same component, smaller display.
+      r2_duration:   () => (fd.duration && fd.duration !== '—') ? { icon:'clock-hour-4', color:'#94a3b8', value: fd.duration,                       label:'duration' } : null,
+      r2_avgHR:      () => avgHR        ? { icon:'heartbeat',          color:'#f87171', value: safeDisp(fd.avgHR,'avgHR'),       label:'avg HR' } : null,
+      r2_maxHR:      () => maxHR        ? { icon:'heart-rate-monitor', color:'#ef4444', value: safeDisp(fd.maxHR,'maxHR'),       label:'max HR' } : null,
+      r2_calories:   () => calories     ? { icon:'flame',              color:'#fb923c', value: String(calories),                  label:'calories' } : null,
+      r2_aeroTE:     () => aeroTE       ? { icon:'target-arrow',       color:'#4ade80', value: aeroTE.toFixed(1),                 label:'aero TE' } : null,
+      r2_anaerTE:    () => anaerTE      ? { icon:'activity',           color:'#fb7185', value: anaerTE.toFixed(1),                label:'anaer TE' } : null,
+      r2_tss:        () => tss          ? { icon:'activity',           color:'#a78bfa', value: String(Math.round(tss)),            label:'TSS' } : null,
+      r2_decoupling: () => decoupling != null ? { icon:'wave-sine',    color:'#fbbf24', value: `${decoupling.toFixed(1)}%`,        label:'decoupling' } : null,
+      r2_z2pct:      () => z2 != null   ? { icon:'target-arrow',       color:'#4ade80', value: _fmtPct(z2),                        label:'Z2 time' } : null,
+      r2_vertOsc:    () => vert         ? { icon:'wave-sine',          color:'#fbbf24', value: vert.toFixed(1),                    label:'vert osc · cm' } : null,
+      r2_hrRecovery: () => hrRecovery   ? { icon:'heartbeat',          color:'#22d3ee', value: `−${Math.round(hrRecovery)}`,       label:'HR recov 1m' } : null,
+      r2_avgPace:    () => fd.avgPacePerMi ? { icon:'stopwatch',       color:'#4ade80', value: fd.avgPacePerMi,                    label:'avg pace' } : null,
+      r2_avgPower:   () => fd.avgPowerW ? { icon:'bolt',               color:'#fbbf24', value: `${fd.avgPowerW} W`,                label:'avg power' } : null,
+      r2_normPower:  () => fd.normalizedPower ? { icon:'bolt',         color:'#fb923c', value: `${fd.normalizedPower} W`,          label:'NP' } : null,
+      r2_avgSpeed:   () => (fd.distanceMi && fd.durationSecs) ? { icon:'gauge', color:'#22d3ee', value: `${(fd.distanceMi / (fd.durationSecs/3600)).toFixed(1)} mph`, label:'avg speed' } : null,
+      r2_if:         () => (tss && fd.durationSecs) ? { icon:'gauge', color:'#a78bfa', value: Math.sqrt(tss / (fd.durationSecs/3600 * 100)).toFixed(2), label:'IF' } : null,
+      r2_elevation:  () => fd.totalAscentFt ? { icon:'mountain',       color:'#94a3b8', value: `${fd.totalAscentFt} ft`,           label:'elevation' } : null,
+    };
+
+    const PROFILES = {
+      easy_run:  { row1: ['distance','pace','z2pct','cardiacDrift','cadence'],
+                   row2: ['r2_decoupling','r2_vertOsc','r2_aeroTE','r2_calories'] },
+      long_run:  { row1: ['distance','pace','cardiacDrift','elevation','cadence'],
+                   row2: ['r2_z2pct','r2_decoupling','r2_aeroTE','r2_calories'] },
+      tempo:     { row1: ['distance','gap','z34pct','decouplingHero','pace'],
+                   row2: ['r2_avgPace','r2_tss','r2_hrRecovery','r2_aeroTE'] },
+      intervals: { row1: ['z45pct','maxHRHero','anaerTE','hrRecovery','pace'],
+                   row2: ['r2_avgHR','r2_tss','r2_aeroTE','r2_calories'] },
+      // HIIT — original agreed-upon design: time at high intensity +
+      // peak/avg load + anaerobic stress + cardiovascular recovery. All
+      // five are HIIT-specific signals. After fixing the zone-derivation
+      // bug (Phase 4r.viz.32) all five populate from FR955 sport=hiit
+      // activities. HR Recovery still depends on the watch computing it
+      // (firmware-dependent); cardiac drift takes its slot when missing.
+      hiit:      { row1: ['z45pct','maxHRHero','anaerTE','hrRecovery','avgHR','cardiacDrift'],
+                   row2: ['r2_duration','r2_aeroTE','r2_tss','r2_calories'] },
+      strength:  { row1: ['sets','reps','avgHR','bodyBatt','duration'],
+                   row2: ['r2_tss','r2_anaerTE','r2_maxHR','r2_calories'] },
+      mobility:  { row1: ['duration','avgHR','maxHRHero','r2_calories'],
+                   row2: ['r2_aeroTE'] },
+      cycle:     { row1: ['distance','avgPower','normPower','cadenceRpm','elevation'],
+                   row2: ['r2_avgSpeed','r2_if','r2_tss','r2_avgHR'] },
+      cross:     { row1: ['distance','avgPower','cadenceRpm','elevation','avgHR'],
+                   row2: ['r2_avgSpeed','r2_tss','r2_aeroTE','r2_calories'] },
+      swim:      { row1: ['distance','pace','avgHR','maxHRHero','duration'],
+                   row2: ['r2_aeroTE','r2_calories'] },
+      walk:      { row1: ['distance','pace','elevation','avgHR','cadence'],
+                   row2: ['r2_avgHR','r2_calories','r2_aeroTE','r2_elevation'] },
+      race:      { row1: ['distance','pace','avgHR','maxHRHero','elevation'],
+                   row2: ['r2_avgPace','r2_tss','r2_aeroTE','r2_calories'] },
+    };
+    const profile = PROFILES[planType] || PROFILES.easy_run;
+    // Map row1 ids → tile objects, drop nulls, cap at 5 so longer
+    // fallback chains (HIIT has 8 ids to weather missing zone/recovery
+    // data) don't push past one row.
+    //
+    // Build row1 with id tracking so we can dedupe row2: any metric
+    // already shown in the hero shouldn't repeat in the KRI rail below.
+    // R1_TO_R2 maps a row1 tile id to its row2 equivalent.
+    const R1_TO_R2 = {
+      duration:       'r2_duration',
+      caloriesHero:   'r2_calories',
+      avgHR:          'r2_avgHR',
+      maxHRHero:      'r2_maxHR',
+      anaerTE:        'r2_anaerTE',
+      decouplingHero: 'r2_decoupling',
+      hrRecovery:     'r2_hrRecovery',
+      cardiacDrift:   'r2_decoupling',     // close cousin — drift / decoupling
+      pace:           'r2_avgPace',
+      avgPower:       'r2_avgPower',
+      normPower:      'r2_normPower',
+      avgSpeed:       'r2_avgSpeed',
+      elevation:      'r2_elevation',
+    };
+    const row1Pairs = [];
+    for (const k of profile.row1) {
+      if (row1Pairs.length >= 5) break;
+      const t = TILE[k] && TILE[k]();
+      if (t) row1Pairs.push({ id: k, tile: t });
+    }
+    const row1 = row1Pairs.map(p => p.tile);
+    const usedR2Ids = new Set(row1Pairs.map(p => R1_TO_R2[p.id]).filter(Boolean));
+    const row2 = profile.row2
+      .filter(k => !usedR2Ids.has(k))                 // skip any metric already in row1
+      .map(k => TILE[k] && TILE[k]())
+      .filter(Boolean);
+    return { row1, row2 };
+  };
+
   // fitData = today's .fit upload OR fallback to today's row from synced activities
-  // Hydration row — uses pure derive/hydration.js so the formula lives in one place
+  // Hydration row — uses pure derive/hydration.js so the formula lives in one place.
+  // Phase 4r.viz.1 — icon-prefixed tiles for visual consistency with run metrics.
   const HydrationRow=({fd})=>{
     const h=hydrationFor(fd,profile);
+    // Tinted-value variant: when value should use a semantic color (sweat loss
+    // blue, replenish green), pass through valueColor; IconMiniTile keeps its
+    // standard layout.
+    const TintedTile = ({ icon, iconColor, value, label, valueColor }) => (
+      <div style={{
+        background:'var(--bg-elevated)', borderRadius:8, padding:'8px 9px',
+        display:'flex',alignItems:'center',gap:8,flex:1,minWidth:0,
+      }}>
+        <TIcon name={icon} size={18} color={iconColor}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{color:valueColor||'var(--text-primary)',fontSize:13,fontWeight:500,lineHeight:1.1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{value}</div>
+          <div style={{color:'var(--text-muted)',fontSize:9,marginTop:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{label}</div>
+        </div>
+      </div>
+    );
     return<>
       <div style={divider}/>
       <div style={subHdr}>Hydration</div>
-      <div style={{display:'flex',gap:5}}>
-        <div style={miniTile}>
-          <div style={{...miniVal,color:'#60a5fa'}}>{h.sweatLossL!=null?`${h.sweatLossL.toFixed(2)} L`:'—'}</div>
-          <div style={miniLbl}>est. sweat loss</div>
-        </div>
-        <div style={miniTile}>
-          <div style={{...miniVal,color:'#4ade80'}}>{h.replenishL!=null?`${h.replenishL.toFixed(2)} L`:'—'}</div>
-          <div style={miniLbl}>replenish water</div>
-        </div>
-        <div style={miniTile}>
-          <div style={miniVal}>{h.replenishOz!=null?`${h.replenishOz} oz`:'—'}</div>
-          <div style={miniLbl}>≈ in oz</div>
-        </div>
-        <div style={miniTile}>
-          <div style={miniVal}>{h.windowHrs} hrs</div>
-          <div style={miniLbl}>window</div>
-        </div>
+      <div style={{display:'flex',gap:6}}>
+        <TintedTile icon="droplet" iconColor="#60a5fa" valueColor="#60a5fa"
+          value={h.sweatLossL!=null?`${h.sweatLossL.toFixed(2)} L`:'—'}
+          label="est. sweat loss"/>
+        <TintedTile icon="droplet" iconColor="#4ade80" valueColor="#4ade80"
+          value={h.replenishL!=null?`${h.replenishL.toFixed(2)} L`:'—'}
+          label="replenish water"/>
+        <IconMiniTile icon="bottle" color="#94a3b8"
+          value={h.replenishOz!=null?`${h.replenishOz} oz`:'—'} label="≈ in oz"/>
+        <IconMiniTile icon="hourglass" color="#94a3b8"
+          value={`${h.windowHrs} hrs`} label="window"/>
       </div>
     </>;
   };
 
   // ── Replenishment Tracker: micro-goals from activity needs engine ──
+  // ReplenishTracker \u2014 Phase 4r.viz.30 redesign.
+  // Compact 2-column grid of phase-coded goal cards (pre=amber, during=blue,
+  // post=green). Each card: phase tag \u00b7 short label \u00b7 big value \u00b7 vs target \u00b7
+  // background fill behind the card shows progress. Replaces the previous
+  // long-line list which was hard to scan and visually heavy.
   const ReplenishTracker=({fd,dateStr,onGoToFuel})=>{
     const needs=computeActivityNeeds(fd,profile);
     if(!needs)return null;
     const progress=trackReplenishment(needs,dateStr);
     const summary=replenishmentSummary(progress);
     if(!progress.length)return null;
-    const phaseOrder=['pre_workout','during_workout','post_workout'];
-    const phaseLabels={pre_workout:'Pre-Workout',during_workout:'During Workout',post_workout:'Post-Workout'};
+    const phaseTag={pre_workout:'PRE',during_workout:'DURING',post_workout:'POST'};
     const phaseColors={pre_workout:'#fbbf24',during_workout:'#60a5fa',post_workout:'#4ade80'};
     const unmet=progress.filter(g=>!g.met);
     // Activity context line
     const dMins=needs.durationSecs?Math.round(needs.durationSecs/60):null;
-    const actType=fd.isRun?'run':fd.isStrength?'strength session':fd.activityType||'workout';
+    const actType=fd.isHIIT?'HIIT':fd.isRun?'run':fd.isStrength?'strength':fd.activityType||'workout';
+    // Shorten the goal label to fit on a card. "64g carbs before workout" \u2192 "carbs \u00b7 64g"
+    const shortLabel=(g)=>{
+      const cleaned=g.label.replace(/\s*before workout|\s*during workout|\s*within 1 hr|\s*to replenish glycogen|\(.*?\)/gi,'').trim();
+      // Strip the leading number+unit if present and put it on the value row
+      return cleaned.replace(/^\d+\s*(g|ml)\s+/i,'').replace(/\s+/g,' ');
+    };
     return<>
       <div style={divider}/>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-        <div style={{...subHdr,marginBottom:0}}>Replenishment Goals</div>
+        <div style={{...subHdr,marginBottom:0}}>Replenishment</div>
         <div style={{
           padding:'2px 8px',borderRadius:10,fontSize:9,fontWeight:600,
           background:summary.status==='complete'?'rgba(74,222,128,0.12)':summary.status==='partial'?'rgba(251,191,36,0.12)':'rgba(248,113,113,0.12)',
           color:summary.status==='complete'?'#4ade80':summary.status==='partial'?'#fbbf24':'#f87171',
-        }}>{summary.met}/{summary.total} met {'\u00b7'} {summary.pct}%</div>
+        }}>{summary.met}/{summary.total} {'\u00b7'} {summary.pct}%</div>
       </div>
-      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:8,marginTop:4}}>
-        <span style={{fontWeight:500,color:fd.isRun?'#60a5fa':fd.isStrength?'#a78bfa':'var(--text-primary)',textTransform:'capitalize'}}>{actType}</span>
+      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:8}}>
+        <span style={{fontWeight:500,color:fd.isHIIT?'#fb7185':fd.isRun?'#60a5fa':fd.isStrength?'#a78bfa':'var(--text-primary)'}}>{actType}</span>
         {dMins!=null&&<span> {'\u00b7'} {dMins} min</span>}
-        {' \u2014 '}burned <span style={{fontWeight:600,color:'var(--text-primary)'}}>{needs.caloriesBurned} kcal</span>
+        {' \u00b7 '}<span style={{fontWeight:600,color:'var(--text-primary)'}}>{needs.caloriesBurned} kcal</span>
       </div>
-      {phaseOrder.map(phase=>{
-        const items=progress.filter(g=>g.phase===phase);
-        if(!items.length)return null;
-        const color=phaseColors[phase]||'#60a5fa';
-        return<div key={phase} style={{marginBottom:8}}>
-          <div style={{fontSize:9,fontWeight:600,color,letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:4}}>
-            {phaseLabels[phase]}
-          </div>
-          {items.map(g=>(
-            <div key={g.id} onClick={()=>!g.met&&onGoToFuel?.()} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4,cursor:g.met?'default':'pointer',borderRadius:6,padding:'2px 0',transition:'background 0.15s'}}
-              onMouseEnter={e=>{if(!g.met)e.currentTarget.style.background='rgba(255,255,255,0.04)';}}
-              onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
-              <div style={{
-                width:16,height:16,borderRadius:4,flexShrink:0,
-                display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,
-                background:g.met?`${color}20`:'rgba(255,255,255,0.04)',
-                border:g.met?`1px solid ${color}40`:'1px solid rgba(255,255,255,0.08)',
-                color:g.met?color:'rgba(255,255,255,0.2)',
-              }}>{g.met?'\u2713':'\u25CB'}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:10,color:g.met?color:'var(--text-primary)',fontWeight:g.met?600:400}}>
-                  {g.label}
-                </div>
-                <div style={{height:3,borderRadius:2,background:'rgba(255,255,255,0.06)',marginTop:2,overflow:'hidden'}}>
-                  <div style={{height:'100%',borderRadius:2,background:color,width:`${Math.round(g.pct*100)}%`,transition:'width 0.3s ease'}}/>
-                </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))',gap:6}}>
+        {progress.map(g=>{
+          const color=phaseColors[g.phase]||'#60a5fa';
+          const tag=phaseTag[g.phase]||'';
+          const pct=Math.max(0,Math.min(1,g.pct||0));
+          const fillPct=Math.round(pct*100);
+          return<div key={g.id}
+            onClick={()=>!g.met&&onGoToFuel?.()}
+            style={{
+              position:'relative',overflow:'hidden',
+              borderRadius:6,padding:'7px 9px',
+              border:`0.5px solid ${g.met?color+'55':'var(--border-subtle)'}`,
+              background:'var(--bg-elevated)',
+              cursor:g.met?'default':onGoToFuel?'pointer':'default',
+              minHeight:54,
+            }}>
+            {/* Progress fill behind content \u2014 subtle wash */}
+            <div style={{
+              position:'absolute',inset:0,
+              background:`linear-gradient(to right, ${color}${g.met?'18':'10'} 0%, ${color}${g.met?'18':'10'} ${fillPct}%, transparent ${fillPct}%, transparent 100%)`,
+              pointerEvents:'none',
+            }}/>
+            <div style={{position:'relative'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:4,marginBottom:2}}>
+                <span style={{fontSize:8,fontWeight:700,letterSpacing:'0.06em',color,opacity:0.85}}>{tag}</span>
+                <span style={{fontSize:9,color:g.met?color:'var(--text-muted)',fontWeight:g.met?600:500}}>
+                  {g.met?'\u2713':`${fillPct}%`}
+                </span>
               </div>
-              <div style={{fontSize:9,color:'var(--text-muted)',flexShrink:0,minWidth:44,textAlign:'right'}}>
-                {g.consumed}/{g.target}{g.unit==='ml'?'ml':'g'}
+              <div style={{fontSize:11,color:'var(--text-primary)',fontWeight:500,lineHeight:1.2,marginBottom:3,textTransform:'capitalize'}}>
+                {shortLabel(g)}
               </div>
-              {!g.met&&onGoToFuel&&<div style={{fontSize:8,color:'#60a5fa',flexShrink:0,opacity:0.7}}>Log {'\u2192'}</div>}
+              <div style={{fontSize:10,color:'var(--text-muted)',fontFamily:'var(--font-mono)'}}>
+                <span style={{color:g.met?color:'var(--text-primary)',fontWeight:600}}>{g.consumed}</span>
+                <span style={{opacity:0.5}}>{` / ${g.target}${g.unit==='ml'?'ml':'g'}`}</span>
+              </div>
             </div>
-          ))}
-        </div>;
-      })}
-      {unmet.length>0&&onGoToFuel&&<div style={{textAlign:'center',marginTop:4}}>
+          </div>;
+        })}
+      </div>
+      {unmet.length>0&&onGoToFuel&&<div style={{textAlign:'center',marginTop:8}}>
         <button onClick={onGoToFuel} style={{fontSize:10,fontWeight:600,color:'#60a5fa',background:'rgba(96,165,250,0.08)',border:'1px solid rgba(96,165,250,0.15)',borderRadius:8,padding:'6px 16px',cursor:'pointer'}}>
           Log recovery meal in Fuel {'\u2192'}
         </button>
@@ -4338,19 +4949,43 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       // Regex updated: matches "Run (outdoor)", "Run (treadmill)", "HIIT",
       // "Trail Run", etc. — the previous /running|trail/ pattern only caught
       // legacy CSV strings and missed the modern parser's "Run (...)" labels.
-      const isMobility = row.isMobility === true || /mobility|stretch|yoga|pilates|flexibility|breathwork/i.test(row.activityType||'');
-      const isRun = !isMobility && (row.isRun === true || row.isHIIT === true || /\b(run|jog|hiit|interval|tempo|trail|fartlek|sprint|track)\b/i.test(row.activityType||'') || /\b(run|jog|hiit|fartlek|interval|tempo)\b/i.test(row.activityName||''));
-      const isStrength = !isMobility && !isRun && (row.isStrength === true || /strength|weight|gym|hyrox|circuit/i.test(row.activityType||''));
-      const isHIIT = row.isHIIT === true || row.activityType === 'HIIT';
+      const isMobility = row.isMobility === true || /mobility|stretch|yoga|pilates|flexibility|breathwork|meditation/i.test(row.activityType||'');
+      // Phase 4r.viz.7 — explicit Cycle / Swim / Walk-Hike classification so
+      // each gets a discipline-appropriate render branch instead of falling
+      // through to a generic activity layout.
+      const isCycle = !isMobility && (row.isCycle === true || /\b(cycl|bike|biking|spin|riding|road bike|mtb|gravel|peloton)\b/i.test(row.activityType||''));
+      const isSwim = !isMobility && !isCycle && (row.isSwim === true || /\b(swim|swimming|pool|open water)\b/i.test(row.activityType||''));
+      const isWalk = !isMobility && !isCycle && !isSwim && (row.isWalk === true || /\b(walk|walking|hike|hiking|trekking)\b/i.test(row.activityType||'') || /\b(walk|hike)\b/i.test(row.activityName||''));
+      const isRun = !isMobility && !isCycle && !isSwim && !isWalk && (row.isRun === true || row.isHIIT === true || /\b(run|jog|hiit|interval|tempo|trail|fartlek|sprint|track)\b/i.test(row.activityType||'') || /\b(run|jog|hiit|fartlek|interval|tempo)\b/i.test(row.activityName||''));
+      const isStrength = !isMobility && !isCycle && !isSwim && !isWalk && !isRun && (row.isStrength === true || /strength|weight|gym|hyrox|circuit/i.test(row.activityType||''));
+      // Phase 4r.viz.10 — auto-promote Run → HIIT when the data screams it.
+      // Garmin records most interval workouts under sport=running so the
+      // FIT parser can't always tell. Strong HIIT signals from session data:
+      //   • anaerobic TE >= 1.5  (definitively HIIT/intervals)
+      //   • OR no distance + duration <60min + anaer TE >= 0.8 + high avg HR
+      // Conservative on purpose — false positives are more confusing than
+      // false negatives. Original FIT classification still drives `isRun`.
+      const _anaerTE = row.anaerobicTrainingEffect ?? row.anaerobicTE;
+      const _autoHIIT = isRun && (
+        (Number.isFinite(_anaerTE) && _anaerTE >= 1.5)
+        || (!row.distanceMi && row.durationSecs && row.durationSecs < 60*60
+            && Number.isFinite(_anaerTE) && _anaerTE >= 0.8)
+      );
+      const isHIIT = row.isHIIT === true || row.activityType === 'HIIT' || _autoHIIT;
       const mins=row.durationSecs?Math.round(row.durationSecs/60):null;
       return sanitizeFit({
         ...row,
         isRun,isStrength,isMobility,isHIIT,
+        isCycle, isSwim, isWalk,
         durationMins:mins,
         duration:row.durationFormatted||(mins?`${mins} min`:'—'),
         avgPacePerMi:row.avgPaceRaw,
-        avgPowerW:row.avgPower,
-        maxPowerW:row.maxPower,
+        // Power aliasing — FIT parser writes avgPowerW/maxPowerW, legacy CSV
+        // uses avgPower/maxPower. Prefer the FIT field, fall back to CSV.
+        // (Phase 4r.viz.2: previously this line overwrote the FIT value with
+        // the CSV alias, blanking out power on every Garmin-synced run.)
+        avgPowerW: row.avgPowerW ?? row.avgPower,
+        maxPowerW: row.maxPowerW ?? row.maxPower,
         // Training Effect aliasing — Garmin FIT parser writes
         // aerobicTrainingEffect / anaerobicTrainingEffect, while older CSV
         // imports use aerobicTE / anaerobicTE. Prefer the FIT field, fall
@@ -4509,7 +5144,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     const monday=new Date();
     monday.setDate(monday.getDate()-(monday.getDay()||7)+1);
     monday.setHours(0,0,0,0);
-    return acts.filter(a=>new Date(a.date)>=monday&&isRunAct(a))
+    return acts.filter(a=>a.date&&parseLocalDate(a.date)>=monday&&isRunAct(a))
       .reduce((sum,a)=>sum+(a.distanceMi||0),0);
   })();
 
@@ -4905,10 +5540,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
         let gaugeUnit  = '';
         let gaugeValue = 0;
         let gaugeMax   = 200;
-        let gaugeBreaks = [50, 100, 150];           // easy / mod / hard / over
+        let gaugeBreaks = [50, 100, 150];
         let gaugeZoneNames = ['EASY','MODERATE','HARD','OVERREACHING'];
         if (isStrengthDay && sessionMetric?.label === 'Tonnage') {
-          // Tonnage value comes pre-formatted with commas — strip them.
           const raw = parseInt(String(sessionMetric.value).replace(/[^\d]/g,''), 10) || 0;
           gaugeLabel = 'Tonnage';
           gaugeUnit  = 'lbs';
@@ -4917,11 +5551,10 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           gaugeBreaks = [5000, 12000, 18000];
           gaugeZoneNames = ['LIGHT','MODERATE','HARD','HEAVY'];
         } else if (sessionMetric?.label === 'rTSS' || sessionMetric?.label === 'Load') {
-          // 'Load' is the HR-derived fallback for strength sessions
-          // without a template (Phase 4o.daily.20). Same 0-200 scale as
-          // rTSS, so we render with the same gauge geometry — only the
-          // label changes so the user sees what's been measured.
-          gaugeLabel = sessionMetric.label;
+          // Phase 4r.viz.26 — single HR-anchored methodology. Always display
+          // as "rTSS" since users recognize that term, but the number under
+          // the hood is hrTSS (duration × IF_hr²).
+          gaugeLabel = 'rTSS';
           gaugeValue = Number(sessionMetric.value) || 0;
         }
 
@@ -5124,7 +5757,50 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           }
 
           // ── Play (activity) hero ──
+          // Phase 4r.race.2 — compute upcoming race for the in-Play race
+          // card. Race card renders below the hero and disappears once
+          // the race date has passed (parseLocalDate-based midnight diff
+          // so it persists through race-day until midnight).
+          const _playRaces = (() => {
+            try { return JSON.parse(localStorage.getItem('arnold:races')||'[]'); }
+            catch { return []; }
+          })();
+          const _todayMid = new Date(); _todayMid.setHours(0,0,0,0);
+          const _upcomingPlayRace = _playRaces
+            .filter(r => {
+              const d = parseLocalDate(r.date);
+              return d && d >= _todayMid;
+            })
+            .sort((a,b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null;
+          let _playSweatRate = null;
+          if (_upcomingPlayRace) {
+            try {
+              const summary = summarizeRecentSignatures({
+                activities: getUnifiedActivities(),
+                weightHistory: storage.get('weight') || [],
+                daysBack: 60,
+              });
+              _playSweatRate = summary?.summary?.sweatRate?.trimmed
+                || summary?.summary?.sweatRate?.median
+                || summary?.summary?.sweatRate?.mean
+                || null;
+            } catch {}
+          }
+          const _playProfile = { ...(storage.get('profile') || {}), ...getGoals() };
+          const _playGoalPaceSecs = (() => {
+            const p = _playProfile?.targetRacePace || '9:30';
+            const [m, s] = String(p).split(':').map(Number);
+            return m * 60 + (s || 0);
+          })();
+          const _playFmtPace = secs => {
+            if (!secs || !Number.isFinite(secs)) return '—';
+            const m = Math.floor(secs / 60);
+            const s = Math.round(secs % 60);
+            return `${m}:${String(s).padStart(2,'0')}`;
+          };
+
           return (
+            <>
             <section style={{
               background: 'var(--bg-surface)',
               border: '0.5px solid var(--border-default)',
@@ -5135,24 +5811,27 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
               flexDirection: 'column',
               gap: 7,
             }}>
-              {/* ── Single dense row: rings · Load value · A:C ratio ── */}
+              {/* Phase 4r.viz.26 — single row: speedometer LEFT, rings + A:C
+                  ratio RIGHT. No duplicate rTSS number — the speedometer
+                  itself shows the value. */}
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <svg width="100" height="60" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet" style={{flexShrink:0}}>
+                  <path d={arcPath(0,  b1)}        stroke={zoneEasy} strokeWidth="10" fill="none" opacity={zoneIdx>0?0.35:zoneIdx===0?1:0.35}/>
+                  <path d={arcPath(b1, b2)}        stroke={zoneMod}  strokeWidth="10" fill="none" opacity={zoneIdx>1?0.35:zoneIdx===1?1:0.35}/>
+                  <path d={arcPath(b2, b3)}        stroke={zoneHard} strokeWidth="10" fill="none" opacity={zoneIdx>2?0.35:zoneIdx===2?1:0.35}/>
+                  <path d={arcPath(b3, gaugeMax)}  stroke={zoneOver} strokeWidth="10" fill="none" opacity={zoneIdx===3?1:0.35}/>
+                  {[0, b1, b2, b3, gaugeMax].map(v=>{
+                    const inner = polar(angleFor(v), R-13);
+                    const outer = polar(angleFor(v), R-3);
+                    return <line key={v} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} stroke="var(--border-subtle)" strokeWidth="0.6"/>;
+                  })}
+                  <line x1={cx} y1={cy} x2={needleEnd.x} y2={needleEnd.y} stroke={needleColor} strokeWidth="2.5" strokeLinecap="round"/>
+                  <circle cx={cx} cy={cy} r="4" fill={needleColor}/>
+                  <text x={cx} y={cy - 22} textAnchor="middle" fontSize="22" fontWeight="700" fill="var(--text-primary)">{gaugeDisplay}</text>
+                  <text x={cx} y={cy - 6} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text-muted)" letterSpacing="0.06em">rTSS</text>
+                </svg>
                 <MiniRing val={r7Score}  label="7d"/>
                 <MiniRing val={r30Score} label="30d"/>
-
-                <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start',
-                  paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)', minWidth:0 }}>
-                  <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
-                    <span style={{ fontSize:15, fontWeight:700, color:needleColor, lineHeight:1 }}>
-                      {gaugeDisplay}
-                    </span>
-                    <span style={{ fontSize:9, color:'var(--text-muted)' }}>{gaugeLabel}</span>
-                  </div>
-                  <span style={{ fontSize:8.5, color:needleColor, marginTop:2, fontWeight:600, letterSpacing:'0.06em' }}>
-                    {zoneLabel}
-                  </span>
-                </div>
-
                 {acr.ratio != null && (
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start',
                     marginLeft:'auto', paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)' }}>
@@ -5209,6 +5888,28 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                 </div>
               )}
             </section>
+
+            {/* Phase 4r.race.2 — Race card on Play tab. Renders only
+                for mobileView='activity' (Play), only when there's an
+                upcoming race that hasn't passed yet. Auto-disappears the
+                day after race day. The card carries the same expandable
+                fueling+hydration plan as the EdgeIQ/web RaceFocusCard. */}
+            {mobileView === 'activity' && _upcomingPlayRace && (
+              <div style={{ marginBottom: 10 }}>
+                <RaceFocusCard
+                  race={_upcomingPlayRace}
+                  goalPaceSecs={_playGoalPaceSecs}
+                  avgPace30={null}
+                  fmtPace={_playFmtPace}
+                  planned={null}
+                  plannedTypeLabel={null}
+                  profile={_playProfile}
+                  sweatRateLbsPerHr={_playSweatRate}
+                  mobile={true}
+                />
+              </div>
+            )}
+            </>
           );
         }
         // Other mobile views (none today) — no hero
@@ -5647,7 +6348,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                                    : fd.isMobility ? 'Mobility'
                                    : fd.isStrength ? 'Strength'
                                    : (fd.activityType || 'Activity');
-                  const badgeColor = fd.isHIIT ? '#fbbf24'
+                  const badgeColor = fd.isHIIT ? '#fb7185'
                                    : fd.isRun ? '#60a5fa'
                                    : fd.isMobility ? '#22d3ee'
                                    : '#a78bfa';
@@ -5679,15 +6380,30 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   );
 
                   if (mobileView) {
+                    // Phase 4r.viz.6 — title row collapsed to a single line.
+                    // Was: [Run]                           [Sync]
+                    //      [Run · Garmin FIT]
+                    // Now: [HIIT  Run·Garmin FIT]         [Sync]
+                    // Also: use HIIT as the title when the activity is HIIT
+                    // (was incorrectly saying "Run" because HIIT inherits
+                    // isRun=true for shared rendering).
+                    const _titleLabel = fd.isHIIT ? 'HIIT'
+                                       : fd.isRun ? 'Run'
+                                       : fd.isStrength ? 'Strength'
+                                       : fd.isMobility ? 'Mobility'
+                                       : fd.isCycle ? 'Cycle'
+                                       : fd.isSwim ? 'Swim'
+                                       : fd.isWalk ? 'Walk'
+                                       : 'Activity';
                     return (
-                      <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:8,minWidth:0}}>
-                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
-                          <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>{fd.isRun?'Run':fd.isStrength?'Strength':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
-                          {syncBtn}
-                        </div>
-                        <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginTop:0}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8,minWidth:0}}>
+                        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',minWidth:0}}>
+                          <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)'}}>
+                            {_titleLabel}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}
+                          </span>
                           {sourceBadge}
                         </div>
+                        {syncBtn}
                       </div>
                     );
                   }
@@ -5695,7 +6411,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   return (
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,gap:8,flexWrap:'wrap'}}>
                       <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap',minWidth:0}}>
-                        <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>{fd.isRun?'Run':fd.isStrength?'Strength':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
+                        <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)'}}>{fd.isHIIT?'HIIT':fd.isRun?'Run':fd.isStrength?'Strength':fd.isMobility?'Mobility':fd.isCycle?'Cycle':fd.isSwim?'Swim':fd.isWalk?'Walk':'Activity'}{fd._groupCount>1?` · ${fd._groupCount} sessions`:''}</span>
                         {sourceBadge}
                         <span style={{fontSize:9,color:'var(--text-muted)',whiteSpace:'nowrap'}}>{fd.date} · {fd.time}</span>
                       </div>
@@ -5704,127 +6420,335 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   );
                 })()}
 
-                {/* 5 dials for runs */}
-                {fd.isRun&&(
-                  <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
-                    <SmallDial color="#60a5fa" value={fd.distanceMi} max={parseFloat(profile?.weeklyRunDistanceTarget)||10} unit="mi" label="Distance" displayValue={fd.distanceMi?fd.distanceMi.toFixed(1):'—'}/>
-                    <SmallDial color="#4ade80" value={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)} max={1} unit="/mi" label="Pace" displayValue={fd.avgPacePerMi||'—'}/>
-                    <SmallDial color="#f87171" value={safeN(fd.avgHR,'avgHR')} max={185} unit="bpm" label="Avg HR" displayValue={safeDisp(fd.avgHR,'avgHR')}/>
-                    <SmallDial color="#a78bfa" value={safeN(fd.avgCadence,'avgCadence')} max={180} unit="spm" label="Cadence" displayValue={safeDisp(fd.avgCadence,'avgCadence')}/>
-                    <SmallDial color="#fbbf24" value={fd.avgVerticalOscillation||8.6} max={12} unit="mm" label="Vert osc" displayValue={fd.avgVerticalOscillation?fd.avgVerticalOscillation.toFixed(1):'8.6'}/>
-                  </div>
-                )}
-
-                {/* Strength: 5 dials parallel to runs */}
-                {fd.isStrength&&(()=>{
-                  const movSecs=fd.movingTimeSecs||fd.durationSecs;
-                  const movMins=movSecs?Math.round(movSecs/60):null;
-                  const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
-                  return(
-                  <div style={{display:'flex',justifyContent:'space-between',gap:4,marginBottom:14}}>
-                    <SmallDial color="#a78bfa" value={movMins} max={90} unit="min" label="Duration" displayValue={fmtHMS(movSecs)}/>
-                    <SmallDial color="#fbbf24" value={fd.calories||0} max={600} unit="kcal" label="Calories" displayValue={fd.calories||'—'}/>
-                    <SmallDial color="#f87171" value={safeN(fd.avgHR,'avgHR')} max={185} unit="bpm" label="Avg HR" displayValue={safeDisp(fd.avgHR,'avgHR')}/>
-                    <SmallDial color="#ef4444" value={safeN(fd.maxHR,'maxHR')} max={200} unit="bpm" label="Max HR" displayValue={safeDisp(fd.maxHR,'maxHR')}/>
-                    <SmallDial color="#4ade80" value={fd.aerobicTrainingEffect||fd.aerobicTE} max={5} unit="TE" label="Aero TE" displayValue={(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'}/>
-                  </div>
+                {/* Phase 4r.viz.11 — Plan-driven profile render. Single
+                    block handles ALL activity types. planType from today's
+                    plan (when it matches) drives Row 1 + Row 2 metric sets.
+                    Row 3 (hydration) is universal per user spec. */}
+                {(()=>{
+                  // Phase 4r.viz.11 — planType is computed from today's plan
+                  // when the activity discipline matches; else defaults from
+                  // activity flags.
+                  const _plannedToday = (typeof todayPlanned === 'function') ? todayPlanned() : null;
+                  const planType = _resolvePlanType(fd, _plannedToday);
+                  const { row1, row2 } = _buildActivityProfile(planType, fd);
+                  const _typeLabels = {
+                    easy_run:'Easy run', long_run:'Long run',
+                    tempo:'Tempo', intervals:'Intervals',
+                    hiit:'HIIT', strength:'Strength',
+                    mobility:'Mobility', cycle:'Cycle',
+                    cross:'Cross-train', swim:'Swim',
+                    walk:'Walk', race:'Race',
+                  };
+                  return (
+                    <>
+                      {row1.length > 0 && (
+                        <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                          {row1.map((t, i) => (
+                            <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                              value={t.value} trend={t.trend} tint={t.tint}/>
+                          ))}
+                        </div>
+                      )}
+                      {row2.length > 0 && (
+                        <>
+                          <div style={divider}/>
+                          <div style={subHdr}>{_typeLabels[planType] || 'Metrics'}</div>
+                          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                            {row2.map((t, i) => (
+                              <IconMiniTile key={i} icon={t.icon} color={t.color}
+                                value={t.value} label={t.label}/>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      <HydrationRow fd={fd}/>
+                      {idx===fitGroups.length-1 && (
+                        <ReplenishTracker fd={fd} dateStr={todayStr}
+                          onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>
+                      )}
+                      {idx===fitGroups.length-1 && (()=>{
+                        const acts=getUnifiedActivities();
+                        const monday=new Date();
+                        const dow=monday.getDay();
+                        monday.setDate(monday.getDate()-(dow===0?6:dow-1));
+                        monday.setHours(0,0,0,0);
+                        if (planType === 'strength') {
+                          const wk=acts.filter(a=>isStrengthAct(a)&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                          const cnt=wk.length;
+                          const mins=wk.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
+                          const tgt=parseFloat(profile?.weeklyStrengthTarget)||2;
+                          const minTgt=parseFloat(profile?.weeklyStrengthMinutesTarget)||60;
+                          return <>
+                            <div style={divider}/>
+                            <div style={subHdr}>Vs Goal</div>
+                            <MiniBar label="Sessions this week" displayValue={`${cnt} / ${tgt}`} goalLabel={`Goal: ${tgt}/week`} pct={cnt/tgt}/>
+                            <MiniBar label="Strength minutes" displayValue={`${Math.round(mins)} / ${minTgt} min`} goalLabel={`Goal: ${minTgt} min/week`} pct={mins/minTgt}/>
+                          </>;
+                        }
+                        if (planType === 'mobility') {
+                          const wkMob=acts.filter(a=>(a.isMobility||/mobility|stretch|yoga|pilates/i.test(a.activityType||''))&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                          const wkMins=wkMob.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
+                          const tgt=parseFloat(profile?.weeklyMobilityTarget)||45;
+                          return <>
+                            <div style={divider}/>
+                            <div style={subHdr}>Vs Goal</div>
+                            <MiniBar label="Mobility minutes" displayValue={`${Math.round(wkMins)} / ${tgt} min`} goalLabel={`Goal: ${tgt} min/week`} pct={wkMins/tgt}/>
+                          </>;
+                        }
+                        return <>
+                          <div style={divider}/>
+                          <div style={subHdr}>Vs Goal</div>
+                          {fd.avgPacePerMi && (
+                            <MiniBar label="Pace vs target"
+                              displayValue={`${fd.avgPacePerMi} /mi`}
+                              goalLabel={`Goal: ${profile?.targetRacePace||'9:30'} /mi`}
+                              pct={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)}/>
+                          )}
+                          <MiniBar label="Weekly miles"
+                            displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||20} mi`}
+                            goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||20} mi/week`}
+                            pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||20)}/>
+                        </>;
+                      })()}
+                    </>
                   );
                 })()}
 
-                {/* Run metrics — 2 rows of 4 tiles */}
+                {/* Phase 4r.viz.5 — Hero metric tiles, dynamically filtered.
+                    Only render tiles for which the activity actually carries
+                    data. HIIT runs (no distance/pace/cadence) get a leaner
+                    row with just the HR + duration tiles; outdoor runs get
+                    the full 5-tile set. This replaces the prior all-or-
+                    nothing layout where missing fields rendered as "—". */}
+                {false&&fd.isRun&&(()=>{
+                  const _avgHRNum = safeN(fd.avgHR,'avgHR');
+                  const _cadNum = safeN(fd.avgCadence,'avgCadence');
+                  const _voNum = fd.avgVerticalOscillation || null;
+                  const paceToSec = p => {
+                    if (!p || typeof p !== 'string') return null;
+                    const m = p.match(/(\d+):(\d{1,2})/);
+                    if (!m) return null;
+                    return parseInt(m[1])*60 + parseInt(m[2]);
+                  };
+                  const _paceSec = paceToSec(fd.avgPacePerMi);
+                  const paceBase = (() => {
+                    const samples = (allActs||[]).filter(a => a !== fd && a.isRun && a.avgPacePerMi).map(a => paceToSec(a.avgPacePerMi)).filter(Number.isFinite);
+                    if (samples.length < 3) return null;
+                    const s = samples.sort((x,y)=>x-y); return s[Math.floor(s.length/2)];
+                  })();
+                  const hrBase = sameTypeBaseline(allActs, fd, 'avgHR');
+                  const cadBase = sameTypeBaseline(allActs, fd, 'avgCadence');
+                  const voBase = sameTypeBaseline(allActs, fd, 'avgVerticalOscillation');
+                  // Build tile list dynamically.
+                  const tiles = [];
+                  // For HIIT, duration is more meaningful than distance,
+                  // so we substitute the lead tile.
+                  if (fd.isHIIT && !fd.distanceMi) {
+                    tiles.push({ icon:'clock-hour-4', color:'#94a3b8', label:'Duration',
+                      value: fd.duration || '—', tint:'rgba(148,163,184,0.06)' });
+                  } else if (fd.distanceMi) {
+                    tiles.push({ icon:'route', color:'#60a5fa', label:'Distance · mi',
+                      value: fd.distanceMi.toFixed(1), tint:'rgba(96,165,250,0.06)' });
+                  }
+                  if (fd.avgPacePerMi) {
+                    tiles.push({ icon:'stopwatch', color:'#4ade80', label:'Pace · /mi',
+                      value: fd.avgPacePerMi, trend: computeTrend(_paceSec, paceBase, 'lower-better'),
+                      tint:'rgba(74,222,128,0.06)' });
+                  }
+                  if (_avgHRNum) {
+                    tiles.push({ icon:'heartbeat', color:'#f87171', label:'Avg HR · bpm',
+                      value: safeDisp(fd.avgHR,'avgHR'), trend: computeTrend(_avgHRNum, hrBase, 'lower-better'),
+                      tint:'rgba(248,113,113,0.06)' });
+                  }
+                  if (_cadNum) {
+                    tiles.push({ icon:'shoe', color:'#a78bfa', label:'Cadence · spm',
+                      value: safeDisp(fd.avgCadence,'avgCadence'), trend: computeTrend(_cadNum, cadBase, 'higher-better'),
+                      tint:'rgba(167,139,250,0.06)' });
+                  }
+                  if (_voNum) {
+                    tiles.push({ icon:'wave-sine', color:'#fbbf24', label:'Vert osc · cm',
+                      value: _voNum.toFixed(1), trend: computeTrend(_voNum, voBase, 'lower-better'),
+                      tint:'rgba(251,191,36,0.06)' });
+                  }
+                  // Phase 4r.viz.8 — pad hero to ~5 tiles by pulling from
+                  // a universal-metrics pool when the watch didn't record
+                  // distance/pace/cadence/vert-osc (HIIT-style workouts
+                  // Garmin labels as sport=running).
+                  // Phase 4r.viz.10 — track which keys got added so the
+                  // detail row below can skip them and not duplicate.
+                  const heroKeysUsed = new Set();
+                  if (tiles.length < 4) {
+                    if (fd.duration && fd.duration !== '—' && !tiles.find(t => t.label?.startsWith('Distance'))) {
+                      tiles.unshift({ icon:'clock-hour-4', color:'#94a3b8', label:'Duration',
+                        value: fd.duration, tint:'rgba(148,163,184,0.06)' });
+                      heroKeysUsed.add('duration');
+                    }
+                  }
+                  if (tiles.length < 5) {
+                    if (fd.calories) {
+                      tiles.push({ icon:'flame', color:'#fb923c', label:'Calories',
+                        value: String(fd.calories), tint:'rgba(251,146,60,0.06)' });
+                      heroKeysUsed.add('calories');
+                    }
+                  }
+                  if (tiles.length < 5) {
+                    const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+                    if (te) {
+                      tiles.push({ icon:'target-arrow', color:'#4ade80', label:'Aero TE',
+                        value: te.toFixed(1), tint:'rgba(74,222,128,0.06)' });
+                      heroKeysUsed.add('aeroTE');
+                    }
+                  }
+                  if (tiles.length < 5) {
+                    const anaerTE = fd.anaerobicTrainingEffect ?? fd.anaerobicTE;
+                    if (anaerTE) {
+                      tiles.push({ icon:'activity', color:'#fb7185', label:'Anaer TE',
+                        value: anaerTE.toFixed(1), tint:'rgba(251,113,133,0.06)' });
+                      heroKeysUsed.add('anaerTE');
+                    }
+                  }
+                  // Stash on fd so the detail-row IIFE below can read it
+                  // and skip duplicates.
+                  fd._heroKeysUsed = heroKeysUsed;
+                  if (tiles.length === 0) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                      {tiles.map((t, i) => (
+                        <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                          value={t.value} trend={t.trend} tint={t.tint}/>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* Strength: 5 dials parallel to runs */}
+                {/* Phase 4r.viz.7 — Strength hero migrated to icon-tile style.
+                    KRIs: Duration · Sets · Reps · Avg HR · Anaer TE
+                    Phase 4r.viz.11 — disabled, replaced by unified profile-driven
+                    render at the top of this block. */}
+                {false&&fd.isStrength&&(()=>{
+                  const movSecs=fd.movingTimeSecs||fd.durationSecs;
+                  const movMins=movSecs?Math.round(movSecs/60):null;
+                  const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
+                  const _avgHRNum = safeN(fd.avgHR,'avgHR');
+                  const anaerTE = fd.anaerobicTrainingEffect ?? fd.anaerobicTE;
+                  const tiles = [];
+                  if (movMins) tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
+                    label:'Duration', value: fmtHMS(movSecs), tint:'rgba(148,163,184,0.06)' });
+                  if (fd.setsCount) tiles.push({ icon:'barbell', color:'#a78bfa',
+                    label:'Sets', value: String(fd.setsCount), tint:'rgba(167,139,250,0.06)' });
+                  if (fd.totalReps) tiles.push({ icon:'repeat', color:'#fbbf24',
+                    label:'Reps', value: String(fd.totalReps), tint:'rgba(251,191,36,0.06)' });
+                  if (_avgHRNum) tiles.push({ icon:'heartbeat', color:'#f87171',
+                    label:'Avg HR · bpm', value: safeDisp(fd.avgHR,'avgHR'),
+                    tint:'rgba(248,113,113,0.06)' });
+                  if (anaerTE) tiles.push({ icon:'activity', color:'#fb7185',
+                    label:'Anaer TE', value: anaerTE.toFixed(1),
+                    tint:'rgba(251,113,133,0.06)' });
+                  if (tiles.length === 0) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                      {tiles.map((t, i) => (
+                        <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                          value={t.value} tint={t.tint}/>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* Phase 4r.viz.5 — Lower metrics with dynamic filtering.
+                    Phase 4r.viz.11 — disabled, replaced by unified profile-driven
+                    render at the top of this block. */}
+                {false&&fd.isRun&&(()=>{
+                  const _maxHRNum = safeN(fd.maxHR,'maxHR');
+                  const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+                  const anaerTE = fd.anaerobicTrainingEffect ?? fd.anaerobicTE;
+                  // Phase 4r.viz.10 — skip metrics that the hero already shows
+                  // (set by the hero IIFE above). Prevents Duration/Calories/
+                  // Aero TE from appearing twice when hero padded with them.
+                  const heroSkip = fd._heroKeysUsed || new Set();
+                  const tiles = [];
+                  if (!heroSkip.has('duration') && fd.duration && fd.duration !== '—') {
+                    tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
+                      value: fd.duration, label:'duration' });
+                  }
+                  if (_maxHRNum) {
+                    tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                  }
+                  if (fd.totalAscentFt) {
+                    tiles.push({ icon:'mountain', color:'#94a3b8',
+                      value: `${fd.totalAscentFt} ft`, label:'elevation' });
+                  }
+                  if (!heroSkip.has('calories') && fd.calories) {
+                    tiles.push({ icon:'flame', color:'#fb923c',
+                      value: String(fd.calories), label:'calories' });
+                  }
+                  if (fd.avgPowerW) {
+                    tiles.push({ icon:'bolt', color:'#fbbf24',
+                      value: `${fd.avgPowerW} W`, label:'avg power' });
+                  }
+                  if (fd.maxPowerW) {
+                    tiles.push({ icon:'bolt', color:'#fbbf24',
+                      value: `${fd.maxPowerW} W`, label:'max power' });
+                  }
+                  if (!heroSkip.has('aeroTE') && te) {
+                    tiles.push({ icon:'target-arrow', color:'#4ade80',
+                      value: te.toFixed(1), label:'aero TE' });
+                  }
+                  if (fd.isHIIT && !heroSkip.has('anaerTE') && anaerTE) {
+                    tiles.push({ icon:'target-arrow', color:'#fbbf24',
+                      value: anaerTE.toFixed(1), label:'anaer TE' });
+                  } else if (!fd.isHIIT && fd.maxCadence) {
+                    tiles.push({ icon:'shoe', color:'#a78bfa',
+                      value: String(fd.maxCadence), label:'max cad' });
+                  }
+                  if (tiles.length === 0) return null;
+                  // Render in rows of 4 max. Each row uses flex: 1 children so
+                  // the last row's tiles fill the row even if it has < 4.
+                  const rows = [];
+                  for (let i = 0; i < tiles.length; i += 4) rows.push(tiles.slice(i, i + 4));
+                  return (
+                    <>
+                      <div style={divider}/>
+                      <div style={subHdr}>{fd.isHIIT ? 'HIIT metrics' : 'Run metrics'}</div>
+                      {rows.map((row, ri) => (
+                        <div key={ri} style={{display:'flex',gap:6,marginBottom: ri < rows.length - 1 ? 6 : 0}}>
+                          {row.map((t, i) => (
+                            <IconMiniTile key={i} icon={t.icon} color={t.color}
+                              value={t.value} label={t.label}/>
+                          ))}
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
                 {fd.isRun&&<>
-                  <div style={divider}/>
-                  <div style={subHdr}>Run metrics</div>
-                  <div style={{display:'flex',gap:5,marginBottom:5}}>
-                    {[
-                      {label:'duration',val:fd.duration||'—'},
-                      {label:'max HR',val:safeDisp(fd.maxHR,'maxHR')},
-                      {label:'elevation',val:fd.totalAscentFt?`${fd.totalAscentFt} ft`:'—'},
-                      {label:'calories',val:fd.calories||'—'},
-                    ].map(m=>(
-                      <div key={m.label} style={miniTile}>
-                        <div style={miniVal}>{m.val}</div>
-                        <div style={miniLbl}>{m.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{display:'flex',gap:5}}>
-                    {[
-                      {label:'avg power',val:fd.avgPowerW?`${fd.avgPowerW} W`:'—'},
-                      {label:'max power',val:fd.maxPowerW?`${fd.maxPowerW} W`:'—'},
-                      {label:'aero TE',val:fd.aerobicTrainingEffect?fd.aerobicTrainingEffect.toFixed(1):'—'},
-                      {label:'max cad',val:fd.maxCadence||'—'},
-                    ].map(m=>(
-                      <div key={m.label} style={miniTile}>
-                        <div style={miniVal}>{m.val}</div>
-                        <div style={miniLbl}>{m.label}</div>
-                      </div>
-                    ))}
-                  </div>
 
-                  <HydrationRow fd={fd}/>
-                  {idx===fitGroups.length-1&&<ReplenishTracker fd={fd} dateStr={todayStr} onGoToFuel={setTab?()=>setTab('nutrition_mobile'):undefined}/>}
-
-                  {/* Vs goal MiniBars — only on last panel to avoid duplicate weekly stats */}
-                  {idx===fitGroups.length-1&&<>
-                    <div style={divider}/>
-                    <div style={subHdr}>Vs Goal</div>
-                    <MiniBar label="Pace vs target"
-                      displayValue={fd.avgPacePerMi?`${fd.avgPacePerMi} /mi`:'—'}
-                      goalLabel={`Goal: ${profile?.targetRacePace||'9:30'} /mi`}
-                      pct={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)}/>
-                    <MiniBar label="Weekly miles"
-                      displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||20} mi`}
-                      goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||20} mi/week`}
-                      pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||20)}/>
-                  </>}
+                  {/* Phase 4r.viz.33 — legacy fd.isRun block fully retired.
+                      HydrationRow, ReplenishTracker, AND Vs Goal are all
+                      rendered by the per-discipline activity card above
+                      (line ~6338) which correctly routes by planType.
+                      Keeping them here too caused duplicate Replenishment
+                      AND duplicate Vs Goal sections on HIIT/Run cards. */}
                 </>}
 
-                {/* Strength metrics — parallel to runs: 2 rows of 4 tiles + Vs Goal */}
-                {fd.isStrength&&<>
+                {/* Phase 4r.viz.7 — Strength detail uses icon mini tiles in
+                    rows of 4, dynamically filtered. Shared icons across
+                    disciplines for Duration/Max HR/Calories/Aero TE. */}
+                {false&&fd.isStrength&&<>
                   <div style={divider}/>
                   <div style={subHdr}>Strength metrics</div>
                   {(()=>{
                     const movSecs=fd.movingTimeSecs||fd.durationSecs;
                     const fmtHMS=s=>{if(s==null)return'—';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;};
-                    const totalMin=movSecs?Math.round(movSecs/60):null;
-                    const hrMax=safeN(fd.maxHR,'maxHR')||parseFloat(profile?.maxHR)||190;
-                    const _avgHR=safeN(fd.avgHR,'avgHR');
-                    const pct=_avgHR?_avgHR/hrMax:null;
-                    const zone=pct==null?null:pct>=0.9?'Z5':pct>=0.8?'Z4':pct>=0.7?'Z3':pct>=0.6?'Z2':'Z1';
-                    const zoneLabel=totalMin!=null&&zone?(totalMin>=60?`${Math.floor(totalMin/60)}h${totalMin%60}m · ${zone}`:`${totalMin}m · ${zone}`):'—';
-                    return<>
-                  <div style={{display:'flex',gap:5,marginBottom:5}}>
-                    {[
-                      {label:'duration',val:fmtHMS(movSecs)},
-                      {label:'sets',val:fd.setsCount||'—'},
-                      {label:'reps',val:fd.totalReps||'—'},
-                      {label:'intensity',val:zoneLabel},
-                    ].map(m=>(
-                      <div key={m.label} style={miniTile}>
-                        <div style={miniVal}>{m.val}</div>
-                        <div style={miniLbl}>{m.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {(() => {
-                    // TSS fallback (Phase 4o.daily.20): Garmin doesn't
-                    // emit trainingStressScore for strength sessions —
-                    // pace/power-anchored, run/cycling-only. When the FIT
-                    // didn't supply TSS but we have HR + duration, derive
-                    // hrTSS so the tile reads a real number with a *
-                    // marker indicating it was computed.
-                    //
-                    // maxHR ladder (Phase 4o.daily.20.1) mirrors the one
-                    // in computeDailyScore so the tile never silently
-                    // fails when profile.maxHR is unset.
+                    const _maxHRNum = safeN(fd.maxHR,'maxHR');
+                    const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+                    const anaerTE = fd.anaerobicTrainingEffect ?? fd.anaerobicTE;
+                    // hrTSS fallback when Garmin doesn't emit TSS for strength.
                     let tssVal = fd.trainingStressScore;
                     let tssDerived = false;
                     if (!tssVal) {
-                      // Unified ladder (Phase 4o.daily.22) — never fall
-                      // back to fd.maxHR (this session's peak); strength
-                      // sessions naturally cap below threshold so using
-                      // them as denominator inflates IF and hrTSS.
                       const mhr = getEffectiveMaxHR(profile, getUnifiedActivities());
                       const { hrTSS } = computeHrTSS({
                         durationSecs: fd.durationSecs,
@@ -5834,25 +6758,32 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                       });
                       if (hrTSS) { tssVal = hrTSS; tssDerived = true; }
                     }
+                    const tiles = [];
+                    if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                    if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
+                      value: String(fd.calories), label:'calories' });
+                    if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
+                      value: te.toFixed(1), label:'aero TE' });
+                    if (tssVal) tiles.push({ icon:'activity', color:'#a78bfa',
+                      value: Math.round(tssVal).toString(), label: tssDerived ? 'TSS*' : 'TSS' });
+                    if (fd.bodyBatteryDrain) tiles.push({ icon:'gauge', color:'#94a3b8',
+                      value: `-${fd.bodyBatteryDrain}`, label:'body batt' });
+                    if (tiles.length === 0) return null;
+                    const rows = [];
+                    for (let i = 0; i < tiles.length; i += 4) rows.push(tiles.slice(i, i + 4));
                     return (
-                      <div style={{display:'flex',gap:5}}>
-                        {[
-                          {label:'body batt',val:fd.bodyBatteryDrain?`-${fd.bodyBatteryDrain}`:'—'},
-                          {label: tssDerived ? 'TSS*' : 'TSS',
-                           val: tssVal ? Math.round(tssVal).toString() : '—',
-                           tooltip: tssDerived ? 'Derived from HR + duration (hrTSS) — Garmin doesn\'t emit TSS for this session type.' : ''},
-                          {label:'aero TE',val:(fd.aerobicTrainingEffect||fd.aerobicTE)?(fd.aerobicTrainingEffect||fd.aerobicTE).toFixed(1):'—'},
-                          {label:'anaero TE',val:(fd.anaerobicTrainingEffect||fd.anaerobicTE)?(fd.anaerobicTrainingEffect||fd.anaerobicTE).toFixed(1):'—'},
-                        ].map(m=>(
-                          <div key={m.label} style={miniTile} title={m.tooltip || ''}>
-                            <div style={miniVal}>{m.val}</div>
-                            <div style={miniLbl}>{m.label}</div>
+                      <>
+                        {rows.map((row, ri) => (
+                          <div key={ri} style={{display:'flex',gap:6,marginBottom: ri < rows.length - 1 ? 6 : 0}}>
+                            {row.map((t, i) => (
+                              <IconMiniTile key={i} icon={t.icon} color={t.color}
+                                value={t.value} label={t.label}/>
+                            ))}
                           </div>
                         ))}
-                      </div>
+                      </>
                     );
-                  })()}
-                    </>;
                   })()}
 
                   <HydrationRow fd={fd}/>
@@ -5881,6 +6812,244 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                     </>;
                   })()}
                 </>}
+
+                {/* Phase 4r.viz.7 — Mobility branch. Sparse by design.
+                    Hero: Duration · Avg HR · Calories · Focus
+                    No hydration (low-intensity, no sweat).
+                    Vs Goal: Weekly mobility minutes. */}
+                {false&&fd.isMobility&&(()=>{
+                  const movSecs = fd.movingTimeSecs || fd.durationSecs;
+                  const movMins = movSecs ? Math.round(movSecs/60) : null;
+                  const _avgHRNum = safeN(fd.avgHR,'avgHR');
+                  const tiles = [];
+                  if (movMins) tiles.push({ icon:'lotus', color:'#a78bfa',
+                    label:'Duration', value: `${movMins} min`,
+                    tint:'rgba(167,139,250,0.06)' });
+                  if (_avgHRNum) tiles.push({ icon:'heartbeat', color:'#f87171',
+                    label:'Avg HR · bpm', value: safeDisp(fd.avgHR,'avgHR'),
+                    tint:'rgba(248,113,113,0.06)' });
+                  if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
+                    label:'Calories', value: String(fd.calories),
+                    tint:'rgba(251,146,60,0.06)' });
+                  if (tiles.length === 0) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                      {tiles.map((t, i) => (
+                        <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                          value={t.value} tint={t.tint}/>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {false&&fd.isMobility&&idx===fitGroups.length-1&&(()=>{
+                  const acts=getUnifiedActivities();
+                  const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
+                  const wkMob=acts.filter(a=>(a.isMobility||/mobility|stretch|yoga|pilates/i.test(a.activityType||''))&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                  const wkMins=wkMob.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
+                  const target=parseFloat(profile?.weeklyMobilityTarget)||45;
+                  return<>
+                    <div style={divider}/>
+                    <div style={subHdr}>Vs Goal</div>
+                    <MiniBar label="Mobility minutes"
+                      displayValue={`${Math.round(wkMins)} / ${target} min`}
+                      goalLabel={`Goal: ${target} min/week`}
+                      pct={wkMins/target}/>
+                  </>;
+                })()}
+
+                {/* Phase 4r.viz.7 — Cycle branch.
+                    Hero: Distance · Avg speed · Avg HR · Avg power · Cadence
+                    + Hydration. Vs Goal: Weekly bike miles. */}
+                {false&&fd.isCycle&&(()=>{
+                  const distMi = fd.distanceMi;
+                  const durHr = fd.durationSecs ? fd.durationSecs / 3600 : null;
+                  const avgSpeed = (distMi && durHr) ? distMi / durHr : null;
+                  const _avgHRNum = safeN(fd.avgHR,'avgHR');
+                  const _cadNum = fd.avgCadence || null;
+                  const tiles = [];
+                  if (distMi) tiles.push({ icon:'bike', color:'#60a5fa',
+                    label:'Distance · mi', value: distMi.toFixed(1),
+                    tint:'rgba(96,165,250,0.06)' });
+                  if (avgSpeed) tiles.push({ icon:'gauge', color:'#22d3ee',
+                    label:'Avg · mph', value: avgSpeed.toFixed(1),
+                    tint:'rgba(34,211,238,0.06)' });
+                  if (_avgHRNum) tiles.push({ icon:'heartbeat', color:'#f87171',
+                    label:'Avg HR · bpm', value: safeDisp(fd.avgHR,'avgHR'),
+                    tint:'rgba(248,113,113,0.06)' });
+                  if (fd.avgPowerW) tiles.push({ icon:'bolt', color:'#fbbf24',
+                    label:'Avg power · W', value: String(fd.avgPowerW),
+                    tint:'rgba(251,191,36,0.06)' });
+                  if (_cadNum) tiles.push({ icon:'repeat', color:'#a78bfa',
+                    label:'Cadence · rpm', value: String(_cadNum),
+                    tint:'rgba(167,139,250,0.06)' });
+                  if (tiles.length === 0) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                      {tiles.map((t, i) => (
+                        <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                          value={t.value} tint={t.tint}/>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {false&&fd.isCycle&&<>
+                  <div style={divider}/>
+                  <div style={subHdr}>Cycle metrics</div>
+                  {(()=>{
+                    const _maxHRNum = safeN(fd.maxHR,'maxHR');
+                    const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+                    const tiles = [];
+                    if (fd.duration && fd.duration !== '—') tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
+                      value: fd.duration, label:'duration' });
+                    if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                    if (fd.totalAscentFt) tiles.push({ icon:'mountain', color:'#94a3b8',
+                      value: `${fd.totalAscentFt} ft`, label:'elevation' });
+                    if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
+                      value: String(fd.calories), label:'calories' });
+                    if (fd.maxPowerW) tiles.push({ icon:'bolt', color:'#fbbf24',
+                      value: `${fd.maxPowerW} W`, label:'max power' });
+                    if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
+                      value: te.toFixed(1), label:'aero TE' });
+                    if (tiles.length === 0) return null;
+                    const rows = [];
+                    for (let i = 0; i < tiles.length; i += 4) rows.push(tiles.slice(i, i + 4));
+                    return rows.map((row, ri) => (
+                      <div key={ri} style={{display:'flex',gap:6,marginBottom: ri < rows.length - 1 ? 6 : 0}}>
+                        {row.map((t, i) => (
+                          <IconMiniTile key={i} icon={t.icon} color={t.color}
+                            value={t.value} label={t.label}/>
+                        ))}
+                      </div>
+                    ));
+                  })()}
+                  <HydrationRow fd={fd}/>
+                </>}
+
+                {/* Phase 4r.viz.7 — Swim branch.
+                    Hero: Distance · Pace per 100 · Avg HR · Strokes · SWOLF
+                    No hydration (pool). Vs Goal: Weekly swim distance. */}
+                {false&&fd.isSwim&&(()=>{
+                  const _avgHRNum = safeN(fd.avgHR,'avgHR');
+                  // Pace per 100 derived from distance + duration when available.
+                  const distM = fd.distanceKm ? fd.distanceKm * 1000
+                              : (fd.distanceMi ? fd.distanceMi * 1609.34 : null);
+                  const pacePer100 = (distM && fd.durationSecs)
+                    ? (fd.durationSecs / (distM / 100))
+                    : null;
+                  const fmtPace = (s) => {
+                    if (!s) return null;
+                    const m = Math.floor(s / 60);
+                    const ss = Math.round(s % 60);
+                    return `${m}:${String(ss).padStart(2,'0')}`;
+                  };
+                  const tiles = [];
+                  if (distM) tiles.push({ icon:'swim', color:'#22d3ee',
+                    label: distM >= 1000 ? 'Distance · km' : 'Distance · m',
+                    value: distM >= 1000 ? (distM/1000).toFixed(2) : String(Math.round(distM)),
+                    tint:'rgba(34,211,238,0.06)' });
+                  if (pacePer100) tiles.push({ icon:'stopwatch', color:'#4ade80',
+                    label:'Pace · /100m', value: fmtPace(pacePer100),
+                    tint:'rgba(74,222,128,0.06)' });
+                  if (_avgHRNum) tiles.push({ icon:'heartbeat', color:'#f87171',
+                    label:'Avg HR · bpm', value: safeDisp(fd.avgHR,'avgHR'),
+                    tint:'rgba(248,113,113,0.06)' });
+                  if (tiles.length === 0) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                      {tiles.map((t, i) => (
+                        <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                          value={t.value} tint={t.tint}/>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {false&&fd.isSwim&&<>
+                  <div style={divider}/>
+                  <div style={subHdr}>Swim metrics</div>
+                  {(()=>{
+                    const _maxHRNum = safeN(fd.maxHR,'maxHR');
+                    const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+                    const tiles = [];
+                    if (fd.duration && fd.duration !== '—') tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
+                      value: fd.duration, label:'duration' });
+                    if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                    if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
+                      value: String(fd.calories), label:'calories' });
+                    if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
+                      value: te.toFixed(1), label:'aero TE' });
+                    if (tiles.length === 0) return null;
+                    return (
+                      <div style={{display:'flex',gap:6}}>
+                        {tiles.map((t, i) => (
+                          <IconMiniTile key={i} icon={t.icon} color={t.color}
+                            value={t.value} label={t.label}/>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </>}
+
+                {/* Phase 4r.viz.7 — Walk/Hike branch.
+                    Hero: Distance · Pace · Avg HR · Cadence · Elevation
+                    + Hydration (esp. hiking). Vs Goal: Daily steps. */}
+                {false&&fd.isWalk&&(()=>{
+                  const _avgHRNum = safeN(fd.avgHR,'avgHR');
+                  const _cadNum = safeN(fd.avgCadence,'avgCadence');
+                  const tiles = [];
+                  if (fd.distanceMi) tiles.push({ icon:'footprints', color:'#60a5fa',
+                    label:'Distance · mi', value: fd.distanceMi.toFixed(1),
+                    tint:'rgba(96,165,250,0.06)' });
+                  if (fd.avgPacePerMi) tiles.push({ icon:'stopwatch', color:'#4ade80',
+                    label:'Pace · /mi', value: fd.avgPacePerMi,
+                    tint:'rgba(74,222,128,0.06)' });
+                  if (_avgHRNum) tiles.push({ icon:'heartbeat', color:'#f87171',
+                    label:'Avg HR · bpm', value: safeDisp(fd.avgHR,'avgHR'),
+                    tint:'rgba(248,113,113,0.06)' });
+                  if (_cadNum) tiles.push({ icon:'walk', color:'#a78bfa',
+                    label:'Cadence · spm', value: safeDisp(fd.avgCadence,'avgCadence'),
+                    tint:'rgba(167,139,250,0.06)' });
+                  if (fd.totalAscentFt) tiles.push({ icon:'mountain', color:'#fbbf24',
+                    label:'Elev · ft', value: String(fd.totalAscentFt),
+                    tint:'rgba(251,191,36,0.06)' });
+                  if (tiles.length === 0) return null;
+                  return (
+                    <div style={{display:'flex',justifyContent:'space-between',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                      {tiles.map((t, i) => (
+                        <HeroTile key={i} icon={t.icon} color={t.color} label={t.label}
+                          value={t.value} tint={t.tint}/>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {false&&fd.isWalk&&<>
+                  <div style={divider}/>
+                  <div style={subHdr}>Walk metrics</div>
+                  {(()=>{
+                    const _maxHRNum = safeN(fd.maxHR,'maxHR');
+                    const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
+                    const tiles = [];
+                    if (fd.duration && fd.duration !== '—') tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
+                      value: fd.duration, label:'duration' });
+                    if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                    if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
+                      value: String(fd.calories), label:'calories' });
+                    if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
+                      value: te.toFixed(1), label:'aero TE' });
+                    if (tiles.length === 0) return null;
+                    return (
+                      <div style={{display:'flex',gap:6}}>
+                        {tiles.map((t, i) => (
+                          <IconMiniTile key={i} icon={t.icon} color={t.color}
+                            value={t.value} label={t.label}/>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  <HydrationRow fd={fd}/>
+                </>}
               </div>
             ))}
           </>}
@@ -5893,6 +7062,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           {/* Coaching now lives in the Daily Hero rail at the top of the
               page — single source of truth. Per-panel coaching strip
               removed (Phase 4o.daily.8). */}
+
+          {/* Phase 4r.viz.17 — Race-prep banner removed from Fuel tab per
+              user request. Race fueling info lives on the Play race card. */}
 
           {/* ── Nutrition panel — header carries the Cronometer sync button
               and the dynamic Today's Target line, mirroring Activity's
@@ -6754,9 +7926,9 @@ function WebSystemDetail({ system, comment, onClose, data }) {
   const recentSleep = useMemo(() => [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [sleepData]);
   const recentHRV = useMemo(() => [...hrvData].filter(h => h.overnightHRV).sort((a, b) => (b.date || '').localeCompare(a.date || '')), [hrvData]);
   const recentWeight = useMemo(() => [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [weightData]);
-  const ytdRunsLocal = useMemo(() => activities.filter(a => a.date && new Date(a.date) >= yearStart && isRunAct(a)), [activities]);
-  const ytdAll = useMemo(() => activities.filter(a => a.date && new Date(a.date) >= yearStart), [activities]);
-  const wk7 = useMemo(() => activities.filter(a => a.date && new Date(a.date) >= d7), [activities]);
+  const ytdRunsLocal = useMemo(() => activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart && isRunAct(a)), [activities]);
+  const ytdAll = useMemo(() => activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart), [activities]);
+  const wk7 = useMemo(() => activities.filter(a => a.date && parseLocalDate(a.date) >= d7), [activities]);
   const wk7Runs = useMemo(() => wk7.filter(isRunAct), [wk7]);
   const wk7Str = useMemo(() => wk7.filter(isStrengthAct), [wk7]);
 
@@ -7702,7 +8874,7 @@ function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
     setAiLoading(true);setAiStream2('');
     try{
       // Build a compact training context from the same data the tab already reads.
-      const ytdRunsLocal=activities.filter(a=>a.date&&new Date(a.date)>=new Date(new Date().getFullYear(),0,1)&&isRunAct(a));
+      const ytdRunsLocal=activities.filter(a=>a.date&&parseLocalDate(a.date)>=new Date(new Date().getFullYear(),0,1)&&isRunAct(a));
       const ytdMi=ytdRunsLocal.reduce((s,a)=>s+(a.distanceMi||0),0);
       const last7Sleep=sleepData.slice(0,7).filter(s=>s.durationMinutes);
       const last7HRV=hrvData.slice(0,7).filter(h=>h.overnightHRV);
@@ -7889,16 +9061,16 @@ Structure:
   // Worker writes overnightHRV onto sleep rows (Phase 4c); legacy `hrv`
   // collection holds older / CSV-imported readings. Worker wins per date.
   const sevenDays=new Date();sevenDays.setDate(today.getDate()-7);
-  const recentSleep=sleepData.filter(s=>new Date(s.date)>=sevenDays);
+  const recentSleep=sleepData.filter(s=>s.date&&parseLocalDate(s.date)>=sevenDays);
   const _mergedHrv7 = (() => {
     const byDate = new Map();
     for (const h of (hrvData || [])) {
-      if (h?.date && new Date(h.date) >= sevenDays && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
+      if (h?.date && parseLocalDate(h.date) >= sevenDays && h.overnightHRV != null && !isNaN(Number(h.overnightHRV))) {
         byDate.set(h.date, Number(h.overnightHRV));
       }
     }
     for (const s of (sleepData || [])) {
-      if (s?.date && new Date(s.date) >= sevenDays && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
+      if (s?.date && parseLocalDate(s.date) >= sevenDays && s.overnightHRV != null && !isNaN(Number(s.overnightHRV))) {
         byDate.set(s.date, Number(s.overnightHRV));
       }
     }
@@ -7927,8 +9099,8 @@ Structure:
   const avgSleepScore7=recentSleep.filter(s=>s.sleepScore).length?Math.round(recentSleep.filter(s=>s.sleepScore).reduce((s,sl)=>s+sl.sleepScore,0)/recentSleep.filter(s=>s.sleepScore).length):null;
 
   // 30-day recovery averages
-  const hrv30=hrvData.filter(h=>new Date(h.date)>=thirtyDays);
-  const sleep30=sleepData.filter(s=>new Date(s.date)>=thirtyDays);
+  const hrv30=hrvData.filter(h=>h.date&&parseLocalDate(h.date)>=thirtyDays);
+  const sleep30=sleepData.filter(s=>s.date&&parseLocalDate(s.date)>=thirtyDays);
   const hrv30Valid=hrv30.filter(h=>h.overnightHRV);
   const avgHRV30=hrv30Valid.length?Math.round(hrv30Valid.reduce((s,h)=>s+h.overnightHRV,0)/hrv30Valid.length):null;
   const sleep30Dur=sleep30.filter(s=>s.durationMinutes);
@@ -8398,24 +9570,15 @@ Structure:
                 const activityFactors = (todayResult?.factors || []).filter(f => f.domain === 'activity');
                 const rTSSFactor = activityFactors.find(f => /rtss/i.test(f.label || ''));
                 const todayRTSS = (() => {
-                  // Sum session load across today's activities. Runs use
-                  // rTSS (pace + HR), strength sessions fall back to
-                  // hrTSS (HR + duration) so the tile reads a real
-                  // number on lift days too — Phase 4o.edgeiq.1 fix.
+                  // Phase 4r.viz.26 — single HR-anchored methodology. Every
+                  // activity (run, HIIT, strength) computes hrTSS = duration
+                  // × (avgHR/thresholdHR)². Pace dropped entirely.
                   const todayActsAll = (activities || []).filter(a => a.date === today);
                   if (!todayActsAll.length) return null;
                   let total = 0;
                   for (const a of todayActsAll) {
                     try {
-                      if (isRunAct(a)) {
-                        const { rTSS } = computeRTSS({
-                          durationSecs: a.durationSecs,
-                          avgPaceRaw:   a.avgPaceRaw || a.avgPace,
-                          avgHR:        a.avgHR,
-                          ftpPace, maxHR: maxHREdge, thresholdHR: thresholdHREdge,
-                        });
-                        total += rTSS || 0;
-                      } else if (isStrengthAct(a)) {
+                      if (isRunAct(a) || isStrengthAct(a)) {
                         const { hrTSS } = computeHrTSS({
                           durationSecs: a.durationSecs,
                           avgHR:        a.avgHR || a.avgHeartRate,
@@ -8483,9 +9646,17 @@ Structure:
                       <MiniStat label="HRV" value={latestHrv} history={hrvHist} type="hrv"
                         fmt={v => `${v}ms`}
                         sub={latestHrv != null ? (latestHrv >= 40 ? 'recovered' : latestHrv >= 30 ? 'borderline' : 'strained') : 'no data'}/>
-                      <MiniStat label="Sleep" value={sleepHrs} history={sleepHistHrs} type="sleep"
-                        fmt={v => `${v}h`}
-                        sub={sleepScore != null ? `score ${sleepScore}` : 'no data'}/>
+                      {/* Phase 4r.viz.25 — fall back to sleep score when
+                          duration isn't recorded by HC. Was showing "—" with
+                          "score 77" as sub which made the tile look empty. */}
+                      <MiniStat label="Sleep"
+                        value={sleepHrs != null ? sleepHrs : sleepScore}
+                        history={sleepHistHrs} type="sleep"
+                        fmt={v => sleepHrs != null ? `${v}h` : `${v}`}
+                        sub={sleepHrs != null && sleepScore != null ? `score ${sleepScore}`
+                             : sleepHrs != null ? 'hours slept'
+                             : sleepScore != null ? 'sleep score'
+                             : 'no data'}/>
                     </RailColumn>
 
                     <Sep/>
@@ -8671,10 +9842,26 @@ Structure:
         const upcoming=races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=nowD&&d<=cutoff60;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
         const nr=upcoming[0];
         if(!nr)return null;
-        const runs30=ytdRuns.filter(a=>new Date(a.date)>=thirtyDays);
+        const runs30=ytdRuns.filter(a=>a.date&&parseLocalDate(a.date)>=thirtyDays);
         const paces30=runs30.map(a=>{if(!a.avgPaceRaw)return null;const[m,s]=a.avgPaceRaw.split(':').map(Number);return m*60+(s||0);}).filter(Boolean);
         const avgPace30=paces30.length?paces30.reduce((s,v)=>s+v,0)/paces30.length:null;
-        return <RaceFocusCard race={nr} goalPaceSecs={goalPaceSecs} avgPace30={avgPace30} fmtPace={fmtPace} planned={planned} plannedTypeLabel={plannedTypeLabel}/>;
+        // Phase 4r.race.1 — pass profile + observed sweat rate so the
+        // race-fueling plan can size carbs & hydration to the user.
+        // Sweat rate comes from recent recovery signatures (Phase
+        // 4r.adapt.1); falls back to population avg in raceFueling.
+        let _sweatRate = null;
+        try {
+          const summary = summarizeRecentSignatures({
+            activities: activities,
+            weightHistory: storage.get('weight') || [],
+            daysBack: 60,
+          });
+          _sweatRate = summary?.summary?.sweatRate?.trimmed
+            || summary?.summary?.sweatRate?.median
+            || summary?.summary?.sweatRate?.mean
+            || null;
+        } catch {}
+        return <RaceFocusCard race={nr} goalPaceSecs={goalPaceSecs} avgPace30={avgPace30} fmtPace={fmtPace} planned={planned} plannedTypeLabel={plannedTypeLabel} profile={profile} sweatRateLbsPerHr={_sweatRate}/>;
       })()}
 
       {/* AI analysis card */}
@@ -8705,7 +9892,7 @@ Structure:
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── Race helpers (shared by RacesTab + RaceList) ────────────────────────────
 function getMilestones(raceDate){
-  const rd=new Date(raceDate);rd.setHours(0,0,0,0);
+  const rd=parseLocalDate(raceDate);if(!rd)return[];rd.setHours(0,0,0,0);
   const now2=new Date();now2.setHours(0,0,0,0);
   return[
     {weeks:12,label:"Base building complete"},
@@ -8718,7 +9905,7 @@ function getMilestones(raceDate){
   });
 }
 function getTrainingProgress(raceDate){
-  const rd=new Date(raceDate);rd.setHours(0,0,0,0);
+  const rd=parseLocalDate(raceDate);if(!rd)return 0;rd.setHours(0,0,0,0);
   const start=new Date(rd);start.setDate(start.getDate()-112);
   const now2=new Date();now2.setHours(0,0,0,0);
   if(now2<start)return 0;

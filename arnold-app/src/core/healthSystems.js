@@ -14,10 +14,7 @@ import { getEntriesForDate } from './nutrition.js';
 import { storage } from './storage.js';
 import { getAvgWeeklyTrainingHours } from './trainingStress.js';
 import { getGoals } from './goals.js';
-
-// Local date helper — avoids UTC rollover bug with toISOString()
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+import { localDate, ymd } from './time.js';
 
 // ─── Dynamic Optimal Daily Targets ──────────────────────────────────────────
 // Replaces the old static RDA table. Targets auto-calibrate based on:
@@ -913,7 +910,7 @@ export function getSystemWeekly(systemId) {
   const now = new Date();
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now); d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     const nutrients = getDailyNutrients(ds);
     const { pct } = scoreSystem(sys, nutrients, ds);
     days.push({ date: ds, pct, dayLabel: d.toLocaleDateString('en-US', { weekday: 'short' }) });

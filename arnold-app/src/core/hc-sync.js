@@ -53,8 +53,23 @@ function emit(event, payload) {
 
 // ── Date helpers ────────────────────────────────────────────────────────────
 
+// Phase 4r.utc.1 — was toISOString().slice(0,10) which returns UTC date.
+// Evening ET → tomorrow's date → HC sync state mis-stamps, lastSync TTLs
+// fire on the wrong day, and any record reads via this helper shift one
+// day backward. Switch to local-TZ formatting (anchor at noon-safe
+// year/month/day getters).
 function isoDate(d) {
-  return d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+  if (!(d instanceof Date)) {
+    // String path: trim to YYYY-MM-DD if it looks like an ISO/datetime,
+    // otherwise return as-is for caller to handle.
+    const s = String(d);
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : s.slice(0, 10);
+  }
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${da}`;
 }
 
 function daysAgo(n) {

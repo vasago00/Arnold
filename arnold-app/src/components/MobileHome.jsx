@@ -8,7 +8,7 @@ import { Sparkline } from "./Sparkline.jsx";
 // STATUS/statusFromPct removed — readiness now computed by trainingStress.js
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
-import { computeDailyScore, computeRolling7d, computeRolling30d } from "../core/trainingStress.js";
+import { computeDailyScore, computeRolling7d, computeRolling30d, computeHrTSS } from "../core/trainingStress.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isMobility, isHIIT, activityKind, iconTypeFor } from "../core/activityClass.js";
 import { dcy as dcyToday, dcyWeekly, formatDcy, glyphFor, stateFor } from "../core/dcy.js";
@@ -49,10 +49,7 @@ import {
 } from "../core/derive/tileMetrics.js";
 import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
-
-// ─── Local date helper (avoids UTC rollover bug with toISOString) ───────────
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+import { localDate, ymd } from "../core/time.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // useMobileData — SINGLE SOURCE OF TRUTH for the Start screen.
@@ -69,7 +66,7 @@ function useMobileData() {
     const profile = storage.get('profile') || {};
     const now = new Date();
     const today = localDate();
-    const d30Cutoff = localDate((() => { const d = new Date(); d.setDate(d.getDate() - 30); return d; })());
+    const d30Cutoff = ymd((() => { const d = new Date(); d.setDate(d.getDate() - 30); return d; })());
     const yearStart = new Date(now.getFullYear(), 0, 1);
 
     // ── Raw storage reads ──
@@ -101,7 +98,7 @@ function useMobileData() {
 
     // ── 30-day activities ──
     const d30Date = new Date(now - 30 * 86400000);
-    const recent30 = activities.filter(a => a.date && new Date(a.date) >= d30Date);
+    const recent30 = activities.filter(a => a.date && parseLocalDate(a.date) >= d30Date);
     const recent30Runs = recent30.filter(isRun);
     const recent30Str  = recent30.filter(isStrength);
     const weeks43 = 30 / 7;
@@ -109,7 +106,7 @@ function useMobileData() {
     const avg30StrSess = (recent30Str.length / weeks43).toFixed(1);
 
     // ── Pace (YTD for current value, 30d for avg) ──
-    const ytdRuns = activities.filter(a => a.date && new Date(a.date) >= yearStart && isRun(a));
+    const ytdRuns = activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart && isRun(a));
     const parsePace = (raw) => { if (!raw) return null; const [m, s] = raw.split(':').map(Number); return m * 60 + (s || 0); };
     const fmtPace = (secs) => secs ? `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, '0')}` : '—';
     const allPaces = ytdRuns.map(a => parsePace(a.avgPaceRaw)).filter(Boolean);
@@ -117,7 +114,7 @@ function useMobileData() {
     const goalPaceSecs = (() => { const p = profile?.targetRacePace || '9:30'; const [m, s] = p.split(':').map(Number); return m * 60 + (s || 0); })();
 
     // ── YTD totals (for annual goals) ──
-    const ytdActs = activities.filter(a => a.date && new Date(a.date) >= yearStart);
+    const ytdActs = activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart);
     const totalMi = ytdRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
     const totalSessions = ytdActs.length;
 
@@ -125,7 +122,7 @@ function useMobileData() {
     const weeklyStats = Array.from({ length: 8 }, (_, i) => {
       const ws = new Date(now); ws.setDate(now.getDate() - (7 * (7 - i) + now.getDay())); ws.setHours(0, 0, 0, 0);
       const we = new Date(ws); we.setDate(ws.getDate() + 7);
-      const wAll = activities.filter(a => { const d = new Date(a.date); return d >= ws && d < we; });
+      const wAll = activities.filter(a => { const d = a.date && parseLocalDate(a.date); return d && d >= ws && d < we; });
       const wRuns = wAll.filter(isRun);
       return { mi: wRuns.reduce((s, a) => s + (a.distanceMi || 0), 0), hrs: wAll.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600, sessions: wAll.length };
     });
@@ -139,7 +136,7 @@ function useMobileData() {
     const latestSleepScore = (() => {
       const top = sortedSleep[0];
       if (!top) return null;
-      const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return localDate(d); })();
+      const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return ymd(d); })();
       const isRecent = top.date === today || top.date === yesterday;
       if (!isRecent) return null; // most recent row is too old to be "last night"
       if (top.sleepScore == null) return null; // pending
@@ -249,14 +246,14 @@ function useMobileData() {
     const recentNut = [];
     for (let i = 0; i < 30; i++) {
       const d = new Date(); d.setDate(now.getDate() - i);
-      const ds = localDate(d);
+      const ds = ymd(d);
       const t = nutDailyTotals(ds);
       if (t.calories > 0 || t.protein > 0) recentNut.push({ date: ds, ...t });
     }
     const avg30Protein = recentNut.length ? (recentNut.reduce((s, n) => s + (n.protein || 0), 0) / recentNut.length).toFixed(0) : '—';
 
     // ── Next race ──
-    const nextRace = (() => { try { const races = JSON.parse(localStorage.getItem('arnold:races') || '[]'); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => r.date && new Date(r.date) >= n2).sort((a, b) => new Date(a.date) - new Date(b.date))[0] || null; } catch { return null; } })();
+    const nextRace = (() => { try { const races = JSON.parse(localStorage.getItem('arnold:races') || '[]'); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => { const d = parseLocalDate(r.date); return d && d >= n2; }).sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null; } catch { return null; } })();
 
     return {
       G, profile, today, d30Cutoff,
@@ -303,17 +300,24 @@ const T3       = 'rgba(255,255,255,0.65)';
 const T4       = 'rgba(255,255,255,0.45)';
 
 // ─── NAV_ITEMS: exported for Arnold.jsx ─────────────────────────────────────
+// Phase 4r.nav.2 — Calendar promoted to primary nav, Labs demoted to
+// More (accessible via the overflow menu). Calendar earns the slot
+// because the underlying use case (race scheduling, glance-at-week,
+// next-up review) is higher-frequency than lab-panel reference.
 export const NAV_ITEMS = [
-  { id: 'start',  label: 'Start' },
-  { id: 'edgeiq', label: 'EdgeIQ', tab: 'weekly' },
-  { id: 'play',   label: 'Play',   tab: 'activity' },
-  { id: 'fuel',   label: 'Fuel',   tab: 'nutrition_mobile' },
-  { id: 'core',   label: 'Core',   tab: 'clinical' },
-  { id: 'labs',   label: 'Labs',   tab: 'labs' },
-  { id: 'more',   label: 'More' },
+  { id: 'start',    label: 'Start' },
+  { id: 'edgeiq',   label: 'EdgeIQ',   tab: 'weekly' },
+  { id: 'play',     label: 'Play',     tab: 'activity' },
+  { id: 'fuel',     label: 'Fuel',     tab: 'nutrition_mobile' },
+  // Phase 4r.calendar.24 — Calendar moved before Core (per user
+  // request). The nav now reads: training-focused Start/EdgeIQ/Play,
+  // then Fuel/Calendar for planning, then Core for body data.
+  { id: 'calendar', label: 'Calendar', tab: 'races' },
+  { id: 'core',     label: 'Core',     tab: 'clinical' },
+  { id: 'more',     label: 'More' },
 ];
 
-const SWIPE_ORDER = ['start', 'edgeiq', 'play', 'fuel', 'core', 'labs'];
+const SWIPE_ORDER = ['start', 'edgeiq', 'play', 'fuel', 'calendar', 'core'];
 
 // ─── Swipe navigation hook ──────────────────────────────────────────────────
 // Tracks the touchstart coordinates in useRef so they survive React
@@ -422,6 +426,23 @@ const Icon = {
       <line x1="22" y1="10" x2="22" y2="14" strokeWidth="3" />
       {/* Center joint ring */}
       <circle cx="12" cy="12" r="3" strokeWidth="1.5" fill={color} fillOpacity="0.1" />
+    </svg>
+  ),
+  // Phase 4r.nav.2 — Calendar (month grid + binding ring) nav glyph.
+  // Drawn in the same outline-stroke style as the other nav icons
+  // so the bottom bar reads consistently.
+  Calendar: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {/* Binder rings */}
+      <line x1="8" y1="2" x2="8" y2="5" />
+      <line x1="16" y1="2" x2="16" y2="5" />
+      {/* Outer frame */}
+      <rect x="3" y="4" width="18" height="17" rx="2" />
+      {/* Header separator under the rings */}
+      <line x1="3" y1="9" x2="21" y2="9" />
+      {/* Two dots marking days in the grid */}
+      <circle cx="9" cy="14" r="0.9" fill={color} />
+      <circle cx="15" cy="17" r="0.9" fill={color} />
     </svg>
   ),
   // Three dots — More
@@ -537,13 +558,15 @@ const Icon = {
 
 // Nav icon map — gamified
 const NAV_ICONS = {
-  start:  (c) => <Icon.PspX color={c} />,
-  edgeiq: (c) => <Icon.GemSpark color={c} />,
-  play:   (c) => <Icon.Bolt color={c} />,
-  fuel:   (c) => <Icon.GasPump color={c} />,
-  core:   (c) => <Icon.Pulse color={c} />,
-  labs:   (c) => <Icon.Pipe color={c} />,
-  more:   (c) => <Icon.Dots color={c} />,
+  start:    (c) => <Icon.PspX color={c} />,
+  edgeiq:   (c) => <Icon.GemSpark color={c} />,
+  play:     (c) => <Icon.Bolt color={c} />,
+  fuel:     (c) => <Icon.GasPump color={c} />,
+  core:     (c) => <Icon.Pulse color={c} />,
+  // Phase 4r.nav.2 — Calendar primary, Labs in overflow only.
+  calendar: (c) => <Icon.Calendar color={c} />,
+  labs:     (c) => <Icon.Pipe color={c} />,
+  more:     (c) => <Icon.Dots color={c} />,
 };
 
 // Phase 4q.header.1 — tab id → nav id mapping. Arnold.jsx uses internal
@@ -555,10 +578,13 @@ export const TAB_TO_NAV_ID = {
   activity:         'play',
   nutrition_mobile: 'fuel',
   clinical:         'core',
-  labs:             'labs',
+  // Phase 4r.nav.2 — Calendar promoted to primary nav, Labs demoted
+  // to overflow. 'races' is the internal tab id (legacy) for the
+  // Calendar tab content; the nav label says Calendar.
+  races:            'calendar',
+  labs:             'more',
   // Drill-downs without their own bottom-nav slot — fall back to "more".
   daily:            'more',
-  races:            'more',
   goals:            'more',
   supplements:      'more',
   settings:         'more',
@@ -573,7 +599,7 @@ export const TAB_LABEL = {
   clinical:         'Core',
   labs:             'Labs',
   daily:            'Daily Log',
-  races:            'Races',
+  races:            'Calendar',
   goals:            'Goals',
   supplements:      'Stack',
   settings:         'Settings',
@@ -583,13 +609,16 @@ export const TAB_LABEL = {
 // header can pass `size` through (NAV_ICONS only accepts color since
 // the bottom nav renders at the default 19 px).
 const NAV_TAB_ICON_CMP = {
-  start:  Icon.PspX,
-  edgeiq: Icon.GemSpark,
-  play:   Icon.Bolt,
-  fuel:   Icon.GasPump,
-  core:   Icon.Pulse,
-  labs:   Icon.Pipe,
-  more:   Icon.Dots,
+  start:    Icon.PspX,
+  edgeiq:   Icon.GemSpark,
+  play:     Icon.Bolt,
+  fuel:     Icon.GasPump,
+  core:     Icon.Pulse,
+  // Phase 4r.nav.2 — Calendar replaces Labs in the primary nav.
+  // Labs still exists in the overflow menu and uses Icon.Pipe there.
+  calendar: Icon.Calendar,
+  labs:     Icon.Pipe,
+  more:     Icon.Dots,
 };
 
 // Render the bottom-nav icon for a given tab id, tinted in the active
@@ -658,7 +687,7 @@ function Header({ greeting, profileName }) {
             background: 'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',
             border: '1px solid rgba(91,155,213,0.12)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 9, color: C.blue, fontWeight: 800,
+            fontSize: 11, color: C.blue, fontWeight: 800,
           }}>A</div>
           <span style={{ fontSize: 10, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
         </div>
@@ -798,7 +827,10 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
   const moonOffset = moonCirc * (1 - Math.min(Math.max(ms / 100, 0), 1));
   const moonColor = ms >= 70 ? C.green : ms >= 45 ? C.amber : ms > 0 ? C.red : T3;
 
-  const hasRace = raceDaysLeft != null && raceDaysLeft >= 0 && raceDaysLeft <= 120;
+  // Phase 4r.race.2 — race badge on Start surfaces only within the
+  // final 7-day window. The rest of the time we keep the Start clean;
+  // race details still live on EdgeIQ / Play.
+  const hasRace = raceDaysLeft != null && raceDaysLeft >= 0 && raceDaysLeft <= 7;
   const raceDateStr = raceDate ? new Date(raceDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
   const shortName = shortRaceName(raceName);
 
@@ -829,7 +861,7 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
           </svg>
           <div style={{ position: 'absolute', top: 2, left: 2, width: 62, height: 62, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <span style={{ fontSize: 18, fontWeight: 800, lineHeight: 1, color: T1 }}>{scoreLabel ?? score}</span>
-            <span style={{ position: 'absolute', bottom: 10, fontSize: 8, fontWeight: 700, color: statusColor, letterSpacing: '0.02em' }}>{scoreGlyph || 'DCY'}</span>
+            <span style={{ position: 'absolute', bottom: 10, fontSize: 10, fontWeight: 700, color: statusColor, letterSpacing: '0.02em' }}>{scoreGlyph || 'DCY'}</span>
           </div>
 
           {/* Moon ring (30-day) — small satellite, top-left (10 o'clock) of main ring */}
@@ -844,18 +876,18 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
                 strokeDasharray={moonCirc} strokeDashoffset={moonOffset} strokeLinecap="round"
                 style={{ transition: 'stroke-dashoffset 0.8s ease' }} />}
             </svg>
-            <span style={{ fontSize: 9, fontWeight: 800, color: T1, zIndex: 1 }}>{moonScoreLabel ?? ms}</span>
+            <span style={{ fontSize: 11, fontWeight: 800, color: T1, zIndex: 1 }}>{moonScoreLabel ?? ms}</span>
           </div>
         </div>
 
         {/* Status + Pills */}
         <div style={{ flex: 1, alignSelf: 'center' }}>
-          <div style={{ fontSize: 9, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>Daily Score{scoreSuffix || ''}</div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>Daily Score{scoreSuffix || ''}</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: statusColor }}>{statusWord}</div>
           <div style={{ display: 'flex', gap: 3, marginTop: 5, flexWrap: 'wrap' }}>
             {factors.map((f, i) => (
               <span key={i} style={{
-                fontSize: 8, fontWeight: 600, padding: '2px 7px', borderRadius: 6,
+                fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6,
                 display: 'inline-flex', alignItems: 'center', gap: 3,
                 background: f.type === 'warn' ? 'rgba(207,107,107,0.1)' :
                             f.type === 'ok'   ? 'rgba(91,191,138,0.08)' : 'rgba(255,255,255,0.04)',
@@ -877,10 +909,10 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
             marginTop: -2,
           }}>
             <span style={{ fontSize: 16, fontWeight: 900, color: C.orange, lineHeight: 1 }}>
-              {raceDaysLeft}<span style={{ fontSize: 8, fontWeight: 700 }}>d</span>
+              {raceDaysLeft}<span style={{ fontSize: 10, fontWeight: 700 }}>d</span>
             </span>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 8, fontWeight: 700, color: '#e6e8ec', lineHeight: 1 }}>{shortName}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#e6e8ec', lineHeight: 1 }}>{shortName}</div>
               <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{raceDateStr}</div>
             </div>
           </div>
@@ -894,9 +926,9 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
             flex: 1, textAlign: 'center', position: 'relative',
             borderLeft: i > 0 ? `1px solid ${BORDER}` : 'none',
           }}>
-            <div style={{ fontSize: 8, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{s.label}</div>
+            <div style={{ fontSize: 10, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{s.label}</div>
             <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
-              {s.value} <span style={{ fontSize: 8, color: T3 }}>{s.unit}</span>
+              {s.value} <span style={{ fontSize: 10, color: T3 }}>{s.unit}</span>
             </div>
           </div>
         ))}
@@ -966,7 +998,7 @@ export function DcyDetails({ dcyDaily }) {
               <span
                 title={`Today is in progress. N reflects what you've logged so far — it'll rise as you eat. Projected end-of-day total shown below.`}
                 style={{
-                  marginLeft: 8, fontSize: 9, padding: '1px 6px', borderRadius: 6,
+                  marginLeft: 8, fontSize: 11, padding: '1px 6px', borderRadius: 6,
                   background: 'rgba(107,171,223,0.15)', color: C.blue,
                   letterSpacing: '0.04em', fontWeight: 600, textTransform: 'none',
                 }}
@@ -1112,7 +1144,7 @@ const CAT_ICONS = {
 function CategoryLabel({ label, color }) {
   return (
     <div style={{
-      fontSize: 9, fontWeight: 700, color: T2, textTransform: 'uppercase',
+      fontSize: 11, fontWeight: 700, color: T2, textTransform: 'uppercase',
       letterSpacing: '0.12em', padding: '3px 0 2px',
       display: 'flex', alignItems: 'center', gap: 5,
     }}>
@@ -1164,7 +1196,7 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
       ) : null}
 
       {/* Label */}
-      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
 
       {/* Body: value left, gauge right */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -1172,7 +1204,7 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ whiteSpace: 'nowrap' }}>
             <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: T1 }}>{todayVal}</span>
-            {todayUnit ? <span style={{ fontSize: 9, color: T3, marginLeft: 2 }}>{todayUnit}</span> : null}
+            {todayUnit ? <span style={{ fontSize: 11, color: T3, marginLeft: 2 }}>{todayUnit}</span> : null}
           </div>
           <div style={{ fontSize: 10, fontWeight: 600, color: trendColor || T3, marginTop: 3, height: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
             <span>{trendText || '\u00A0'}</span>
@@ -1188,7 +1220,7 @@ function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, 
         <div style={{ flexShrink: 0, width: 44, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <MiniArcGauge pct={gaugePct} color={color} />
           <div style={{ fontSize: 11, fontWeight: 700, color, lineHeight: 1, marginTop: 0 }}>{avg30}</div>
-          <div style={{ fontSize: 9, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: 11, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>
             {avg30Label || '30d avg'}
           </div>
         </div>
@@ -1212,7 +1244,7 @@ function ThisWeekCard({ headline, miles, sessions, runs, time, weeklyMiPct, week
           { lbl: 'Time', v: time },
         ].map((col, i) => (
           <div key={i} style={{ flex: 1 }}>
-            <div style={{ fontSize: 8, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{col.lbl}</div>
+            <div style={{ fontSize: 10, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{col.lbl}</div>
             <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.1 }}>{col.v}</div>
           </div>
         ))}
@@ -1220,7 +1252,7 @@ function ThisWeekCard({ headline, miles, sessions, runs, time, weeklyMiPct, week
       <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
         <div style={{ width: `${Math.min(weeklyMiPct * 100, 100)}%`, height: '100%', borderRadius: 2, background: C.blue, opacity: 0.6, transition: 'width 0.6s' }} />
       </div>
-      <div style={{ fontSize: 8, color: T4, marginTop: 3 }}>{miles} / {weeklyTarget} mi</div>
+      <div style={{ fontSize: 10, color: T4, marginTop: 3 }}>{miles} / {weeklyTarget} mi</div>
     </div>
   );
 }
@@ -1262,7 +1294,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
       <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(212,139,78,0.15), transparent)` }} />
 
       {/* Year label */}
-      <div style={{ fontSize: 8, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>{now.getFullYear()} Timeline</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>{now.getFullYear()} Timeline</div>
 
       {/* Month markers */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2, padding: '0 1px' }}>
@@ -1317,7 +1349,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
             <span style={{ fontSize: 7, fontWeight: 600, color: C.blue, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Run Miles</span>
-            <span style={{ fontSize: 9, fontWeight: 700, color: T2 }}>{runMiActual} <span style={{ fontSize: 7, color: T4 }}>/ {runMiGoal}</span></span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: T2 }}>{runMiActual} <span style={{ fontSize: 7, color: T4 }}>/ {runMiGoal}</span></span>
           </div>
           <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
             <div style={{ width: `${runPct * 100}%`, height: '100%', borderRadius: 2, background: C.blue, opacity: 0.7 }} />
@@ -1327,7 +1359,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
             <span style={{ fontSize: 7, fontWeight: 600, color: C.purple, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Workouts</span>
-            <span style={{ fontSize: 9, fontWeight: 700, color: T2 }}>{workoutsActual} <span style={{ fontSize: 7, color: T4 }}>/ {workoutsGoal}</span></span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: T2 }}>{workoutsActual} <span style={{ fontSize: 7, color: T4 }}>/ {workoutsGoal}</span></span>
           </div>
           <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
             <div style={{ width: `${wkPct * 100}%`, height: '100%', borderRadius: 2, background: C.purple, opacity: 0.7 }} />
@@ -1354,16 +1386,16 @@ function CoreSummary({ hrv, rhr, weight, bodyFat, rmr, vo2max, onTap }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <Icon.Pulse color={C.green} size={12} />
-          <span style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Body · Recovery · Vitals</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Body · Recovery · Vitals</span>
         </div>
         <span style={{ fontSize: 10, color: T3 }}>→</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4, rowGap: 10 }}>
         {items.map((it, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 8, color: it.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{it.label}</div>
+            <div style={{ fontSize: 10, color: it.color, fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{it.label}</div>
             <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1 }}>{it.value}</div>
-            <div style={{ fontSize: 8, color: T3, marginTop: 1 }}>{it.unit}</div>
+            <div style={{ fontSize: 10, color: T3, marginTop: 1 }}>{it.unit}</div>
           </div>
         ))}
       </div>
@@ -1406,7 +1438,7 @@ function LabsSummary({ labSnapshots, onTap }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <Icon.Flask color={C.purple} size={12} />
-          <span style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Labs{dateStr ? ` · ${dateStr}` : ''}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Labs{dateStr ? ` · ${dateStr}` : ''}</span>
         </div>
         <span style={{ fontSize: 10, color: T3 }}>→</span>
       </div>
@@ -1502,9 +1534,9 @@ function TodaysPlan({ items, doneItems = [], onTap }) {
     <div style={card}>
       <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(155,142,196,0.15), transparent)` }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <span style={{ fontSize: 9, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{date}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{date}</span>
         <span style={{
-          fontSize: 8, fontWeight: 600, padding: '3px 8px', borderRadius: 6,
+          fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 6,
           background: completedCount > 0 ? 'rgba(74,222,128,0.10)' : 'rgba(155,142,196,0.08)',
           color: completedCount > 0 ? '#4ade80' : C.purple,
           textTransform: 'uppercase', letterSpacing: '0.04em',
@@ -1533,7 +1565,7 @@ function TodaysPlan({ items, doneItems = [], onTap }) {
                 )}
                 <span>{item.title}</span>
                 {item.unplanned && (
-                  <span style={{ fontSize: 9, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>· unplanned</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: T4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>· unplanned</span>
                 )}
               </div>
               <div style={{ fontSize: 10, color: T3, marginTop: 1 }}>
@@ -1771,7 +1803,7 @@ function MobileTodaysTarget() {
       marginBottom: 8,
       display: 'flex', flexDirection: 'column', gap: 3,
     }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
         Today's Target {dyn.isTrainingDay && <span style={{ color: '#e0b45e' }}>· training day</span>}
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
@@ -1848,7 +1880,7 @@ function CoachingHeroCard() {
       }}>{iconFor(top.pillar)}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 1 }}>
-          <span style={{ fontSize: 8, fontWeight: 700, color: T3, letterSpacing: '0.07em' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: T3, letterSpacing: '0.07em' }}>
             FOCUS · {pillarLabelFor(top.pillar)}
           </span>
         </div>
@@ -1896,7 +1928,7 @@ function MobileCoachingStrip() {
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', lineHeight: 1.4 }}>{p.detail}</div>
               </div>
               {p.action?.label && (
-                <div style={{ fontSize: 9, fontWeight: 700, color: c, opacity: 0.85, whiteSpace: 'nowrap', alignSelf: 'center', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: c, opacity: 0.85, whiteSpace: 'nowrap', alignSelf: 'center', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   {p.action.label}
                 </div>
               )}
@@ -2681,15 +2713,15 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
               <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.blue, lineHeight: 1 }}>{todayMovement.steps.toLocaleString()}</div>
-                <div style={{ fontSize: 9, color: T4, marginTop: 4 }}>steps</div>
+                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>steps</div>
               </div>
               <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.amber, lineHeight: 1 }}>{Math.round(todayMovement.active)}</div>
-                <div style={{ fontSize: 9, color: T4, marginTop: 4 }}>active kcal</div>
+                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>active kcal</div>
               </div>
               <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.green, lineHeight: 1 }}>{Math.round(todayMovement.total)}</div>
-                <div style={{ fontSize: 9, color: T4, marginTop: 4 }}>total kcal</div>
+                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>total kcal</div>
               </div>
             </div>
           )
@@ -2846,7 +2878,7 @@ function MobileSystemTile({ sys, isActive, onTap }) {
             ? <img src={pngSrc} alt={sys.name} width={36} height={36} style={{ display: 'block' }} />
             : svgIcon}
         </div>
-        <div style={{ fontSize: 9, fontWeight: 700, color: T2, lineHeight: 1.15, marginBottom: 3, minHeight: 20 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: T2, lineHeight: 1.15, marginBottom: 3, minHeight: 20 }}>
           {sys.name.replace(' & ', '/')}
         </div>
         <div style={{ fontSize: 15, fontWeight: 800, color: statusColor }}>{sys.pct}%</div>
@@ -2910,9 +2942,9 @@ function SystemDetailPanel({ systemId, data, comment }) {
   const recentSleep = [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const recentHRV = [...hrvData].filter(h => h.overnightHRV).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const recentWeight = [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const ytdRuns = activities.filter(a => a.date && new Date(a.date) >= yearStart && isRun(a));
-  const ytdAll = activities.filter(a => a.date && new Date(a.date) >= yearStart);
-  const wk7 = activities.filter(a => a.date && new Date(a.date) >= d7);
+  const ytdRuns = activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart && isRun(a));
+  const ytdAll = activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart);
+  const wk7 = activities.filter(a => a.date && parseLocalDate(a.date) >= d7);
   const wk7Runs = wk7.filter(isRun);
   const wk7Str  = wk7.filter(isStrength);
 
@@ -2972,11 +3004,11 @@ function SystemDetailPanel({ systemId, data, comment }) {
         }}>{icon}</div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: T1 }}>{system.name}</div>
-          <div style={{ fontSize: 9, color: T3, marginTop: 1 }}>{comment || 'Tap tile again to close'}</div>
+          <div style={{ fontSize: 11, color: T3, marginTop: 1 }}>{comment || 'Tap tile again to close'}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: statusColor, lineHeight: 1 }}>{detail.system.pct || 0}%</div>
-          <div style={{ fontSize: 8, color: T3, marginTop: 2 }}>today</div>
+          <div style={{ fontSize: 10, color: T3, marginTop: 2 }}>today</div>
         </div>
       </div>
 
@@ -2991,7 +3023,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
       {detailTab === 'daily' && (
         <div>
           {/* Nutrient breakdown */}
-          <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Nutrients</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Nutrients</div>
           {nutrients.map((n, i) => (
             <div key={i} style={{ marginBottom: 6 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T2, marginBottom: 2 }}>
@@ -3007,15 +3039,15 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Training signals */}
           {signals.training.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Training</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Training</div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
                 {signals.training.map((sig, i) => {
                   const r = resolveSignal(sig, 'daily');
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3026,15 +3058,15 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Body signals */}
           {signals.body.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body</div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.body.length, 3)}, 1fr)`, gap: 6 }}>
                 {signals.body.map((sig, i) => {
                   const r = resolveSignal(sig, 'daily');
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3045,14 +3077,14 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Blood markers */}
           {signals.blood.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Blood</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Blood</div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 3)}, 1fr)`, gap: 6 }}>
                 {signals.blood.map((sig, i) => {
                   const r = resolveBlood(sig);
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3066,13 +3098,13 @@ function SystemDetailPanel({ systemId, data, comment }) {
       {detailTab === 'weekly' && (
         <div>
           {/* 7-day sparkline bar chart */}
-          <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>7-Day Score</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>7-Day Score</div>
           <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
             {weekly.map((d, i) => {
               const barH = weeklyMax > 0 ? Math.max(4, Math.round((d.pct / weeklyMax) * 70)) : 4;
               return (
                 <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <div style={{ fontSize: 9, color: barColor(d.pct), fontWeight: 700, marginBottom: 3 }}>{d.pct}</div>
+                  <div style={{ fontSize: 11, color: barColor(d.pct), fontWeight: 700, marginBottom: 3 }}>{d.pct}</div>
                   <div style={{ width: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: 70 }}>
                     <div style={{
                       width: '100%', borderRadius: 4,
@@ -3081,7 +3113,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
                       transition: 'height 0.4s ease',
                     }} />
                   </div>
-                  <div style={{ fontSize: 8, color: T4, marginTop: 3 }}>{d.dayLabel}</div>
+                  <div style={{ fontSize: 10, color: T4, marginTop: 3 }}>{d.dayLabel}</div>
                 </div>
               );
             })}
@@ -3094,15 +3126,15 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Weekly training signals */}
           {signals.training.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Weekly Training</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Weekly Training</div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
                 {signals.training.map((sig, i) => {
                   const r = resolveSignal(sig, 'weekly');
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3111,7 +3143,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
           )}
 
           {/* Nutrient averages hint */}
-          <div style={{ fontSize: 9, color: T4, marginTop: 10, textAlign: 'center', fontStyle: 'italic' }}>
+          <div style={{ fontSize: 11, color: T4, marginTop: 10, textAlign: 'center', fontStyle: 'italic' }}>
             Nutrient scores reflect today's intake — log consistently for accurate weekly trends
           </div>
         </div>
@@ -3123,15 +3155,15 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Annual training signals */}
           {signals.training.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>YTD Training</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>YTD Training</div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
                 {signals.training.map((sig, i) => {
                   const r = resolveSignal(sig, 'annual');
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3142,15 +3174,15 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Body — current snapshot */}
           {signals.body.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body (Current)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body (Current)</div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.body.length, 3)}, 1fr)`, gap: 6 }}>
                 {signals.body.map((sig, i) => {
                   const r = resolveSignal(sig, 'daily');
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 8, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3161,7 +3193,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
           {/* Blood markers — latest panel */}
           {signals.blood.length > 0 && (
             <>
-              <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>
                 Blood (Latest Panel{labSnaps[0]?.date ? ` · ${labSnaps[0].date}` : ''})
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 3)}, 1fr)`, gap: 6 }}>
@@ -3170,7 +3202,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
                   return (
                     <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                       <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
                     </div>
                   );
                 })}
@@ -3179,7 +3211,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
           )}
 
           {/* Top nutrients for this system */}
-          <div style={{ fontSize: 9, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Key Nutrients (Today)</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Key Nutrients (Today)</div>
           {nutrients.slice(0, 5).map((n, i) => (
             <div key={i} style={{ marginBottom: 6 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T2, marginBottom: 2 }}>
@@ -3219,45 +3251,129 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
   const hrvData = storage.get('hrv') || [];
   const sleepData = cleanSleepForAveraging(storage.get('sleep') || []);
   const cronometer = storage.get('cronometer') || [];
+  // Phase 4r.cockpit.1 — weight data for the new Weight tile (was missing
+  // from the EdgeIQ scope until now; the Signal Cockpit rewrite needs it).
+  const weightData = storage.get('weight') || [];
+  const recentWeight = [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   const now = new Date();
   const yearStart = new Date(now.getFullYear(), 0, 1);
-  const ytdRuns = activities.filter(a => a.date && new Date(a.date) >= yearStart && isRun(a));
+  const ytdRuns = activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart && isRun(a));
   const totalMi = ytdRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
-  const totalSessions = activities.filter(a => a.date && new Date(a.date) >= yearStart).length;
+  const totalSessions = activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart).length;
 
-  // 8-week stats
-  const weeklyStats = Array.from({ length: 8 }, (_, i) => {
-    const wStart = new Date(now); wStart.setDate(now.getDate() - (7 * (7 - i) + now.getDay())); wStart.setHours(0, 0, 0, 0);
-    const wEnd = new Date(wStart); wEnd.setDate(wStart.getDate() + 7);
-    const wAll = activities.filter(a => { const d = new Date(a.date); return d >= wStart && d < wEnd; });
-    const wRuns = wAll.filter(isRun);
-    const mi = wRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
-    const hrs = wAll.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
-    return { mi, hrs, sessions: wAll.length };
-  });
-  const avgWeeklyMi = weeklyStats.reduce((s, w) => s + w.mi, 0) / 8;
-  const avgWeeklyHrs = weeklyStats.reduce((s, w) => s + w.hrs, 0) / 8;
+  // ── Signal Cockpit: 7-day rolling window, uniform across all tiles ───────
+  // Phase 4r.cockpit.1 — every tile reads the last 7 days, summed or avg'd
+  // depending on metric type. Sub-label "7d avg" or "7d Δ" tells the user
+  // the window. Tiles with fewer than 7 days of data show their actual
+  // window (e.g., "4d avg") instead of looking complete.
+  const d7cut = new Date(); d7cut.setDate(d7cut.getDate() - 7); d7cut.setHours(0,0,0,0);
 
-  // Recent biometrics
-  const recentHRV = [...hrvData].filter(h => h.overnightHRV).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const latestHRV = recentHRV[0]?.overnightHRV || null;
-  const recentSleep = [...sleepData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const latestSleepScore = recentSleep.find(s => s.sleepScore)?.sleepScore || null;
-  const latestRHR = recentSleep.find(s => s.restingHR)?.restingHR || null;
+  // Volume: sum of last 7 days
+  const last7Activities = activities.filter(a => a.date && new Date(a.date + 'T12:00:00') >= d7cut);
+  const last7Runs = last7Activities.filter(isRun);
+  const wk7Mi  = last7Runs.reduce((s, a) => s + (a.distanceMi || 0), 0);
+  const wk7Hrs = last7Activities.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
 
-  // Nutrition
-  const d30 = new Date(); d30.setDate(d30.getDate() - 30);
-  const recentNut = cronometer.filter(c => c.date >= localDate(d30) && c.calories);
-  const avgProtein = recentNut.length ? Math.round(recentNut.reduce((s, c) => s + (parseFloat(c.protein) || 0), 0) / recentNut.length) : null;
+  // Recovery biometrics: 7-day avg (filter null, take mean)
+  const avgOf = (arr, field) => {
+    const vals = arr.filter(r => r && r.date && new Date(r.date + 'T12:00:00') >= d7cut)
+      .map(r => parseFloat(r[field])).filter(v => Number.isFinite(v) && v > 0);
+    return vals.length ? { v: vals.reduce((a,b)=>a+b,0) / vals.length, n: vals.length } : { v: null, n: 0 };
+  };
+  const hrv7   = avgOf(hrvData, 'overnightHRV');
+  const hrvSleep = avgOf(sleepData, 'overnightHRV');
+  // Prefer sleepData.overnightHRV if it has more samples (matches web EdgeIQ).
+  const hrvAvg = hrvSleep.n >= hrv7.n ? hrvSleep : hrv7;
+  const rhr7   = avgOf(sleepData, 'restingHR');
+  const sleep7 = avgOf(sleepData, 'sleepScore');
+
+  // Nutrition: 7-day avg protein. Use nutDailyTotals so we pull from BOTH
+  // cronometer (CSV imports) AND nutritionLog (manual logging in Fuel tab) —
+  // same source as the Start screen's Protein tile. Previously read
+  // cronometer directly which missed all manually-logged days.
+  const protein7 = (() => {
+    const vals = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const ds = ymd(d);
+      try {
+        const t = nutDailyTotals(ds);
+        if (t && t.protein > 0) vals.push(t.protein);
+      } catch {}
+    }
+    return vals.length
+      ? { v: vals.reduce((a,b)=>a+b,0) / vals.length, n: vals.length }
+      : { v: null, n: 0 };
+  })();
+
+  // rTSS: 7-day average daily load — sum hrTSS across each day's activities,
+  // then average. Anchored to HR (Phase 4r.viz.26).
+  const _profile = storage.get('profile') || {};
+  const _maxHR = parseFloat(_profile?.maxHR) || 190;
+  const _thresholdHR = parseFloat(_profile?.thresholdHR) || null;
+  const rtss7 = (() => {
+    const dailyLoads = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const ds = ymd(d);
+      const acts = activities.filter(a => a.date === ds);
+      let total = 0;
+      for (const a of acts) {
+        try {
+          const { hrTSS } = computeHrTSS({
+            durationSecs: a.durationSecs,
+            avgHR: a.avgHR || a.avgHeartRate,
+            maxHR: _maxHR, thresholdHR: _thresholdHR,
+          });
+          total += hrTSS || 0;
+        } catch {}
+      }
+      if (total > 0) dailyLoads.push(total);
+    }
+    return dailyLoads.length
+      ? { v: dailyLoads.reduce((a,b)=>a+b,0) / dailyLoads.length, n: dailyLoads.length }
+      : { v: null, n: 0 };
+  })();
+
+  // Weight: current + 7-day delta (trend matters more than absolute)
+  const wk7Weight = weightData
+    .filter(w => w.date && new Date(w.date + 'T12:00:00') >= d7cut && w.weightLbs)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const latestWeight = recentWeight.find(w => w.weightLbs)?.weightLbs || null;
+  const weightDelta = wk7Weight.length >= 2
+    ? +(wk7Weight[wk7Weight.length - 1].weightLbs - wk7Weight[0].weightLbs).toFixed(1)
+    : null;
+
+  // Format helpers — sub-label honours actual sample count for tiles with
+  // fewer than a full week of data.
+  const subDays = (n) => n >= 7 ? '7d avg' : n > 0 ? `${n}d avg` : 'no data';
+  const fmt1 = (v) => v != null ? (Math.round(v * 10) / 10).toFixed(1) : '—';
+  const fmt0 = (v) => v != null ? Math.round(v).toString() : '—';
 
   const cockpitItems = [
-    { label: 'Avg Miles/wk', value: avgWeeklyMi.toFixed(1), unit: 'mi', goal: G.weeklyRunDistanceTarget, color: C.blue },
-    { label: 'Avg Hours/wk', value: avgWeeklyHrs.toFixed(1), unit: 'hrs', goal: G.weeklyTimeTargetHrs, color: C.purple },
-    { label: 'HRV', value: latestHRV || '—', unit: 'ms', goal: G.targetHRV, color: C.green },
-    { label: 'RHR', value: latestRHR || '—', unit: 'bpm', goal: G.targetRHR, color: C.amber },
-    { label: 'Sleep', value: latestSleepScore || '—', unit: '/100', goal: G.targetSleepScore, color: C.cyan },
-    { label: 'Protein', value: avgProtein || '—', unit: 'g', goal: G.dailyProteinTarget, color: C.pink },
+    // ── TOP ROW: rTSS · Miles · Hours · HRV ──
+    { label: 'rTSS',  value: fmt0(rtss7.v),    unit: '/day', sub: subDays(rtss7.n),    goal: 100,                              color: C.purple },
+    { label: 'Miles', value: fmt1(wk7Mi),       unit: 'mi',   sub: '7d total',          goal: G.weeklyRunDistanceTarget,        color: C.blue },
+    { label: 'Hours', value: fmt1(wk7Hrs),      unit: 'hrs',  sub: '7d total',          goal: G.weeklyTimeTargetHrs,            color: C.amber },
+    { label: 'HRV',   value: fmt0(hrvAvg.v),    unit: 'ms',   sub: subDays(hrvAvg.n),   goal: G.targetHRV,                      color: C.green },
+    // ── BOTTOM ROW: RHR · Sleep · Protein · Weight ──
+    { label: 'RHR',     value: fmt0(rhr7.v),     unit: 'bpm',  sub: subDays(rhr7.n),     goal: G.targetRHR,                      color: C.red, lowerIsBetter: true },
+    { label: 'Sleep',   value: fmt0(sleep7.v),   unit: '/100', sub: subDays(sleep7.n),   goal: G.targetSleepScore,               color: C.cyan },
+    { label: 'Protein', value: fmt0(protein7.v), unit: 'g',    sub: subDays(protein7.n), goal: G.dailyProteinTarget,             color: C.pink },
+    { label: 'Weight',  value: latestWeight != null ? fmt1(latestWeight) : '—',
+      unit: 'lb',
+      sub: weightDelta != null ? `${weightDelta >= 0 ? '+' : ''}${weightDelta} in 7d` : '7d trend',
+      // Phase 4r.cockpit.4 — was reading from profile.targetWeight (wrong
+      // store). targetWeight is in the goals store alongside targetRHR.
+      // Bug meant Weight tile never got a goal value → no progress bar.
+      goal: G.targetWeight || parseFloat(_profile?.targetWeight) || null,
+      // Phase 4r.cockpit.6 — was referencing C.coral and C.gray which
+      // don't exist in the palette → color was undefined → no stripe,
+      // no value color, no bar fill. Palette has red/amber/green/etc.
+      color: weightDelta == null ? '#9ca3af' : (weightDelta < 0 ? C.green : weightDelta > 0.2 ? C.red : C.amber),
+      lowerIsBetter: true,
+    },
   ];
 
   return (
@@ -3314,7 +3430,7 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
 
       {/* ── HEALTH SYSTEMS ── */}
       <div style={sectionHeader}>Health Systems
-        <div style={{ display: 'flex', gap: 6, fontSize: 8, color: T3, marginLeft: 'auto' }}>
+        <div style={{ display: 'flex', gap: 6, fontSize: 10, color: T3, marginLeft: 'auto' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
           </span>
@@ -3334,25 +3450,39 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
       </div>
 
       {/* ── SIGNAL COCKPIT ── */}
+      {/* Phase 4r.cockpit.1 — 4×2 grid, all tiles 7-day window. Sub-label
+          under each tile explicitly states the time scope so there's no
+          ambiguity ("7d avg" / "7d total" / "+0.4 in 7d" etc.). */}
       <div style={sectionHeader}>Signal Cockpit <div style={shLine} /></div>
       <div style={card}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
           {cockpitItems.map((item, i) => {
             const goalVal = parseFloat(item.goal) || 0;
             const val = parseFloat(item.value) || 0;
-            const pct = goalVal > 0 ? Math.min(val / goalVal, 1) : 0;
+            // Phase 4r.cockpit.4 — lower-is-better metrics (RHR, Weight)
+            // need inverted progress math: when val <= goal you've achieved
+            // (or beaten) the target → full bar; when val > goal the bar
+            // shrinks proportionally as a "distance from goal" indicator.
+            const pct = goalVal > 0
+              ? (item.lowerIsBetter
+                  ? (val <= goalVal ? 1 : Math.max(0, goalVal / val))
+                  : Math.min(val / goalVal, 1))
+              : 0;
             return (
               <div key={i} style={{
                 position: 'relative', overflow: 'hidden',
-                background: CARD_BG, borderRadius: 12, padding: '12px 8px 10px', textAlign: 'center',
+                background: CARD_BG, borderRadius: 12, padding: '10px 6px 8px', textAlign: 'center',
                 border: `1px solid ${BORDER}`,
               }}>
-                <div style={{ position: 'absolute', top: 0, left: 8, right: 8, height: 2, borderRadius: '0 0 2px 2px', background: item.color, opacity: 0.5 }} />
-                <div style={{ fontSize: 22, fontWeight: 800, color: item.color, lineHeight: 1 }}>{item.value}</div>
-                <div style={{ fontSize: 9, color: T4, marginTop: 2 }}>{item.unit}</div>
-                <div style={{ fontSize: 9, fontWeight: 700, color: T2, marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
+                <div style={{ position: 'absolute', top: 0, left: 6, right: 6, height: 2, borderRadius: '0 0 2px 2px', background: item.color, opacity: 0.5 }} />
+                <div style={{ fontSize: 18, fontWeight: 800, color: item.color, lineHeight: 1 }}>{item.value}</div>
+                <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{item.unit}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: T2, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
+                {item.sub && (
+                  <div style={{ fontSize: 9, color: T4, marginTop: 2, fontWeight: 500 }}>{item.sub}</div>
+                )}
                 {goalVal > 0 && (
-                  <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 6 }}>
+                  <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 4 }}>
                     <div style={{ height: 3, background: item.color, borderRadius: 2, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
                   </div>
                 )}

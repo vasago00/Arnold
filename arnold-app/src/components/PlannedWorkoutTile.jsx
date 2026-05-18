@@ -38,7 +38,10 @@ import {
 } from "@phosphor-icons/react";
 import { storage } from "../core/storage.js";
 import { fetchWeatherForDate } from "../core/pdfParser.js";
-import { isRun, isStrength, isHIIT } from "../core/activityClass.js";
+import { isRun, isStrength, isHIIT, isMobility } from "../core/activityClass.js";
+// Phase 4r.recover.4 — Hyperice integration removed from the render path.
+// Source files (core/hyperice.js, components/HypericeIcon.jsx) are kept
+// in the codebase but unused — see comment near render site for context.
 import { computeRTSS, computeHrTSS, getEffectiveMaxHR } from "../core/trainingStress.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { getProfileZoneBpm } from "../core/derive/hr.js";
@@ -47,9 +50,7 @@ import {
   computeReboundDebt,
   softenReadinessForDebt,
 } from "../core/derive/recoverySignature.js";
-
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+import { localDate, ymd } from "../core/time.js";
 
 const MIN_PROMOTE_MINUTES = 20;
 // Phase 4q.pre.8 — per-family promotion thresholds. A 12-minute mobility
@@ -73,11 +74,13 @@ const PLAN_TYPE_LABEL = {
   race: 'Race', rest: 'Rest',
 };
 const FAMILY_COLOR = {
-  // Phase 4q.signatures.1 — HIIT shifted from coral (#fb7185) to orange
-  // (#fb923c) so it reads distinct from race red and matches the new
-  // orange-themed signature illustration. Cyan was rejected because it
-  // would conflict with mobility teal.
-  run: '#60a5fa', strength: '#a78bfa', hiit: '#fb923c',
+  // Phase 4r.color.1 — HIIT moved back to coral-pink (#fb7185) so it
+  // reads distinct from tempo (amber) at small mobile-calendar tile
+  // size. The 4q.signatures.1 orange shift solved race-vs-HIIT but
+  // collapsed tempo-vs-HIIT; coral-pink solves both because it's
+  // visually pink (not amber, not deep red). planner.js already had
+  // this value — this aligns the whole app.
+  run: '#60a5fa', strength: '#a78bfa', hiit: '#fb7185',
   mobility: '#5eead4', cross: '#34d399', race: '#ef4444',
 };
 
@@ -148,9 +151,60 @@ function setCachedWeather(dateStr, data) {
 function deriveState({ planned, todayActivities, todayDate, nextRace }) {
   const family = PLAN_TYPE_FAMILY[planned?.type] || null;
   const raceToday = nextRace?.date === todayDate;
+  // Phase 4r.race.14 — diagnostic removed. The race-pre branch was never
+  // firing because nextRace.date didn't match todayDate; the tile was in
+  // family='race' / state='pre' instead. matchFamily now handles 'race'
+  // family directly so a run on a planned race day flips the tile.
+  // Phase 4r.race.11 — race detection. Garmin doesn't tag race activities,
+  // so the original /race/-in-name check never fired for real races. Now
+  // we also match:
+  //   (1) activity name contains a meaningful word from the race name
+  //       (e.g. nextRace.name = "RBC Brooklyn Half" → match "Brooklyn"
+  //       or "Half" in the activity name)
+  //   (2) the activity is a run on the race date with distance within
+  //       12% of the race distance — covers the case where the user
+  //       didn't rename the activity but the workout looks like the race
+  const raceName = (nextRace?.name || '').toLowerCase();
+  const raceWords = raceName.split(/\s+/).filter(w => w.length >= 4 &&
+    !/^(the|and|run|race|day|half|full|marathon|10k|5k)$/.test(w));
+  // Phase 4r.race.12 — infer raceDistMi from race name when the race
+  // config has no explicit distance field. Catches the common case
+  // where a user just enters "RBC Brooklyn Half" without filling
+  // distance — we can still recognize a half marathon by the keyword.
+  let raceDistMi = nextRace?.distanceMi ||
+    (nextRace?.distanceKm ? nextRace.distanceKm * 0.621371 : null);
+  if (!raceDistMi && raceName) {
+    if      (/marathon|\bfull\b/.test(raceName) && !/half/.test(raceName)) raceDistMi = 26.2;
+    else if (/\bhalf\b/.test(raceName))                                    raceDistMi = 13.1;
+    else if (/\b10k\b/.test(raceName))                                     raceDistMi = 6.21;
+    else if (/\b5k\b/.test(raceName))                                      raceDistMi = 3.11;
+    else if (/\b8k\b/.test(raceName))                                      raceDistMi = 4.97;
+  }
   const raceLogged = todayActivities.some(a => {
-    const lbl = (a.activityType || a.title || '').toLowerCase();
-    return /race/.test(lbl) || (a.tag === 'race') || /race/i.test(a.notes || '');
+    const lbl = (a.activityType || a.title || a.activityName || '').toLowerCase();
+    // Original checks: explicit race tag
+    if (/race/.test(lbl) || a.tag === 'race' || /race/i.test(a.notes || '')) return true;
+    // Phase 4r.race.11 — name word match: any race-name keyword in
+    // the activity's title/name field is a strong race signal.
+    if (raceWords.length && raceWords.some(w => lbl.includes(w))) return true;
+    // Phase 4r.race.11 — distance match: a run on the race date with
+    // similar distance is almost certainly the race itself.
+    if (raceDistMi && isRun(a)) {
+      const aMi = Number(a.distanceMi) || 0;
+      const tolerance = Math.max(0.5, raceDistMi * 0.12);
+      if (aMi > 0 && Math.abs(aMi - raceDistMi) <= tolerance) return true;
+    }
+    // Phase 4r.race.12 — last-resort fallback. If today IS the race
+    // date AND the user logged any run of meaningful duration (≥30 min)
+    // or a long-run distance (≥5 mi), call it the race. Edge case
+    // (running a non-race long-run on race day) is rare enough that
+    // this is the right tradeoff for users who don't tag activities.
+    if (isRun(a)) {
+      const mins = (Number(a.durationSecs) || 0) / 60;
+      const miles = Number(a.distanceMi) || 0;
+      if (mins >= 30 || miles >= 5) return true;
+    }
+    return false;
   });
   if (raceToday && raceLogged) return { kind: 'race-complete', family: 'race', planType: 'race' };
   if (raceToday)               return { kind: 'race-pre',      family: 'race', planType: 'race' };
@@ -172,6 +226,19 @@ function deriveState({ planned, todayActivities, todayDate, nextRace }) {
       return !isRun(a) && !isStrength(a) && !isHIIT(a);
     }
     if (family === 'cross')    return !isRun(a) && !isStrength(a);
+    // Phase 4r.race.14 — race family branch. The planner sets type='race'
+    // for race day, but the legacy code only flipped to race-complete via
+    // raceToday + raceLogged (which relies on nextRace.date matching).
+    // When nextRace is null or points to a future race, the tile fell
+    // through here with family='race' but matchFamily returning false →
+    // permanent 'pre' state. Treat any meaningful run on race day as the
+    // race itself. Mirrors the Phase 4r.race.12 catch-all logic.
+    if (family === 'race') {
+      if (!isRun(a)) return false;
+      const mins = (Number(a.durationSecs) || 0) / 60;
+      const miles = Number(a.distanceMi) || 0;
+      return mins >= 30 || miles >= 5;
+    }
     return false;
   };
   const minMins = MIN_PROMOTE_MINUTES_BY_FAMILY[family] ?? MIN_PROMOTE_MINUTES;
@@ -347,7 +414,7 @@ function sessionContext({ planned, family, allActivities }) {
   const dow = today.getDay();
   const isoMonday = new Date(today);
   isoMonday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
-  const monStr = localDate(isoMonday);
+  const monStr = ymd(isoMonday);
   const weekRuns = (allActivities || []).filter(a => isRun(a) && (a.date || '') >= monStr);
   const weekMi = weekRuns.reduce((s, a) => s + (Number(a.distanceMi) || 0), 0);
   const goalMi = 25;  // TODO: pull from getGoals().weeklyRunDistanceTarget
@@ -371,8 +438,8 @@ function weekActivityContext({ allActivities }) {
   const monOffset = dow === 0 ? 6 : dow - 1;
   const isoMonday = new Date(today);
   isoMonday.setDate(today.getDate() - monOffset);
-  const monStr = localDate(isoMonday);
-  const todayStr = localDate(today);
+  const monStr = ymd(isoMonday);
+  const todayStr = ymd(today);
 
   const minsOf = (a) => (Number(a.durationSecs) || 0) / 60 || Number(a.durationMins) || 0;
   const isMeaningful = (a) => minsOf(a) >= 10;
@@ -735,6 +802,13 @@ function summarizeActivity({ activity, profile, allActivities }) {
     verticalRatio:  Number.isFinite(Number(activity.avgVerticalRatio))       ? +Number(activity.avgVerticalRatio).toFixed(1)        : null,
     groundContact:  Number.isFinite(Number(activity.avgGroundContactTime))   ? Math.round(Number(activity.avgGroundContactTime))   : null,
     strideLength:   Number.isFinite(Number(activity.avgStrideLength))        ? +Number(activity.avgStrideLength).toFixed(2)         : null,
+    // Phase 4r.viz.14 — universal post-workout metrics so the quality
+    // chip row has fallback content when running-form fields are absent
+    // (HIIT runs, treadmill, non-HRM-Pro recordings, etc.).
+    aerobicTE:      Number.isFinite(Number(activity.aerobicTrainingEffect))   ? +Number(activity.aerobicTrainingEffect).toFixed(1)   : (Number.isFinite(Number(activity.aerobicTE)) ? +Number(activity.aerobicTE).toFixed(1) : null),
+    anaerobicTE:    Number.isFinite(Number(activity.anaerobicTrainingEffect)) ? +Number(activity.anaerobicTrainingEffect).toFixed(1) : (Number.isFinite(Number(activity.anaerobicTE)) ? +Number(activity.anaerobicTE).toFixed(1) : null),
+    calories:       Number.isFinite(Number(activity.calories))                ? Math.round(Number(activity.calories))                 : null,
+    bodyBatt:       Number.isFinite(Number(activity.bodyBatteryDrain))        ? Math.round(Number(activity.bodyBatteryDrain))         : null,
   };
 }
 
@@ -1497,36 +1571,31 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
             }}>{mantra}</span>
           </div>
         )}
-        {/* Phase 4r.adapt.3 — rebound debt advisory. Renders only when
-            recent workouts left a hydration/glycogen residual. Coral
-            for monitor (single incomplete in last 7d), red for flag
-            (multiple incompletes OR debt > 2.5 lb). When 'flag' fires,
-            the readiness verdict above is also softened one notch. */}
+        {/* Phase 4r.adapt.3 (revised) — rebound debt advisory.
+            Minimalist: just a colored dot + copy, no surrounding card.
+            Less visual weight, slots in with the other tile content
+            rather than pulling focus to a banner. */}
         {reboundDebt.severity !== 'none' && reboundDebt.advisoryCopy && (
           <div style={{
-            margin: '0 12px 6px',
-            padding: '6px 10px',
-            borderRadius: 6,
-            background: reboundDebt.severity === 'flag'
-              ? 'rgba(248, 113, 113, 0.10)'
-              : 'rgba(251, 191, 36, 0.08)',
-            border: `0.5px solid ${reboundDebt.severity === 'flag'
-              ? 'rgba(248, 113, 113, 0.35)'
-              : 'rgba(251, 191, 36, 0.30)'}`,
+            padding: '0 12px 6px',
             display: 'flex',
             alignItems: 'flex-start',
             gap: 7,
             fontSize: 10.5,
             lineHeight: 1.35,
-            color: T1,
+            color: T2,
           }}>
-            <span style={{
-              fontSize: 13,
-              lineHeight: 1,
-              color: reboundDebt.severity === 'flag' ? '#f87171' : '#fbbf24',
-              flexShrink: 0,
-              marginTop: 1,
-            }}>◉</span>
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: reboundDebt.severity === 'flag' ? '#f87171' : '#fbbf24',
+                flexShrink: 0,
+                marginTop: 5,
+              }}
+            />
             <span style={{ minWidth: 0 }}>{reboundDebt.advisoryCopy}</span>
           </div>
         )}
@@ -1534,6 +1603,7 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
           chips={outputChips}
           zones={targetZone}
           planType={planType}
+          reserveRightSpace={!!family}
         />
         {focusAreas && (
           <div style={{
@@ -1608,15 +1678,28 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
   const recovery = recoveryPrescription({ summary, profile });
   const isRace = state.kind === 'race-complete';
 
+  // Phase 4r.recover.1 — detect if a Mobility activity was logged today
+  // so the mobility chip can render in green with a check. Counts ALL
+  // mobility-tagged activities for the day, not just the focal activity.
+  const mobilityActivitiesToday = (todayActivities || []).filter(a => isMobility(a));
+  const mobilityDoneMin = mobilityActivitiesToday.reduce((s, a) => s + Math.round((a.durationSecs || 0) / 60), 0);
+  const mobilityDone = mobilityDoneMin > 0;
+
   // Phase 4p.plan.14 — recovery icons unified with the running figure
   // style. PersonSimpleTaiChi (Phosphor duotone) for mobility matches
   // PersonSimpleRun in the header. Drop and Moon also Phosphor for
   // visual consistency. Wheat stays inline (Phosphor doesn't have one
   // and the inline glyph reads as "grain" cleanly).
+  //
+  // Phase 4r.recover.1 — mobility chip turns green + adds ✓ when a
+  // Mobility activity is logged today, showing actual minutes done.
+  // Prescription minutes still show as the goal in parentheses.
   const recoveryChips = [
     recovery.carbsG > 0 ? { icon: <Icon.Wheat c={GOOD}/>,                                        value: `${recovery.carbsG}g`,   sub: 'carbs' } : null,
     { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>,                                value: `${recovery.waterL}L`,   sub: 'water' },
-    { icon: <PersonSimpleTaiChi size={14} color="#a78bfa" weight="duotone"/>,                    value: `${recovery.mobMin}m`,   sub: 'mobility' },
+    mobilityDone
+      ? { icon: <PersonSimpleTaiChi size={14} color={GOOD} weight="duotone"/>,                   value: `${mobilityDoneMin}m ✓`, sub: 'mobility', color: GOOD }
+      : { icon: <PersonSimpleTaiChi size={14} color="#a78bfa" weight="duotone"/>,                value: `${recovery.mobMin}m`,   sub: 'mobility' },
     { icon: <PhMoon size={14} color="#94a3b8" weight="duotone"/>,                                value: `${recovery.sleepHrs}h`, sub: 'sleep' },
   ].filter(Boolean);
 
@@ -1641,12 +1724,24 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
   const paceSecsPerMi = (summary.minutes > 0 && summary.distanceMi > 0)
     ? (summary.minutes * 60) / summary.distanceMi
     : null;
+  // Phase 4r.viz.14 — quality chip pool with universal fallbacks.
+  // Running-form metrics first (cad/vert/gct for outdoor HRM-Pro runs),
+  // then universal session metrics (TE, calories, max HR) so the row is
+  // never empty for HIIT/treadmill/non-Garmin imports. We slice(0,5) so
+  // the chip row matches the 4-5 chip count on the pre-workout card.
   const qualityChips = [
     summary.load != null       ? { value: `${summary.load}`,           post: 'load',   color: summary.effortColor                  } : null,
     summary.decoupling != null ? { value: `${summary.decoupling}%`,    post: 'drift',  color: decouplingColor(summary.decoupling)  } : null,
     summary.cadence       != null && summary.cadence       > 0 ? { value: `${summary.cadence}`,        post: 'cad',    color: cadenceColor(summary.cadence, paceSecsPerMi) } : null,
     summary.verticalRatio != null && summary.verticalRatio > 0 ? { value: `${summary.verticalRatio}%`, post: 'vert',   color: verticalRatioColor(summary.verticalRatio)    } : null,
     summary.groundContact != null && summary.groundContact > 0 ? { value: `${summary.groundContact}`,  post: 'ms gct', color: gctColor(summary.groundContact)              } : null,
+    // Universal fallbacks — surface session-summary metrics that exist
+    // on every Garmin FIT so the row stays populated regardless of
+    // whether running-dynamics accessories were paired.
+    summary.aerobicTE   != null ? { value: `${summary.aerobicTE}`,     post: 'aero TE',  color: GOOD } : null,
+    summary.anaerobicTE != null && summary.anaerobicTE > 0 ? { value: `${summary.anaerobicTE}`, post: 'anaer TE', color: WARN } : null,
+    summary.maxHR       != null ? { value: `${summary.maxHR}`,         post: 'max HR',   color: T2 } : null,
+    summary.calories    != null ? { value: `${summary.calories}`,      post: 'kcal',     color: T2 } : null,
   ].filter(Boolean).slice(0, 5);
 
   // Weather glyph + temp for the run conditions, in the header right slot.
@@ -1680,9 +1775,32 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
         suffix={<Icon.Check c={GOOD} s={12}/>}
         right={weatherChip}
       />
-      <PerfOutputRow chips={outputChips} zones={summary.zones} planType={state.planType}/>
+      <PerfOutputRow chips={outputChips} zones={summary.zones} planType={state.planType} reserveRightSpace={!!family}/>
+      {/* Phase 4r.viz.14 — focus line matching pre-workout's "TIME ON FEET"
+          treatment so post-workout card has the same band count. Shows
+          effortBucket + plan-type label (e.g., "Solid · Long run"). */}
+      {(summary.effortBucket || state.planType) && (
+        <div style={{
+          padding: '0 12px 4px',
+          fontSize: 11, fontWeight: 500,
+          color: summary.effortColor || T2,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          marginTop: -2,
+        }}>
+          {[
+            summary.effortBucket && summary.effortBucket[0].toUpperCase() + summary.effortBucket.slice(1),
+            state.planType && (PLAN_TYPE_LABEL[state.planType] || state.planType),
+          ].filter(Boolean).join(' · ')}
+        </div>
+      )}
       {qualityChips.length > 0 && <PerfQualityRow chips={qualityChips} reserveRightSpace={!!family}/>}
       <RecoverySection chips={recoveryChips} reserveRightSpace={!!family}/>
+      {/* Phase 4r.recover.4 — HypericeStrip removed from render. Hyperice
+          has no third-party API and the user doesn't manually log via
+          Garmin activities, so the strip had no trigger path. Catalog +
+          storage + icon files remain for archaeology if Hyperice ever
+          opens an integration. */}
       {/* Phase 4q.signatures.21 — corner-stamp signature, absolutely
           positioned at bottom-right of the Card. */}
       <div style={{
@@ -1761,16 +1879,17 @@ function SectionHeader({ icon, label, suffix, right }) {
 // Phase 4q.pre.8 — when there's no zone bar (mobility / strength), the
 // `motivation` prop renders a high-resolution motivation panel in the
 // right slot instead — big caps, family-colored, with a soft glow.
-function PerfOutputRow({ chips, zones, planType, motivation }) {
+function PerfOutputRow({ chips, zones, planType, motivation, reserveRightSpace = false }) {
   return (
     <div style={{
       display: 'flex',
-      // flex-start so the zone column (bar + labels stacked) aligns with
-      // the text top, with the bar visually "lifted" to sit near the top
-      // of the output line and labels hanging beneath the text baseline.
       alignItems: 'flex-start',
       flexWrap: 'wrap',
       gap: '4px 12px',
+      // Phase 4r.viz.13 — PerfOutputRow is the TOP band of the card; the
+      // session signature sits at the bottom-right corner. They don't
+      // actually conflict in normal-height cards, so this row stays
+      // unreserved — zones extend right-aligned where the user expects.
       padding: '2px 12px 3px',
     }}>
       {chips.map((c, i) => (
@@ -1938,7 +2057,9 @@ function PerfQualityRow({ chips, reserveRightSpace }) {
       gap: '4px 12px',
       // Phase 4q.signatures.21 — when the corner-stamp signature is
       // present at the Card level, status row reserves space on its
-      // right edge so chips don't run under the badge. Tracks badge size.
+      // right edge so chips don't run under the badge.
+      // Phase 4r.viz.13 — restored to 84px to match the 72px default
+      // signature size (signature + 12px buffer).
       padding: reserveRightSpace ? '3px 84px 4px 12px' : '3px 12px 4px',
       borderTop: '0.5px solid rgba(140,140,140,0.10)',
     }}>
@@ -2232,11 +2353,17 @@ function PerfRowWithLabel({ header, chips, muted, leadIcon }) {
 // occupying the natural empty space the chips don't fill. Acts as a
 // high-resolution stamp of "what was done" — family icon, family-tinted
 // backdrop, soft glow.
+// Phase 4r.recover.4 — HypericeStrip removed. Hyperice has no third-party
+// API and the user doesn't manually log via Garmin activities, so there
+// was no trigger path. Source files (core/hyperice.js, HypericeIcon.jsx,
+// HypericeQuickAdd.jsx) are left in the codebase but unwired.
+
 function RecoverySection({ chips, headerLabel = 'RECOVER', signature, reserveRightSpace }) {
   return (
     <div style={{
       // Phase 4q.signatures.21 — when corner-stamp signature is at the
       // Card level, reserve space on the right so chips don't run under it.
+      // Phase 4r.viz.13 — restored to 84px to match the 72px signature.
       padding: reserveRightSpace ? '4px 84px 5px 12px' : '4px 12px 5px',
       borderTop: '0.5px solid rgba(140,140,140,0.16)',
     }}>
@@ -2262,14 +2389,15 @@ function RecoverySection({ chips, headerLabel = 'RECOVER', signature, reserveRig
             }}>
               <span style={{ flexShrink: 0, display: 'inline-flex', alignSelf: 'center' }}>{c.icon}</span>
               <span style={{
-                fontSize: 14, fontWeight: 700, color: T1,
+                fontSize: 14, fontWeight: 700, color: c.color || T1,
                 fontVariantNumeric: 'tabular-nums', lineHeight: 1.05,
                 whiteSpace: 'nowrap',
               }}>{c.value}</span>
               {c.sub && (
                 <span style={{
-                  fontSize: 10, fontWeight: 500, color: T3,
+                  fontSize: 10, fontWeight: 500, color: c.color || T3,
                   letterSpacing: '0.02em', whiteSpace: 'nowrap',
+                  opacity: c.color ? 0.85 : 1,
                 }}>{c.sub}</span>
               )}
             </span>
@@ -2306,7 +2434,7 @@ function RecoverySection({ chips, headerLabel = 'RECOVER', signature, reserveRig
 // To add a new plan-specific signature: drop the cleaned PNG into
 // /public/session-signatures/<key>.png and bump SIG_VERSION to force
 // the WebView to re-fetch.
-const SIG_VERSION = 'v9';
+const SIG_VERSION = 'v11';
 const SIGNATURE_SRC = {
   // ── Plan-specific (preferred lookup) ──
   easy_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,
@@ -2316,11 +2444,18 @@ const SIGNATURE_SRC = {
   speed_run: `/session-signatures/speed.png?${SIG_VERSION}`,
   ski:       `/session-signatures/ski.png?${SIG_VERSION}`,
   // ── Family fallback (used when plan-specific isn't on disk) ──
-  run:       `/session-signatures/run.png?${SIG_VERSION}`,
+  // Phase 4r.maps.1 — `run.png` doesn't exist on disk; the canonical
+  // generic-run signature is `easy-run.png`. Aligned with CalendarTab
+  // SIG_FILE and WeeklyPlanner PLAN_SIGNATURE.
+  run:       `/session-signatures/easy-run.png?${SIG_VERSION}`,
   strength:  `/session-signatures/strength.png?${SIG_VERSION}`,
   hiit:      `/session-signatures/hiit.png?${SIG_VERSION}`,
   mobility:  `/session-signatures/mobility.png?${SIG_VERSION}`,
   cross:     `/session-signatures/cross.png?${SIG_VERSION}`,
+  // Phase 4r.signatures.27 — race.png replaced with finish-line-tape
+  // composition (shards dispersed as motion-burst, not in front of
+  // the runner like glass). SIG_VERSION bumped to v10 to force the
+  // WebView to re-fetch the new image.
   race:      `/session-signatures/race.png?${SIG_VERSION}`,
 };
 

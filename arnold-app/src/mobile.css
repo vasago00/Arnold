@@ -198,8 +198,14 @@
 
   /* ═══════════════════════════════════════════════════════════════════════════
      INPUTS — mobile touch targets (Apple HIG 44px minimum)
+     Phase 4r.viz.24 — opt-out class .arnold-compact-input for components
+     that explicitly size their own inputs (race card pace/finish, etc.).
+     Without this, our mobile defaults force min-height 44px + 16px font on
+     every input, overriding inline styles via !important.
      ═══════════════════════════════════════════════════════════════════════════ */
-  input, textarea, select {
+  input:not(.arnold-compact-input),
+  textarea:not(.arnold-compact-input),
+  select:not(.arnold-compact-input) {
     font-size: 16px !important;  /* prevents iOS/Samsung zoom on focus */
     padding: 12px 14px !important;
     min-height: 44px !important;
@@ -209,7 +215,9 @@
     color: #fff !important;
     transition: border-color 0.2s ease !important;
   }
-  input:focus, textarea:focus, select:focus {
+  input:not(.arnold-compact-input):focus,
+  textarea:not(.arnold-compact-input):focus,
+  select:not(.arnold-compact-input):focus {
     border-color: rgba(96,165,250,0.5) !important;
     outline: none !important;
     box-shadow: 0 0 0 3px rgba(96,165,250,0.15) !important;
@@ -218,14 +226,35 @@
   /* ═══════════════════════════════════════════════════════════════════════════
      BUTTONS — larger, tactile feel
      ═══════════════════════════════════════════════════════════════════════════ */
-  button {
+  /* Phase 4r.calendar.21 — buttons with .arnold-compact-btn opt out of
+     the 42px touch-target floor. Used by dense headers (calendar nav,
+     month picker) where matching the inline-styled compact size is
+     more important than the touch-target rule. */
+  button:not(.arnold-compact-btn) {
     min-height: 42px !important;
     border-radius: 10px !important;
     transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1),
                 background 0.2s ease !important;
   }
-  button:active {
+  button:not(.arnold-compact-btn):active {
     transform: scale(0.97) !important;
+  }
+
+  /* Phase 4r.calendar.22 — calendar weekday header + day grid now
+     use FLEXBOX with calc((100% - 12px) / 7) per cell (set inline
+     in CalendarTab.jsx). CSS grid kept overriding with surprise
+     min-content. The mobile-specific rules here just clear any
+     min-width/min-height that could push cells past their 1/7
+     width and force wrapping. */
+  .arnold-cal-weekrow,
+  .arnold-cal-grid {
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .arnold-cal-grid > .arnold-cal-cell,
+  .arnold-cal-grid > * {
+    min-width: 0 !important;
+    min-height: 0 !important;
   }
 
   /* ═══════════════════════════════════════════════════════════════════════════

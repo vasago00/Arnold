@@ -14,6 +14,7 @@
 import { storage } from './storage.js';
 import { weeklyRunVolume, weeklyStrengthVolume } from './derive/volume.js';
 import { zoneForHr, getProfileZoneBpm } from './derive/hr.js';
+import { parseLocalDate } from './dateUtils.js';
 
 // ─── Detectors ───────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ function detectIntensityCorrelation(activities, sleepData) {
   const zoneBpm = getProfileZoneBpm(storage.get('profile') || {});
   let highIntensityShortSleep = 0;
   for (const a of recent) {
-    const next = new Date(a.date); next.setDate(next.getDate() + 1);
+    const next = parseLocalDate(a.date); if (!next) continue; next.setDate(next.getDate() + 1);
     const nextISO = `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}-${String(next.getDate()).padStart(2,'0')}`;
     const sleep = sleepByDate[nextISO];
     if (!sleep) continue;

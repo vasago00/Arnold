@@ -74,11 +74,16 @@ export async function parseFITFile(file, opts = {}) {
   const MOBILITY_SUB = /^(yoga|pilates|stretching|flexibility_training|mobility|breathwork|meditation)$/;
   const RUN_SUB      = /^(treadmill|trail|track|street|virtual_run|indoor_running|road)$/;
   const HIIT_SUB     = /^(hiit|cardio_training|interval_training|interval|cardio)$/;
-  const STRENGTH_SUB = /^(strength_training|cardio_strength|crossfit|hyrox)$/;
+  const STRENGTH_SUB = /^(strength_training|cardio_strength|crossfit)$/;
   const fileName     = file?.name || '';
   const nameRunHint  = /\b(run|jog|hiit|interval|tempo|speed|track)\b/i.test(fileName);
   const nameStrHint  = /\b(strength|lift|push|pull|squat|deadlift|bench|gym)\b/i.test(fileName);
   const nameMobHint  = /\b(mobility|stretch|yoga|pilates|flexibility|breathwork)\b/i.test(fileName);
+  // HYROX-style mixed run+strength workouts come through as sport=hiit
+  // from our own Workbench export, or with the word "HYROX" in the
+  // session name. Both should route to HIIT (not Strength) so they
+  // count toward HIIT-specific metrics + the right activity card.
+  const nameHyroxHint = /\bhyrox\b/i.test(fileName);
 
   let activityType = 'Other';
   if (sport === 'running') {
@@ -90,9 +95,17 @@ export async function parseFITFile(file, opts = {}) {
     activityType = 'Mobility';
   } else if (sport === 'strength_training' || STRENGTH_SUB.test(subSport)) {
     activityType = 'Strength';
-  } else if (HIIT_SUB.test(subSport) || (sport === 'training' && (HIIT_SUB.test(subSport) || nameRunHint))) {
-    // HIIT runs / interval workouts. Garmin reports these as
-    // sport=training, subSport=hiit (or cardio_training / interval).
+  } else if (
+    sport === 'hiit' ||                  // Garmin sport=hiit (62) — direct HIIT sport
+    sport === 'cardio' ||                // sport=cardio_training (26)
+    subSport === 'hyrox' ||              // legacy: some firmwares use subSport=hyrox
+    nameHyroxHint ||                     // session name contains "HYROX"
+    HIIT_SUB.test(subSport) ||
+    (sport === 'training' && (HIIT_SUB.test(subSport) || nameRunHint || nameHyroxHint))
+  ) {
+    // HIIT runs / interval workouts / HYROX. Garmin reports these as
+    // sport=hiit (modern firmwares), sport=training+subSport=hiit (older),
+    // or just a HYROX-named activity uploaded from any sport.
     activityType = 'HIIT';
   } else if (RUN_SUB.test(subSport) || (sport === 'training' && nameRunHint)) {
     activityType = 'Run (outdoor)';
@@ -172,9 +185,28 @@ export async function parseFITFile(file, opts = {}) {
   const maxCadence = maxCadenceRaw ? Math.round(parseFloat(maxCadenceRaw) * 2) : null;
 
   // Power (watts)
-  const avgPowerW = session.avgPower ? Math.round(parseFloat(session.avgPower)) : null;
-  const maxPowerW = session.maxPower ? Math.round(parseFloat(session.maxPower)) : null;
+  // Session summary first — most Garmin watches with a native running-power
+  // datafield or Stryd pod write avgPower/maxPower into the session message.
+  let avgPowerW = session.avgPower ? Math.round(parseFloat(session.avgPower)) : null;
+  let maxPowerW = session.maxPower ? Math.round(parseFloat(session.maxPower)) : null;
   const normalizedPower = session.normalizedPower ? Math.round(parseFloat(session.normalizedPower)) : null;
+  // Phase 4r.viz.2 fallback — some watches/firmwares only write power into
+  // per-second `record` messages and skip the session aggregate. If session
+  // didn't carry power but the records do, synthesize avg/max from records.
+  if ((!avgPowerW || !maxPowerW) && Array.isArray(messages.recordMesgs)) {
+    const powerSamples = messages.recordMesgs
+      .map(r => r && r.power != null ? parseFloat(r.power) : null)
+      .filter(p => Number.isFinite(p) && p > 0 && p < 2000);
+    if (powerSamples.length >= 30) {
+      if (!avgPowerW) {
+        const sum = powerSamples.reduce((a, b) => a + b, 0);
+        avgPowerW = Math.round(sum / powerSamples.length);
+      }
+      if (!maxPowerW) {
+        maxPowerW = Math.round(Math.max(...powerSamples));
+      }
+    }
+  }
 
   // Elevation (meters)
   const totalAscentM = session.totalAscent ? Math.round(parseFloat(session.totalAscent)) : null;
@@ -190,10 +222,47 @@ export async function parseFITFile(file, opts = {}) {
   const anaerobicTrainingEffect = session.totalAnaerobicTrainingEffect ? parseFloat(session.totalAnaerobicTrainingEffect) : null;
 
   // Stride length and vertical metrics (running)
+  // Phase 4r.viz.4 — FIT spec stores vertical oscillation in mm (with internal
+  // scale of 10). Different JS FIT SDKs handle this inconsistently — some
+  // return the value already in cm (e.g. 8.6), others return raw mm (e.g. 86).
+  // Garmin Connect displays cm. Normalize: if the value is impossibly high
+  // for cm (>25), assume mm and divide by 10.
   const avgStrideLength = session.avgStrideLength ? parseFloat(session.avgStrideLength) : null;
-  const avgVerticalOscillation = session.avgVerticalOscillation ? parseFloat(session.avgVerticalOscillation) : null;
-  const avgVerticalRatio = session.avgVerticalRatio ? parseFloat(session.avgVerticalRatio) : null;
-  const avgGroundContactTime = session.avgStanceTime ? Math.round(parseFloat(session.avgStanceTime)) : null;
+  let avgVerticalOscillation = session.avgVerticalOscillation ? parseFloat(session.avgVerticalOscillation) : null;
+  if (avgVerticalOscillation != null && avgVerticalOscillation > 25) avgVerticalOscillation = avgVerticalOscillation / 10;
+  let avgVerticalRatio = session.avgVerticalRatio ? parseFloat(session.avgVerticalRatio) : null;
+  // Vertical ratio is a % — typical values 5–15. Some SDKs return scaled.
+  if (avgVerticalRatio != null && avgVerticalRatio > 25) avgVerticalRatio = avgVerticalRatio / 10;
+  let avgGroundContactTime = session.avgStanceTime ? Math.round(parseFloat(session.avgStanceTime)) : null;
+  // Phase 4r.viz.3 fallback — same pattern as the power fix. Running dynamics
+  // (vertical oscillation, vertical ratio, ground contact) require an
+  // accessory (HRM-Pro/Run/Tri, Running Dynamics Pod). When the accessory is
+  // paired, some firmwares write only per-second `record` messages and skip
+  // the session aggregate. Synthesize avg from records when we have enough.
+  if ((avgVerticalOscillation == null || avgVerticalRatio == null || avgGroundContactTime == null)
+      && Array.isArray(messages.recordMesgs)) {
+    const recs = messages.recordMesgs;
+    const meanOf = (field, minVal, maxVal) => {
+      const samples = recs.map(r => r && r[field] != null ? parseFloat(r[field]) : null)
+        .filter(v => Number.isFinite(v) && v > minVal && v < maxVal);
+      if (samples.length < 30) return null;
+      return samples.reduce((a, b) => a + b, 0) / samples.length;
+    };
+    if (avgVerticalOscillation == null) {
+      // Records can carry vert-osc in either cm (4–18) or mm (40–180) depending
+      // on SDK. Accept both, normalize to cm afterwards.
+      const v = meanOf('verticalOscillation', 4, 200);
+      if (v != null) avgVerticalOscillation = v > 25 ? v / 10 : v;
+    }
+    if (avgVerticalRatio == null) {
+      const v = meanOf('verticalRatio', 3, 200);
+      if (v != null) avgVerticalRatio = v > 25 ? v / 10 : v;
+    }
+    if (avgGroundContactTime == null) {
+      const v = meanOf('stanceTime', 150, 400);
+      if (v != null) avgGroundContactTime = Math.round(v);
+    }
+  }
 
   // Moving time — totalTimerTime is the active (moving) time in FIT sessions
   const movingTimeSecs = session.totalTimerTime ? Math.round(parseFloat(session.totalTimerTime)) : null;
@@ -281,7 +350,15 @@ export async function parseFITFile(file, opts = {}) {
     if (zoneBpm) {
       const records = messages.recordMesgs || [];
       const fromBpm = binRecordsToBpmZones(records, zoneBpm);
-      return fromBpm;  // Path 0 result OR null — never fall through.
+      if (fromBpm) return fromBpm;
+      // Phase 4r.viz.32 — fall through to Path 1/2 when Path 0 fails.
+      // Earlier rev refused to fall through, fearing %HRmax-binned zones
+      // would silently mismatch the user's custom bpm zones. In practice
+      // the resulting "no zones at all" is worse than "watch-binned
+      // zones with a slight scheme mismatch" — especially for sport=hiit
+      // where the FR955 doesn't always emit record samples but DOES
+      // populate session.timeInHrZone. Path 1/2 produces SOMETHING the
+      // user can see; the zone label can be refined later if needed.
     }
     // Path 1: session has the explicit time-in-zone array (watch-computed,
     // scheme depends on the watch's zone config).

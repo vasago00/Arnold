@@ -1,5 +1,8 @@
 // ─── Weekly Planner ──────────────────────────────────────────────────────────
 // Compact single-row week strip with foldable editor + templates.
+// Phase 4r.plan.1 — each day shows the session-signature illustration that
+// corresponds to its plan type (matches the Start mobile / Performance card
+// look). Falls back to the colored dot if the PNG is missing.
 
 import { useState } from "react";
 import {
@@ -8,6 +11,24 @@ import {
 } from "../core/planner.js";
 
 const dayTypeMap = Object.fromEntries(DAY_TYPES.map(t => [t.id, t]));
+
+// Same map + version as PlannedWorkoutTile.jsx — keep in sync if signatures
+// are bumped there. Could be factored out to a shared module later.
+const SIG_VERSION = 'v11';
+const PLAN_SIGNATURE = {
+  easy_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,
+  long_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,
+  tempo:     `/session-signatures/tempo.png?${SIG_VERSION}`,
+  intervals: `/session-signatures/speed.png?${SIG_VERSION}`,
+  speed_run: `/session-signatures/speed.png?${SIG_VERSION}`,
+  ski:       `/session-signatures/ski.png?${SIG_VERSION}`,
+  run:       `/session-signatures/run.png?${SIG_VERSION}`,
+  strength:  `/session-signatures/strength.png?${SIG_VERSION}`,
+  hiit:      `/session-signatures/hiit.png?${SIG_VERSION}`,
+  mobility:  `/session-signatures/mobility.png?${SIG_VERSION}`,
+  cross:     `/session-signatures/cross.png?${SIG_VERSION}`,
+  race:      `/session-signatures/race.png?${SIG_VERSION}`,
+};
 
 export function WeeklyPlanner({ showToast }) {
   const thisWeek = weekKey();
@@ -72,24 +93,45 @@ export function WeeklyPlanner({ showToast }) {
       </div>
 
       {/* ── Single-row week strip ── */}
+      {/* Phase 4r.plan.1 — each day shows the workout signature illustration
+          (same imagery used on the Start mobile screen and Performance
+          card) so users see at-a-glance what's on each day. */}
       <div style={{ display: 'flex', padding: '6px 4px 8px' }}>
         {DAY_LABELS.map((lbl, idx) => {
           const entry = week.days?.[idx] || { type: 'rest' };
           const t = dayTypeMap[entry.type] || dayTypeMap.rest;
           const isEditing = editingDay === idx;
           const detail = entry.distanceMi ? `${entry.distanceMi}mi` : entry.durationMin ? `${entry.durationMin}m` : '';
+          const sigSrc = PLAN_SIGNATURE[entry.type];
           return (
             <div key={lbl}
               onClick={() => { setEditingDay(isEditing ? null : idx); if (!expanded) setExpanded(true); }}
               style={{
                 flex: '1 1 0', minWidth: 0,
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
                 padding: '5px 1px', cursor: 'pointer', borderRadius: 6,
                 background: isEditing ? 'rgba(167,139,250,0.08)' : 'transparent',
                 transition: 'background 0.15s',
               }}>
               <span style={{ fontSize: 8, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>{lbl}</span>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+              {sigSrc ? (
+                <img
+                  src={sigSrc}
+                  alt={t.label}
+                  width={36} height={36}
+                  style={{ display: 'block', flexShrink: 0 }}
+                  onError={(e) => {
+                    // Hide the broken-image icon and reveal the colored-dot fallback.
+                    e.currentTarget.style.display = 'none';
+                    const fallback = e.currentTarget.nextElementSibling;
+                    if (fallback) fallback.style.display = 'block';
+                  }}
+                />
+              ) : null}
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%', background: t.color, flexShrink: 0,
+                display: sigSrc ? 'none' : 'block',  // shown if no image OR image fails
+              }} />
               <span style={{ fontSize: 7.5, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', whiteSpace: 'nowrap' }}>{t.label}</span>
               {detail && <span style={{ fontSize: 7, color: 'var(--text-muted)', lineHeight: 1 }}>{detail}</span>}
             </div>

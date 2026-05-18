@@ -19,9 +19,12 @@
 // Inclusion: HIIT activities pass BOTH isRun() and isHIIT() — they
 // contribute to run mileage tracking AND fire HIIT-specific rules.
 
-const RUN_RE      = /\b(run|jog|hiit|interval|tempo|trail|fartlek|sprint|track|jogging|running)\b/i;
-const HIIT_RE     = /\b(hiit|interval|fartlek|cardio[_ ]training)\b/i;
-const STRENGTH_RE = /\b(strength|weight|lifting|gym|hyrox|crossfit|circuit|resistance)\b/i;
+const RUN_RE      = /\b(run|jog|hiit|interval|tempo|trail|fartlek|sprint|track|jogging|running|hyrox)\b/i;
+// HYROX is mixed cardio + functional stations — counts as HIIT, not pure
+// strength. Anyone using Arnold's Workbench HYROX preset exports sport=hiit;
+// the name-based regex catches imported activities + manually-named ones.
+const HIIT_RE     = /\b(hiit|interval|fartlek|cardio[_ ]training|hyrox)\b/i;
+const STRENGTH_RE = /\b(strength|weight|lifting|gym|crossfit|circuit|resistance)\b/i;
 const MOBILITY_RE = /\b(mobility|stretch|stretching|yoga|pilates|flexibility|breathwork|meditation)\b/i;
 const CYCLING_RE  = /\b(cycle|cycling|bike|biking|spin)\b/i;
 const SWIM_RE     = /\b(swim|swimming|pool|open[_ ]water)\b/i;

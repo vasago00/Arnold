@@ -23,16 +23,12 @@
 // rest via the storage.js ENCRYPTED_COLLECTIONS registry.
 
 import { storage, KEYS } from './storage.js';
+import { localDate, ymd } from './time.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
 const CFG_ENDPOINT = 'arnold:cloud-sync:endpoint';
 const CFG_TOKEN    = 'arnold:cloud-sync:token';
-
-// Local date helper — avoids UTC rollover at midnight
-function localDate(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 // ── Auth getters / setters ──────────────────────────────────────────────────
 

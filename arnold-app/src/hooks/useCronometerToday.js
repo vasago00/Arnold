@@ -19,12 +19,9 @@ import {
   isConfigured,
   hasCronometerAuth,
 } from '../core/cronometer-client.js';
+import { localDate, ymd } from '../core/time.js';
 
 const POLL_MS = 5 * 60 * 1000; // 5 min — matches the Worker response cache
-
-function localDate(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 export default function useCronometerToday(dateStr) {
   const date = dateStr || localDate();

@@ -29,10 +29,9 @@ import { storage } from './storage.js';
 import { getGoals } from './goals.js';
 import { getAvgWeeklyTrainingHours } from './trainingStress.js';
 
-const SEVERITY_RANK = { critical: 4, warning: 3, info: 2, positive: 1 };
+import { localDate, ymd } from './time.js';
 
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const SEVERITY_RANK = { critical: 4, warning: 3, info: 2, positive: 1 };
 
 // ─── Rule helpers ──────────────────────────────────────────────────────────
 
@@ -264,7 +263,7 @@ function r_bodyTrendOffPace() {
   // Need ≥4 weeks of weight data to compare trend to target rate
   const today = localDate();
   const fourWeeksAgo = (() => {
-    const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 28); return localDate(d);
+    const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 28); return ymd(d);
   })();
   const trendNow = weightTrend(today);
   const trendThen = weightTrend(fourWeeksAgo);

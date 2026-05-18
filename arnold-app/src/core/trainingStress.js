@@ -15,10 +15,9 @@ import { isRun, isStrength } from './activityClass.js';
 import * as _dcyMathModule from './dcyMath.js';
 const _allActivitiesDeduped = () => _dcyMathModule.allActivities();
 
-// Local date helper (avoids UTC rollover — toISOString uses UTC, not local tz)
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 import { getGoals } from './goals.js';
+import { localDate, ymd } from './time.js';
+import { parseLocalDate } from './dateUtils.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -199,10 +198,11 @@ export function computeAcuteChronicRatio(activities, dateStr, ftpPace, maxHR) {
     return { acuteLoad: 0, chronicLoad: 0, ratio: null, zone: 'no_data' };
   }
 
-  const ref = new Date(dateStr);
+  const ref = parseLocalDate(dateStr);
+  if (!ref) return { acuteLoad: 0, chronicLoad: 0, ratio: null, zone: 'no_data' };
   const d7 = new Date(ref); d7.setDate(d7.getDate() - 7);
   const d28 = new Date(ref); d28.setDate(d28.getDate() - 28);
-  const fmt = d => localDate(d);
+  const fmt = d => ymd(d);
 
   const runs = activities.filter(a =>
     isRun(a) && a.avgPaceRaw && a.durationSecs
@@ -542,7 +542,7 @@ export function computeDailyScore(dateStr) {
     const days = [];
     for (let i = 0; i < n; i++) {
       const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - i);
-      days.push(localDate(d));
+      days.push(ymd(d));
     }
     return days;
   };
@@ -565,28 +565,31 @@ export function computeDailyScore(dateStr) {
 
   // ═══ ACTIVITY DOMAIN ═══════════════════════════════════════════════════════
 
-  // ── rTSS (direct deposit from today's run) ──
+  // ── rTSS (HR-anchored across all run types) ──
+  // Phase 4r.viz.26 — single methodology: hrTSS for ALL runs. HR is the
+  // honest signal of internal training stress; pace was a 2002-era proxy.
+  // We keep the "rTSS" label because users recognize it, but every number
+  // here comes from duration × (avgHR/thresholdHR)² scaled to a 0-200
+  // benchmark (100 = 1 hour at threshold HR).
   if (todayRuns.length > 0) {
-    // Sum rTSS across all runs today (some days have doubles)
-    let totalRTSS = 0;
+    let totalLoad = 0;
     for (const run of todayRuns) {
-      const { rTSS } = computeRTSS({
+      const { hrTSS } = computeHrTSS({
         durationSecs: run.durationSecs,
-        avgPaceRaw: run.avgPaceRaw,
-        avgHR: run.avgHeartRate || run.avgHR,
-        ftpPace, maxHR, thresholdHR,
+        avgHR:        run.avgHR || run.avgHeartRate,
+        maxHR, thresholdHR,
       });
-      totalRTSS += (rTSS || 0);
+      if (hrTSS) totalLoad += hrTSS;
     }
-    if (totalRTSS > 0) {
-      const val = Math.min(totalRTSS / RTSS_BENCHMARK, 1.2);
+    if (totalLoad > 0) {
+      const val = Math.min(totalLoad / RTSS_BENCHMARK, 1.2);
       buckets.activity.push({ val, w: FACTOR_W.rTSS });
       factors.push({
-        label: 'rTSS', value: `${Math.round(totalRTSS * 10) / 10}`, domain: 'activity',
+        label: 'rTSS', value: `${Math.round(totalLoad * 10) / 10}`, domain: 'activity',
         status: val >= 0.8 ? 'good' : val >= 0.5 ? 'warning' : 'poor',
       });
       sessionType = 'run';
-      sessionMetric = { label: 'rTSS', value: Math.round(totalRTSS * 10) / 10 };
+      sessionMetric = { label: 'rTSS', value: Math.round(totalLoad * 10) / 10 };
     }
   }
 
@@ -859,7 +862,7 @@ export function computeRolling7d(refDate) {
   for (let i = 0; i < 7; i++) {
     const d = new Date(today + 'T12:00:00');
     d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     daily.push(getDailyScoreCached(ds));
   }
 
@@ -904,7 +907,7 @@ export function computeRolling30d(refDate) {
   for (let i = 0; i < 30; i++) {
     const d = new Date(today + 'T12:00:00');
     d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     const s = getDailyScoreCached(ds);
     daily.push(s);
     if (s > 0) { sum += s; count++; }
@@ -948,7 +951,7 @@ export function getAvgWeeklyTrainingHours(weeks = 4, refDate) {
   for (let i = 0; i < days; i++) {
     const d = new Date(today + 'T12:00:00');
     d.setDate(d.getDate() - i);
-    windowDates.add(localDate(d));
+    windowDates.add(ymd(d));
   }
 
   let totalSeconds = 0;

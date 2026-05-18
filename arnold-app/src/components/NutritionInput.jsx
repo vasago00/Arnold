@@ -19,10 +19,7 @@ import {
   getEntriesForDate, dailyTotals, goalImpact,
   lookupBarcode, searchFood, calculatePortion, recognizeFoodPhoto,
 } from '../core/nutrition.js';
-
-// Local date helper — avoids UTC rollover bug with toISOString()
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+import { localDate, ymd } from '../core/time.js';
 import {
   getStack, getTodayTaken, takeAllInSlot, TIME_SLOTS,
 } from '../core/supplements.js';
@@ -180,9 +177,11 @@ function BowlDial({ value, target, family, unit, label, compact = false }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center',
-      // Phase 4r.fuel.20 — bumped column gap 4→8 so labels sit clearly
-      // below the bowl curve rather than visually touching it.
-      gap: 8, flex: 1, minWidth: 0,
+      // Phase 4r.fuel.21d — one more breath of vertical space per user
+      // visual review. 22→26 on mobile gap, label marginTop carries the
+      // rest of the lift (now 10, up from 6).
+      gap: compact ? 26 : 2,
+      flex: 1, minWidth: 0,
     }}>
       <div style={{
         position: 'relative',
@@ -269,6 +268,10 @@ function BowlDial({ value, target, family, unit, label, compact = false }) {
         </div>
       </div>
       <span style={{
+        // Phase 4r.fuel.21d — explicit block display + bumped marginTop
+        // on mobile so the label sits clearly below the bowl curve.
+        display: 'block',
+        marginTop: compact ? 10 : 0,
         fontSize: labelSize,
         color: 'var(--text-primary)',
         opacity: 0.9,
@@ -1430,34 +1433,28 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
             </>
           ) : null;
 
-          if (isMobile) {
-            return (
-              <div style={{display:'flex',flexDirection:'column',gap:1,marginBottom:hasAnyData?8:0,minWidth:0}}>
-                {/* Top row — title + sync button. Tighter spacing
-                    (Phase 4o.mobile.9) — was 3px gap / 10px marginBottom,
-                    now 1px gap / 8px marginBottom so the dial row sits
-                    closer to the header. */}
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
-                  <span style={{fontSize:14,fontWeight:500,color:'var(--text-primary)',whiteSpace:'nowrap'}}>Nutrition</span>
-                  {headerSlot}
-                </div>
-                {/* Stacked target line — below the title, smaller font */}
-                {targetInline && (
-                  <div style={{display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap',minWidth:0}}>
-                    {targetInline}
-                  </div>
-                )}
-              </div>
-            );
-          }
-
+          // Phase 4r.fuel.21 — unified header layout for web AND mobile.
+          // Previously mobile stacked the title above the target totals
+          // line in two rows; now both render inline like web, just with
+          // slightly smaller font sizes on mobile. Frees vertical space
+          // so the bowl row sits higher in the panel.
           return (
             <div style={{
               display:'flex',justifyContent:'space-between',alignItems:'baseline',
-              marginBottom: hasAnyData ? 12 : 0, gap:10, flexWrap:'wrap', minWidth:0,
+              marginBottom: hasAnyData ? (isMobile ? 10 : 12) : 0,
+              gap: isMobile ? 8 : 10, flexWrap:'wrap', minWidth:0,
             }}>
-              <div style={{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap',minWidth:0,flex:1}}>
-                <span style={{fontSize:15,fontWeight:500,color:'var(--text-primary)',whiteSpace:'nowrap'}}>Nutrition</span>
+              <div style={{
+                display:'flex',alignItems:'baseline',
+                gap: isMobile ? 6 : 10,
+                flexWrap:'wrap', minWidth:0, flex:1,
+              }}>
+                <span style={{
+                  fontSize: isMobile ? 14 : 15,
+                  fontWeight:500,
+                  color:'var(--text-primary)',
+                  whiteSpace:'nowrap',
+                }}>Nutrition</span>
                 {targetInline}
               </div>
               {headerSlot}
@@ -1467,8 +1464,11 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
 
         {hasAnyData && (
           <>
-            {/* Macro dials — pinned to the same dynamic targets as the header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 3, alignItems: 'stretch', marginBottom: 14 }}>
+            {/* Macro dials — pinned to the same dynamic targets as the header.
+                Phase 4r.fuel.21d — marginBottom bumped 14→20 so there's
+                more breathing room between the labels and the next
+                section (Micronutrients divider). */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 3, alignItems: 'stretch', marginBottom: 20 }}>
               <BowlDial value={totals.calories}
                 target={effGoals.dailyCalorieTarget}
                 family="calories" unit="kcal" label="Calories"

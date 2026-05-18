@@ -2,9 +2,7 @@
 // Pure deterministic analysis — no AI. Takes parsed Garmin history, returns insights.
 
 import { parseLocalDate } from './dateUtils.js';
-
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+import { localDate, ymd } from './time.js';
 
 /**
  * Get activities within a date range.
@@ -20,7 +18,7 @@ function weeksAgoRange(weekOffset = 0) {
   endOfWeek.setDate(now.getDate() - (dayOfWeek - 1) - weekOffset * 7 + 6);
   const startOfWeek = new Date(endOfWeek);
   startOfWeek.setDate(endOfWeek.getDate() - 6);
-  const fmt = d => localDate(d);
+  const fmt = d => ymd(d);
   // Clamp end to today
   const today = fmt(now);
   const end = fmt(endOfWeek) > today ? today : fmt(endOfWeek);
@@ -111,7 +109,7 @@ export function paceTrend(activities, activityType = 'Running') {
   const now = new Date();
   const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
   const d60 = new Date(now); d60.setDate(d60.getDate() - 60);
-  const fmt = d => localDate(d);
+  const fmt = d => ymd(d);
 
   const thisMonth = activitiesInRange(activities, fmt(d30), fmt(now))
     .filter(a => a.avgPacePerKm);
@@ -152,7 +150,7 @@ export function hrEfficiency(activities) {
   const now = new Date();
   const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
   const d60 = new Date(now); d60.setDate(d60.getDate() - 60);
-  const fmt = d => localDate(d);
+  const fmt = d => ymd(d);
 
   const calc = arr => {
     const valid = arr.filter(a => a.avgHR && a.distanceKm && a.durationSecs > 0);
@@ -191,7 +189,7 @@ export function hrEfficiency(activities) {
 export function trainingMonotony(activities) {
   const now = new Date();
   const d7 = new Date(now); d7.setDate(d7.getDate() - 7);
-  const fmt = d => localDate(d);
+  const fmt = d => ymd(d);
 
   // Build daily load array for last 7 days
   const dailyLoads = [];
@@ -239,7 +237,7 @@ export function raceReadiness(activities, raceDistanceKm, raceDateStr) {
 
   // Last 30 days of data
   const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
-  const fmt = d => localDate(d);
+  const fmt = d => ymd(d);
   const recent = activitiesInRange(activities, fmt(d30), fmt(now));
 
   // Metrics
@@ -299,7 +297,7 @@ export function trainingConsistency(activities, days = 30) {
   for (let i = 0; i < days; i++) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
 
     if (dateSet.has(ds)) {
       activeDays++;
@@ -316,7 +314,7 @@ export function trainingConsistency(activities, days = 30) {
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     if (dateSet.has(ds)) { streak++; longestStreak = Math.max(longestStreak, streak); }
     else { streak = 0; }
   }
@@ -347,7 +345,7 @@ export function buildTrainingContext(activities, races = [], workouts = []) {
     const pt = paceTrend(activities);
     const now = new Date();
     const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
-    const fmt = d => localDate(d);
+    const fmt = d => ymd(d);
     const recent = activities.filter(a => a.date >= fmt(d30) && a.date <= fmt(now));
     const totalKm = recent.reduce((s, a) => s + (a.distanceKm || 0), 0);
     const hrs = recent.filter(a => a.avgHR);

@@ -27,6 +27,9 @@ import { storage } from './storage.js';
 import { dailyTotals } from './nutrition.js';
 import { getGoals } from './goals.js';
 import { allActivities as allActivitiesDeduped } from './dcyMath.js';
+// Phase 4r.utc.2 — canonical helpers from core/time.js.
+import { localDate, ymd } from './time.js';
+import { parseLocalDate } from './dateUtils.js';
 
 const LB_PER_KG       = 2.20462;
 const KG_PER_LB       = 0.45359;
@@ -37,9 +40,8 @@ const NEAT_FACTOR_DEFAULT = 0.13;      // ~13% of RMR for moderately active
 const NEAT_FACTOR_MIN     = 0.08;      // sedentary floor
 const NEAT_FACTOR_MAX     = 0.25;      // very active ceiling
 
-// Local date helper
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// Phase 4r.utc.2 — localDate / ymd now imported from ./time.js
+// (canonical). Use localDate() for today, ymd(d) for any Date.
 
 // ─── BODY COMPOSITION SOURCES ───────────────────────────────────────────────
 
@@ -166,8 +168,8 @@ export function computeRMR() {
     || 178;
   const age = (() => {
     if (profile.birthDate) {
-      const bd = new Date(profile.birthDate);
-      if (!isNaN(bd)) return Math.max(18, new Date().getFullYear() - bd.getFullYear());
+      const bd = parseLocalDate(profile.birthDate);
+      if (bd && !isNaN(bd)) return Math.max(18, new Date().getFullYear() - bd.getFullYear());
     }
     return parseInt(profile.age) || 35;
   })();
@@ -325,7 +327,7 @@ export function predictedWeightChange(startDate, endDate) {
   const end   = new Date(endDate   + 'T12:00:00');
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     totalDays++;
-    const ds = localDate(d);
+    const ds = ymd(d);
     const bal = dailyEnergyBalance(ds);
     if (bal.intake > 0) {
       cumDeficit += bal.deficit;
@@ -382,7 +384,7 @@ export function assessCalibration(opts = {}) {
   const startDate = (() => {
     const d = new Date(endDate + 'T12:00:00');
     d.setDate(d.getDate() - weeks * 7);
-    return localDate(d);
+    return ymd(d);
   })();
 
   const predicted = predictedWeightChange(startDate, endDate);
@@ -639,7 +641,7 @@ export function empiricalTDEE(opts = {}) {
   const startDate = (() => {
     const d = new Date(endDate + 'T12:00:00');
     d.setDate(d.getDate() - weeks * 7);
-    return localDate(d);
+    return ymd(d);
   })();
 
   // Sum logged intake across the window — only days with intake count
@@ -650,7 +652,7 @@ export function empiricalTDEE(opts = {}) {
   const end   = new Date(endDate   + 'T12:00:00');
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     totalDays++;
-    const ds = localDate(d);
+    const ds = ymd(d);
     let cal = 0;
     try { cal = parseFloat(dailyTotals(ds)?.calories) || 0; } catch {}
     if (cal > 0) {
@@ -742,7 +744,7 @@ export function recommendCalorieTarget(opts = {}) {
   let daysCounted = 0;
   for (let i = 0; i < 28; i++) {
     const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - i);
-    const ds = localDate(d);
+    const ds = ymd(d);
     const k = dailyActivityCalories(ds);
     if (k > 0) { activityKcalSum += k; daysCounted++; }
   }

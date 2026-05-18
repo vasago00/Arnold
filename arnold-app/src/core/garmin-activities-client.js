@@ -330,7 +330,9 @@ export async function reBinActivitiesWithBpmZones({ daysBack = 30, onProgress, f
   const targets = all.filter(a => {
     if (!a?.source?.activityId) return false;     // only worker-imported re-fetchable
     if (!a?.date) return false;
-    if (new Date(a.date).getTime() < cutoffMs) return false;
+    // Phase 4r.utc.1 — anchor at noon-local to avoid UTC-midnight shift
+    // that bumped boundary-day activities outside the cutoff window.
+    if (new Date(a.date + 'T12:00:00').getTime() < cutoffMs) return false;
     if (force) return true;
     return a.hrZonesScheme !== 'bpm-custom';
   });
@@ -387,7 +389,9 @@ export async function enrichRecentActivitiesWithDetails({ daysBack = 14, onProgr
   const targets = all.filter(a => {
     if (!a?.source?.activityId) return false; // only worker-imported can be enriched
     if (!a?.date) return false;
-    if (new Date(a.date).getTime() < cutoffMs) return false;
+    // Phase 4r.utc.1 — anchor at noon-local to avoid UTC-midnight shift
+    // that bumped boundary-day activities outside the cutoff window.
+    if (new Date(a.date + 'T12:00:00').getTime() < cutoffMs) return false;
     if (force) return true;
     return a.hrZones == null || a.totalTrainingLoad == null;
   });

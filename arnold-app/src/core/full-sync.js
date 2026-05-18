@@ -27,6 +27,7 @@ import { pull as cloudPull, push as cloudPush } from './cloud-sync.js';
 const THRESHOLDS = {
   garminActivities: 30 * 60 * 1000, // 30 min
   garminWellness:   30 * 60 * 1000, // 30 min
+  garminWeight:     30 * 60 * 1000, // 30 min — mirrors the client-side TTL
   cronometer:       15 * 60 * 1000, // 15 min
   fitRelay:          5 * 60 * 1000, //  5 min
   // cloudSync push/pull have no threshold — always run, they're cheap
@@ -187,6 +188,36 @@ export async function syncEverything({ force = false } = {}) {
     })());
   } else {
     skippedFresh.push('cronometer');
+  }
+
+  // Garmin Weight (body-composition readings — Phase 4r.energy.7)
+  // First-class source so pull-to-refresh actually re-syncs weight. The
+  // client has its own identical TTL gate; force:true bypasses both. Skip
+  // result with `skipped: 'fresh'` indicates the client's TTL gate fired,
+  // which we surface as a fresh-skip here too.
+  if (force || !isFresh('garminWeight')) {
+    tasks.push((async () => {
+      try {
+        const { syncRecentWeight } = await import('./garmin-weight-client.js');
+        const r = await syncRecentWeight({ daysBack: 30, force });
+        results.garminWeight = r;
+        if (r?.ok && r?.skipped !== 'fresh') {
+          ranSources.push('garminWeight');
+          markRan('garminWeight', true, { added: r.added || 0, replaced: r.replaced || 0 });
+        } else if (r?.skipped === 'fresh') {
+          skippedFresh.push('garminWeight');
+        } else if (r?.error === 'not_configured' || r?.error === 'no_config') {
+          skippedNotConfigured.push('garminWeight');
+        } else {
+          markRan('garminWeight', false, { error: r?.error });
+        }
+      } catch (e) {
+        results.garminWeight = { ok: false, error: e?.message || String(e) };
+        markRan('garminWeight', false);
+      }
+    })());
+  } else {
+    skippedFresh.push('garminWeight');
   }
 
   // FIT relay (phone-paired pulls)

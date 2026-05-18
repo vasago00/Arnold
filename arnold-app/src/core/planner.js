@@ -5,19 +5,17 @@
 import { storage } from "./storage.js";
 import { weekStart } from "./derive/volume.js";
 import { isRun, isStrength } from "./activityClass.js";
-
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+import { localDate, ymd } from "./time.js";
 
 // ─── ISO week key ────────────────────────────────────────────────────────────
 export function weekKey(date = new Date()) {
-  return localDate(weekStart(date));
+  return ymd(weekStart(date));
 }
 
 export function nextWeekKey(date = new Date()) {
   const ws = weekStart(date);
   ws.setDate(ws.getDate() + 7);
-  return localDate(ws);
+  return ymd(ws);
 }
 
 // ─── Day record ──────────────────────────────────────────────────────────────
