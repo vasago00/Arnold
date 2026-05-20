@@ -107,7 +107,7 @@ function MiniHive({ items, color }) {
               strokeWidth={1.2}
               strokeDasharray={filled ? undefined : '2 2'}
             />
-            <text y="1" fill={filled ? color : '#94a3b8'} fontSize={8}>{code}</text>
+            <text y="0" dominantBaseline="central" fill={filled ? color : '#94a3b8'} fontSize={8}>{code}</text>
           </g>
         );
       })}
@@ -161,4 +161,4 @@ export function BioactiveStack({ items }) {
   );
 }
 
-export default BioactiveStack;
+expo

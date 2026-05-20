@@ -157,11 +157,11 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
 
       <div style={{
         background: isDeficit ? 'rgba(248,113,113,0.10)' : 'rgba(74,222,128,0.10)',
-        borderRadius: 6, padding: '10px 12px',
+        borderRadius: 5, padding: '5px 10px',
         borderLeft: `2px solid ${isDeficit ? '#f87171' : '#4ade80'}`,
-        marginBottom: 14,
+        marginBottom: 12,
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{
             fontSize: 9, color: isDeficit ? '#fecaca' : '#bbf7d0',
             letterSpacing: '0.10em', textTransform: 'uppercase', fontWeight: 500,
@@ -169,8 +169,8 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
             {isDeficit ? 'Deficit' : 'Surplus'}
           </div>
           <div style={{
-            fontSize: 22, color: isDeficit ? '#f87171' : '#4ade80',
-            fontWeight: 500, fontFamily: 'ui-monospace, monospace',
+            fontSize: 16, color: isDeficit ? '#f87171' : '#4ade80',
+            fontWeight: 500, fontFamily: 'ui-monospace, monospace', lineHeight: 1,
           }}>
             {net >= 0 ? '+' : ''}{formatKcal(net)}
           </div>
@@ -223,4 +223,4 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
   );
 }
 
-export default EnergyTimingChart;
+export default EnergyT
