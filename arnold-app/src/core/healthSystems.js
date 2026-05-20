@@ -584,11 +584,18 @@ export function getMicronutrientSummary(dateStr) {
     else source = 'food';
     contribMap[name] = source;
 
+    // Phase 4r.fuel.2 — split foodPct vs suppPct so the ring can show
+    // where food alone got you vs how much the supplement added.
+    const foodPct = target ? Math.round((foodVal / target) * 100) : 0;
+    const suppPct = Math.max(0, Math.round(pct) - foodPct);
+
     list.push({
       name,
       value: Math.round(val * 10) / 10,
       target,
       pct: Math.round(pct),
+      foodPct,
+      suppPct,
       source,
     });
   }

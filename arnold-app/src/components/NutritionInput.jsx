@@ -26,6 +26,7 @@ import {
 // Note: getCatalog & toggleTaken removed — no longer needed here.
 // Editing happens in SupplementsTab (Stack tab under More).
 import { getSystemsReport, getMicronutrientSummary } from '../core/healthSystems.js';
+import { MicroRingGrid } from './MicroRing.jsx';
 
 // ─── Shared panel styling (uses CSS vars to match Activity panel in Daily Log) ─
 const panelStyle = {
@@ -585,66 +586,17 @@ function HealthSystemsGrid({ dateStr, refreshKey }) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Micronutrients — food + supplement combined, bars w/ source
+// Micronutrients — Phase 4r.fuel.2 ring redesign with food/supp split marker
 // ═════════════════════════════════════════════════════════════════════════════
 function MicronutrientsPanel({ dateStr, refreshKey }) {
   const list = useMemo(() => getMicronutrientSummary(dateStr), [dateStr, refreshKey]);
-  const pctColor = (p) => p >= 80 ? '#4ade80' : p >= 50 ? '#fbbf24' : '#f87171';
-  const barGrad = (p) =>
-    p >= 80 ? 'linear-gradient(90deg, #4ade80, #2dd4bf)'
-    : p >= 50 ? 'linear-gradient(90deg, #fbbf24, #fb923c)'
-    : 'linear-gradient(90deg, #f87171, #fb923c)';
-
   return (
     <>
       <div style={sectionLabel}>
         <span style={sectionDot('#22d3ee')} />
         Micronutrients · food + supplements
       </div>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(125px, 1fr))',
-        gap: 7,
-      }}>
-        {list.map(n => (
-          <div key={n.name} style={{
-            padding: '7px 9px',
-            background: 'var(--bg-elevated)',
-            border: '0.5px solid var(--border-subtle)',
-            borderRadius: 9,
-          }}>
-            <div style={{
-              display: 'flex', justifyContent: 'space-between',
-              alignItems: 'baseline', marginBottom: 4,
-            }}>
-              <span style={{
-                fontSize: 10, color: 'var(--text-primary)',
-                fontWeight: 500,
-              }}>{n.name}</span>
-              <span style={{
-                fontSize: 9, color: pctColor(n.pct),
-                fontWeight: 600,
-              }}>{n.pct}%</span>
-            </div>
-            <div style={{
-              height: 3, borderRadius: 2,
-              background: 'var(--bg-input)',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                width: `${Math.min(n.pct, 100)}%`,
-                height: '100%', borderRadius: 2,
-                background: barGrad(n.pct),
-                transition: 'width 0.4s ease',
-              }}/>
-            </div>
-            <div style={{
-              fontSize: 8, color: 'var(--text-muted)',
-              marginTop: 3, fontStyle: 'italic',
-            }}>{n.source}</div>
-          </div>
-        ))}
-      </div>
+      <MicroRingGrid items={list} />
     </>
   );
 }
