@@ -963,6 +963,28 @@ export function getSystemsReport(dateStr) {
   });
 }
 
+// ─── Detailed breakdown for a single system ────────────────────────────────
+// Returns per-nutrient scores, targets, and values for the expanded tile view.
+export function getSystemDetail(systemId, dateStr) {
+  const sys = SYSTEMS.find(s => s.id === systemId);
+  if (!sys) return null;
+  const { nutrients, dateUsed } = findBestNutrientDate(dateStr);
+  const targets = getOptimalTargets(dateUsed);
+  const { pct: systemPct } = scoreSystem(sys, nutrients, dateUsed);
+  const details = [];
+  for (const [nutr, weight] of Object.entries(sys.weights)) {
+    let value = nutrients[nutr] || 0;
+    if (nutr === 'Vitamin D')    value += nutrients['Vitamin D3 (cholecalciferol)'] || 0;
+    if (nutr === 'Vitamin B12')  value += nutrients['Vitamin B12 (methylcobalamin)'] || 0;
+    if (nutr === 'Magnesium')    value += nutrients['Elemental Magnesium'] || 0;
+    const target = targets[nutr] || 100;
+    const pct = Math.round(Math.min(value / target, 1.2) * 100);
+    details.push({ nutrient: nutr, short: shortName(nutr), value: Math.round(value), target: Math.round(target), pct, weight });
+  }
+  details.sort((a, b) => a.pct - b.pct);
+  return { system: { ...sys, pct: systemPct }, details };
+}
+
 // ─── EdgeIQ debug helper (window.edgeIQDebug) ──────────────────────────────
 // Prints the full per-system per-nutrient breakdown so you can see exactly
 // which nutrient is dragging a system score down — including raw value,
@@ -977,20 +999,40 @@ export function edgeIQDebug(dateStr) {
   const targets = getOptimalTargets(today);
   console.log('%c=== EdgeIQ DEBUG · ' + today + ' ===', 'color:#6fd4e4;font-weight:700');
   console.log('Daily nutrients (food + supplements taken):', nutrients);
-  for (const [nutr, weight] of Object.entries(sys.weights)) {
-    let value = nutrients[nutr] || 0;
-    if (nutr === 'Vitamin D')    value += nutrients['Vitamin D3 (cholecalciferol)'] || 0;
-    if (nutr === 'Vitamin B12')  value += nutrients['Vitamin B12 (methylcobalamin)'] || 0;
-    if (nutr === 'Magnesium')    value += nutrients['Elemental Magnesium'] || 0;
-    const target = targets[nutr] || 100;
-    const pct = Math.round(Math.min(value / target, 1.2) * 100);
-    details.push({ nutrient: nutr, short: shortName(nutr), value: Math.round(value), target: Math.round(target), pct, weight });
+  for (const sys of SYSTEMS) {
+    const { pct } = scoreSystem(sys, nutrients, today);
+    console.log(`%c${sys.name} — ${pct}%`, 'color:#9ece6a;font-weight:700');
+    const rows = [];
+    for (const [nutr, w] of Object.entries(sys.weights)) {
+      let value = nutrients[nutr] || 0;
+      if (nutr === 'Vitamin D')   value += nutrients['Vitamin D3 (cholecalciferol)'] || 0;
+      if (nutr === 'Vitamin B12') value += nutrients['Vitamin B12 (methylcobalamin)'] || 0;
+      if (nutr === 'Magnesium')   value += nutrients['Elemental Magnesium'] || 0;
+      const target = targets[nutr] || 100;
+      const npct = Math.round(Math.min(value / target, 1.2) * 100);
+      rows.push({ nutrient: nutr, value: Math.round(value*100)/100, target: Math.round(target), pct: npct, weight: w });
+    }
+    console.table(rows);
   }
-  details.sort((a, b) => a.pct - b.pct); // worst first
-  return { system: { ...sys, pct: systemPct }, details };
+  // Surface ALL nutrient keys that are NON-ZERO but NOT referenced by any
+  // SYSTEMS weight — these are orphan keys (catalog name didn't normalize
+  // to a SYSTEMS canonical key).
+  const referenced = new Set();
+  for (const sys of SYSTEMS) for (const k of Object.keys(sys.weights)) referenced.add(k);
+  // Implicit aliases scoreSystem checks
+  referenced.add('Vitamin D3 (cholecalciferol)');
+  referenced.add('Vitamin B12 (methylcobalamin)');
+  referenced.add('Elemental Magnesium');
+  const orphans = Object.entries(nutrients)
+    .filter(([k, v]) => v > 0 && !referenced.has(k))
+    .map(([k, v]) => ({ name: k, value: Math.round(v*100)/100 }));
+  if (orphans.length) {
+    console.log('%cORPHAN nutrients (have value but no SYSTEMS weight references them):', 'color:#f87171;font-weight:700');
+    console.table(orphans);
+  }
 }
+if (typeof window !== 'undefined') window.edgeIQDebug = edgeIQDebug;
 
-// ─── Weekly system scores (last 7 days) ────────────────────────────────────
 export function getSystemWeekly(systemId) {
   const sys = SYSTEMS.find(s => s.id === systemId);
   if (!sys) return [];
