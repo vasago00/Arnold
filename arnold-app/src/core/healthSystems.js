@@ -541,11 +541,29 @@ export function getMicronutrientSummary(dateStr) {
     }
   }
 
+  // Phase 4r.fuel.3 — expanded essentials. Vitamins + minerals + EFAs that have
+  // published RDAs / functional-medicine targets. Bioactives (NMN, Quercetin,
+  // Resv, TMG, etc.) live in a separate panel — they don't have % targets.
   const show = [
-    'Vitamin D', 'Vitamin C', 'Vitamin B12', 'Folate', 'Vitamin K',
-    'Iron', 'Calcium', 'Magnesium', 'Zinc', 'Selenium', 'Potassium',
+    // Vitamins
+    'Vitamin A', 'Vitamin C', 'Vitamin D', 'Vitamin E', 'Vitamin K',
+    'Thiamin (B1)', 'Riboflavin (B2)', 'Niacin (B3)', 'Vitamin B6',
+    'Folate', 'Vitamin B12',
+    // Minerals
+    'Calcium', 'Iron', 'Magnesium', 'Zinc', 'Selenium', 'Potassium', 'Copper',
+    // Essential fats
     'EPA', 'DHA',
   ];
+  // 2-letter abbreviations for dense (7-col) layout
+  const ABBR = {
+    'Vitamin A': 'VA', 'Vitamin C': 'VC', 'Vitamin D': 'VD',
+    'Vitamin E': 'VE', 'Vitamin K': 'VK',
+    'Thiamin (B1)': 'B1', 'Riboflavin (B2)': 'B2', 'Niacin (B3)': 'B3',
+    'Vitamin B6': 'B6', 'Folate': 'Fo', 'Vitamin B12': 'B12',
+    'Calcium': 'Ca', 'Iron': 'Fe', 'Magnesium': 'Mg', 'Zinc': 'Zn',
+    'Selenium': 'Se', 'Potassium': 'K', 'Copper': 'Cu',
+    'EPA': 'EPA', 'DHA': 'DHA',
+  };
   const list = [];
   for (const name of show) {
     // Look up value: allow aliases (e.g. "Vitamin D3 (cholecalciferol)" counts for "Vitamin D")
@@ -591,6 +609,7 @@ export function getMicronutrientSummary(dateStr) {
 
     list.push({
       name,
+      abbr: ABBR[name] || name.slice(0, 2),
       value: Math.round(val * 10) / 10,
       target,
       pct: Math.round(pct),
@@ -600,6 +619,76 @@ export function getMicronutrientSummary(dateStr) {
     });
   }
   return list;
+}
+
+// ─── Bioactive Stack Summary — Phase 4r.fuel.3 ──────────────────────────────
+// Longevity & sports bioactives (NMN, Quercetin, Resv, TMG, Apigenin, Spermidine,
+// Fisetin, Mg Threonate, Ashwagandha, Curcumin, Beetroot, Shilajit, Creatine,
+// Fish Oil). These don't have RDAs — we surface them as "taken / not taken
+// today" + dose against the user's protocol target.
+export function getBioactiveStack(dateStr) {
+  const taken = getTodayTaken(dateStr);
+  const stack = getStack();
+  const catalog = getCatalog();
+  const byId = Object.fromEntries(catalog.map(s => [s.id, s]));
+
+  // Which compounds count as "bioactives" — match by NUTRIENT_MODELS names
+  // and also catch shorthand display labels.
+  const BIO_NAMES = new Set([
+    'NMN (Nicotinamide Mononucleotide)',
+    'Trans-Resveratrol',
+    'Spermidine (wheat germ extract)',
+    'Quercetin',
+    'Fisetin',
+    'Turmeric (curcumin extract)',
+    'Beetroot powder concentrate',
+    'Ashwagandha (KSM-66)',
+    'Magnesium L-Threonate (Magtein)',
+    'Apigenin',
+    'Trimethylglycine (TMG/Betaine anhydrous)',
+    'Shilajit resin',
+    'Creatine',
+    'Fish Oil (total)',
+  ]);
+  const SHORT = {
+    'NMN (Nicotinamide Mononucleotide)': 'NMN',
+    'Trans-Resveratrol': 'Resveratrol',
+    'Spermidine (wheat germ extract)': 'Spermidine',
+    'Turmeric (curcumin extract)': 'Curcumin',
+    'Beetroot powder concentrate': 'Beetroot',
+    'Ashwagandha (KSM-66)': 'Ashwagandha',
+    'Magnesium L-Threonate (Magtein)': 'Mg Threonate',
+    'Trimethylglycine (TMG/Betaine anhydrous)': 'TMG',
+    'Shilajit resin': 'Shilajit',
+    'Fish Oil (total)': 'Fish Oil',
+  };
+
+  // Walk the user's stack; for each entry that contains a bioactive, sum
+  // the dose taken today and produce one row per compound.
+  const byCompound = {};
+  for (const entry of stack) {
+    const sup = byId[entry.supplementId];
+    if (!sup) continue;
+    const isTaken = !!taken[entry.id];
+    const mult = entry.doseMultiplier || 1;
+    for (const n of sup.nutrients || []) {
+      if (!BIO_NAMES.has(n.name)) continue;
+      const amt = (n.amount || 0) * mult;
+      if (!byCompound[n.name]) {
+        byCompound[n.name] = { name: n.name, doseTaken: 0, doseTarget: 0, taken: false, unit: n.unit || 'mg' };
+      }
+      byCompound[n.name].doseTarget += amt;
+      if (isTaken) {
+        byCompound[n.name].doseTaken += amt;
+        byCompound[n.name].taken = true;
+      }
+    }
+  }
+
+  // Sort by stack order (most-taken first, then alpha)
+  return Object.values(byCompound)
+    .map(c => ({ ...c, label: SHORT[c.name] || c.name }))
+    .sort((a, b) => (b.taken ? 1 : 0) - (a.taken ? 1 : 0) || a.label.localeCompare(b.label));
 }
 
 // ─── 10 Health Systems ──────────────────────────────────────────────────────
@@ -853,49 +942,6 @@ export function edgeIQDebug(dateStr) {
   const targets = getOptimalTargets(today);
   console.log('%c=== EdgeIQ DEBUG · ' + today + ' ===', 'color:#6fd4e4;font-weight:700');
   console.log('Daily nutrients (food + supplements taken):', nutrients);
-  for (const sys of SYSTEMS) {
-    const { pct } = scoreSystem(sys, nutrients, today);
-    console.log(`%c${sys.name} — ${pct}%`, 'color:#9ece6a;font-weight:700');
-    const rows = [];
-    for (const [nutr, w] of Object.entries(sys.weights)) {
-      let value = nutrients[nutr] || 0;
-      if (nutr === 'Vitamin D')   value += nutrients['Vitamin D3 (cholecalciferol)'] || 0;
-      if (nutr === 'Vitamin B12') value += nutrients['Vitamin B12 (methylcobalamin)'] || 0;
-      if (nutr === 'Magnesium')   value += nutrients['Elemental Magnesium'] || 0;
-      const target = targets[nutr] || 100;
-      const npct = Math.round(Math.min(value / target, 1.2) * 100);
-      rows.push({ nutrient: nutr, value: Math.round(value*100)/100, target: Math.round(target), pct: npct, weight: w });
-    }
-    console.table(rows);
-  }
-  // Surface ALL nutrient keys that are NON-ZERO but NOT referenced by any
-  // SYSTEMS weight — these are orphan keys (catalog name didn't normalize
-  // to a SYSTEMS canonical key).
-  const referenced = new Set();
-  for (const sys of SYSTEMS) for (const k of Object.keys(sys.weights)) referenced.add(k);
-  // Implicit aliases scoreSystem checks
-  referenced.add('Vitamin D3 (cholecalciferol)');
-  referenced.add('Vitamin B12 (methylcobalamin)');
-  referenced.add('Elemental Magnesium');
-  const orphans = Object.entries(nutrients)
-    .filter(([k, v]) => v > 0 && !referenced.has(k))
-    .map(([k, v]) => ({ name: k, value: Math.round(v*100)/100 }));
-  if (orphans.length) {
-    console.log('%cORPHAN nutrients (have value but no SYSTEMS weight references them):', 'color:#f87171;font-weight:700');
-    console.table(orphans);
-  }
-}
-if (typeof window !== 'undefined') window.edgeIQDebug = edgeIQDebug;
-
-// ─── Detailed breakdown for a single system ────────────────────────────────
-// Returns per-nutrient scores, targets, and values for the expanded tile view.
-export function getSystemDetail(systemId, dateStr) {
-  const sys = SYSTEMS.find(s => s.id === systemId);
-  if (!sys) return null;
-  const { nutrients, dateUsed } = findBestNutrientDate(dateStr);
-  const targets = getOptimalTargets(dateUsed);
-  const { pct: systemPct } = scoreSystem(sys, nutrients, dateUsed);
-  const details = [];
   for (const [nutr, weight] of Object.entries(sys.weights)) {
     let value = nutrients[nutr] || 0;
     if (nutr === 'Vitamin D')    value += nutrients['Vitamin D3 (cholecalciferol)'] || 0;

@@ -507,15 +507,35 @@ export function getDynamicCalorieTarget(dateStr, opts = {}) {
   const date = dateStr || localDate();
   const eatBackPct = opts.eatBackPct ?? 0.75;
 
-  // Pull baseline from canonical getGoals() — applies user-set values, then
-  // profile fallback, then the configured defaults. Never read storage.get
-  // directly here because derived macro fields and field defaults won't be
-  // present in raw storage.
+  // Phase 4r.fuel.3 — baseline now computed from RMR (Katch-McArdle or
+  // Mifflin-St Jeor fallback) + NEAT + TEF, NOT from the static
+  // goals.dailyCalorieTarget. That static value was a "cut" target (e.g.
+  // 1750) and didn't reflect today's actual metabolic floor. With the new
+  // baseline, the morning floor on a rest day for an active athlete is
+  // ~2100-2400, and activity adds eat-back on top.
+  //
+  // Fallback chain:
+  //   1. Computed: rmr + neatKcal + tefKcal (excluding activity, since
+  //      eatBack handles that separately).
+  //   2. goals.dailyCalorieTarget — user-set override.
+  //   3. 2000 — last-resort floor.
   let baseline = 2000;
   try {
-    const goals = getGoals();
-    baseline = parseFloat(goals.dailyCalorieTarget) || 2000;
-  } catch { /* ignore */ }
+    const t = computeTDEE(date);
+    const rmrBaseline = t && Number(t.rmr) + Number(t.neatKcal || 0) + Number(t.tefKcal || 0);
+    if (Number.isFinite(rmrBaseline) && rmrBaseline > 1200) {
+      baseline = Math.round(rmrBaseline);
+    } else {
+      const goals = getGoals();
+      const staticTarget = parseFloat(goals.dailyCalorieTarget);
+      if (Number.isFinite(staticTarget) && staticTarget > 1000) baseline = staticTarget;
+    }
+  } catch {
+    try {
+      const goals = getGoals();
+      baseline = parseFloat(goals.dailyCalorieTarget) || 2000;
+    } catch { /* ignore */ }
+  }
 
   const activityKcal = dailyActivityCalories(date);
   const eatBackKcal = Math.round(activityKcal * eatBackPct);

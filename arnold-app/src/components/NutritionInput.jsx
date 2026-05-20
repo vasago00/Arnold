@@ -25,8 +25,9 @@ import {
 } from '../core/supplements.js';
 // Note: getCatalog & toggleTaken removed — no longer needed here.
 // Editing happens in SupplementsTab (Stack tab under More).
-import { getSystemsReport, getMicronutrientSummary } from '../core/healthSystems.js';
+import { getSystemsReport, getMicronutrientSummary, getBioactiveStack } from '../core/healthSystems.js';
 import { MicroRingGrid } from './MicroRing.jsx';
+import { BioactiveStack } from './BioactiveStack.jsx';
 
 // ─── Shared panel styling (uses CSS vars to match Activity panel in Daily Log) ─
 const panelStyle = {
@@ -590,13 +591,23 @@ function HealthSystemsGrid({ dateStr, refreshKey }) {
 // ═════════════════════════════════════════════════════════════════════════════
 function MicronutrientsPanel({ dateStr, refreshKey }) {
   const list = useMemo(() => getMicronutrientSummary(dateStr), [dateStr, refreshKey]);
+  const bio = useMemo(() => getBioactiveStack(dateStr), [dateStr, refreshKey]);
   return (
     <>
       <div style={sectionLabel}>
         <span style={sectionDot('#22d3ee')} />
         Micronutrients · food + supplements
       </div>
-      <MicroRingGrid items={list} />
+      <MicroRingGrid items={list} compact />
+      {bio && bio.length > 0 && (
+        <>
+          <div style={{ ...sectionLabel, marginTop: 14 }}>
+            <span style={sectionDot('#5eead4')} />
+            Bioactive stack · taken today
+          </div>
+          <BioactiveStack items={bio} />
+        </>
+      )}
     </>
   );
 }
