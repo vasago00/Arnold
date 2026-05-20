@@ -168,6 +168,7 @@ export function CalendarTab({ showToast }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [icsOpen, setIcsOpen] = useState(false);
+  const [planPickerOpen, setPlanPickerOpen] = useState(false);  // Phase 4r.calendar.33
   const [tick, setTick] = useState(0);
 
   // Load races on mount and after any add/remove.
@@ -342,6 +343,7 @@ export function CalendarTab({ showToast }) {
               races={racesByDate.get(selectedDate) || []}
               onClose={() => setDrawerOpen(false)}
               onAddRace={() => setPickerOpen(true)}
+              onAddPlan={() => setPlanPickerOpen(true)}
               onManualAdd={() => setManualOpen(true)}
               onIcsImport={() => setIcsOpen(true)}
               onDeleteRace={(id) => {
@@ -365,6 +367,7 @@ export function CalendarTab({ showToast }) {
             planned={plannerByDate.get(selectedDate) || null}
             races={racesByDate.get(selectedDate) || []}
             onAddRace={() => setPickerOpen(true)}
+            onAddPlan={() => setPlanPickerOpen(true)}
             onManualAdd={() => setManualOpen(true)}
             onIcsImport={() => setIcsOpen(true)}
             onDeleteRace={(id) => {
@@ -373,6 +376,32 @@ export function CalendarTab({ showToast }) {
             }}
           />
         </div>
+      )}
+
+      {planPickerOpen && (
+        <PlanPickerModal
+          dateStr={selectedDate}
+          onClose={() => setPlanPickerOpen(false)}
+          onPick={(type) => {
+            try {
+              const wk = weekKey(new Date(selectedDate + 'T12:00:00'));
+              const week = getPlannerWeek(wk);
+              const monday = new Date(wk + 'T12:00:00');
+              const idx = Math.floor(
+                (new Date(selectedDate + 'T12:00:00') - monday) / 86400000
+              );
+              if (idx >= 0 && idx < 7) {
+                const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
+                while (days.length < 7) days.push({ type: 'rest' });
+                days[idx] = { ...(days[idx] || {}), type };
+                savePlannerWeek(wk, { ...week, days });
+              }
+            } catch (e) { console.warn('[calendar] plan save failed:', e); }
+            setPlanPickerOpen(false);
+            setTick(t => t + 1);
+            showToast?.(`Planned ${prettyFamily(type)}`);
+          }}
+        />
       )}
 
       {pickerOpen && (
@@ -1146,7 +1175,7 @@ function ThreeDomainCell({ label, value, color }) {
 
 // ── Day drawer ──────────────────────────────────────────────────────────────
 
-function DayDrawer({ dateStr, activities, planned, races, onAddRace, onManualAdd, onIcsImport, onDeleteRace, onClose }) {
+function DayDrawer({ dateStr, activities, planned, races, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose }) {
   const d = new Date(dateStr + 'T12:00:00');
   const dateLabel = d.toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
@@ -1320,16 +1349,30 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onManualAdd
               }} title="Remove race">✕</button>
             )}
           </div>
-        ) : !isPast && onAddRace ? (
-          <button onClick={onAddRace} className="arnold-compact-btn" style={{
-            all: 'unset', cursor: 'pointer',
-            fontSize: 11, fontWeight: 500,
-            padding: '3px 10px', borderRadius: 999,
-            color: '#60a5fa',
-            background: 'rgba(96,165,250,0.10)',
-            border: '0.5px solid rgba(96,165,250,0.30)',
-            flexShrink: 0,
-          }}>+ Add race</button>
+        ) : !isPast ? (
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+            {/* Phase 4r.calendar.33 — +Plan opens the workout picker. */}
+            {onAddPlan && (
+              <button onClick={onAddPlan} className="arnold-compact-btn" style={{
+                all: 'unset', cursor: 'pointer',
+                fontSize: 11, fontWeight: 500,
+                padding: '3px 10px', borderRadius: 999,
+                color: '#a78bfa',
+                background: 'rgba(167,139,250,0.10)',
+                border: '0.5px solid rgba(167,139,250,0.30)',
+              }}>+ Plan</button>
+            )}
+            {onAddRace && (
+              <button onClick={onAddRace} className="arnold-compact-btn" style={{
+                all: 'unset', cursor: 'pointer',
+                fontSize: 11, fontWeight: 500,
+                padding: '3px 10px', borderRadius: 999,
+                color: '#60a5fa',
+                background: 'rgba(96,165,250,0.10)',
+                border: '0.5px solid rgba(96,165,250,0.30)',
+              }}>+ Add race</button>
+            )}
+          </div>
         ) : null}
         {onClose && (
           <button onClick={onClose} title="Close detail panel" style={{
@@ -1739,6 +1782,76 @@ function EmptyHint({ children }) {
   );
 }
 
+// ── Plan picker modal (Phase 4r.calendar.33) ────────────────────────────────
+// Lightweight workout-category picker. Lists Arnold's standard families;
+// tapping one saves it to the planner for the selected date.
+
+function PlanPickerModal({ dateStr, onClose, onPick }) {
+  const OPTIONS = [
+    { type: 'easy_run',  label: 'Easy run',  color: '#60a5fa', desc: 'Z2 aerobic base' },
+    { type: 'long_run',  label: 'Long run',  color: '#60a5fa', desc: 'Endurance' },
+    { type: 'tempo',     label: 'Tempo',     color: '#fbbf24', desc: 'Threshold work' },
+    { type: 'intervals', label: 'Intervals', color: '#fbbf24', desc: 'Speed reps' },
+    { type: 'hiit',      label: 'HIIT',      color: '#fb7185', desc: 'High intensity' },
+    { type: 'strength',  label: 'Strength',  color: '#a78bfa', desc: 'Resistance' },
+    { type: 'mobility',  label: 'Mobility',  color: '#5eead4', desc: 'Yoga / stretch' },
+    { type: 'cross',     label: 'Cross',     color: '#22d3ee', desc: 'Cycle / swim' },
+    { type: 'rest',      label: 'Rest',      color: '#94a3b8', desc: 'Recovery day' },
+  ];
+  const dateLabel = (() => {
+    try {
+      const d = new Date(dateStr + 'T12:00:00');
+      return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    } catch { return dateStr; }
+  })();
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 1000, padding: 16,
+    }} onClick={onClose}>
+      <div style={{
+        background: 'var(--bg-elevated, #0f1419)',
+        border: '0.5px solid var(--border-subtle, rgba(148,163,184,0.20))',
+        borderRadius: 12, padding: '14px 16px 16px',
+        maxWidth: 360, width: '100%',
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Plan workout</div>
+            <div style={{ fontSize: 13, color: 'var(--text-primary, #e2e8f0)', marginTop: 2 }}>{dateLabel}</div>
+          </div>
+          <button onClick={onClose} style={{
+            all: 'unset', cursor: 'pointer',
+            color: 'var(--text-muted, #94a3b8)', fontSize: 16, padding: '0 6px',
+          }}>✕</button>
+        </div>
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 6, marginTop: 8,
+        }}>
+          {OPTIONS.map(o => (
+            <button
+              key={o.type}
+              onClick={() => onPick(o.type)}
+              style={{
+                all: 'unset', cursor: 'pointer',
+                padding: '8px 10px', borderRadius: 6,
+                background: `${o.color}1a`,
+                border: `0.5px solid ${o.color}44`,
+                display: 'flex', flexDirection: 'column', gap: 2,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 500, color: o.color }}>{o.label}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>{o.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Race picker modal (curated catalog) ─────────────────────────────────────
 
 function RacePickerModal({ dateStr, onClose, onPick }) {
@@ -1877,141 +1990,4 @@ function ManualRaceModal({ dateStr, onClose, onAdd }) {
   );
 }
 
-// ── ICS import modal ────────────────────────────────────────────────────────
-
-function IcsImportModal({ existingRaces, onClose, onImported }) {
-  const [url, setUrl] = useState(() => localStorage.getItem('arnold:calendar-url') || '');
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
-
-  const submit = async () => {
-    if (!url.trim()) return;
-    setBusy(true); setResult(null);
-    try {
-      const events = await fetchAndParseICS(url.trim());
-      localStorage.setItem('arnold:calendar-url', url.trim());
-      const byKey = new Map(existingRaces.map(r => [`${r.name}|${r.date}`, r]));
-      let added = 0;
-      for (const e of events) {
-        const key = `${e.name}|${e.date}`;
-        if (!byKey.has(key)) { byKey.set(key, e); added++; }
-        else byKey.set(key, { ...byKey.get(key), ...e, source: 'garmin-ics' });
-      }
-      const merged = [...byKey.values()].sort((a,b) => (a.date||'').localeCompare(b.date||''));
-      setResult({ ok: true, msg: `Parsed ${events.length} events · ${added} new` });
-      onImported(merged);
-    } catch (e) {
-      setResult({ ok: false, msg: `Could not reach calendar (${e.message}).` });
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <ModalShell onClose={onClose} title="Import races from calendar">
-      <Field label="Calendar URL (.ics)">
-        <input value={url} onChange={e => setUrl(e.target.value)}
-          placeholder="https://connect.garmin.com/modern/calendar/export/…"
-          style={inputStyle}/>
-      </Field>
-      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
-        Paste any .ics URL — Garmin race calendar, Google Calendar export, RaceRoster feed.
-        Arnold parses race-like events and merges them into your races list.
-      </div>
-      {result && (
-        <div style={{
-          marginTop: 8, padding: '6px 10px', borderRadius: 4,
-          fontSize: 11,
-          background: result.ok ? 'rgba(74,222,128,0.10)' : 'rgba(248,113,113,0.10)',
-          color: result.ok ? '#4ade80' : '#f87171',
-        }}>{result.msg}</div>
-      )}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 10 }}>
-        <button onClick={onClose} style={chipBtn}>Cancel</button>
-        <button onClick={submit} style={primaryBtn} disabled={busy || !url.trim()}>
-          {busy ? 'Syncing…' : 'Sync now'}
-        </button>
-      </div>
-    </ModalShell>
-  );
-}
-
-// ── Modal shell ─────────────────────────────────────────────────────────────
-
-function ModalShell({ title, onClose, children }) {
-  return (
-    <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, zIndex: 100,
-      background: 'rgba(0,0,0,0.55)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: 16,
-    }}>
-      <div onClick={e => e.stopPropagation()} style={{
-        background: 'var(--bg-surface)',
-        border: '0.5px solid var(--border-default)',
-        borderRadius: 'var(--radius-md)',
-        padding: '14px 16px',
-        width: '100%', maxWidth: 520,
-        maxHeight: '90vh', overflowY: 'auto',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{title}</span>
-          <button onClick={onClose} style={{
-            all: 'unset', cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)',
-          }}>✕</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-// ── Styles ──────────────────────────────────────────────────────────────────
-
-const iconBtn = {
-  all: 'unset', cursor: 'pointer',
-  fontSize: 16, padding: '2px 10px',
-  color: 'var(--text-primary)',
-  background: 'transparent',
-  border: '0.5px solid var(--border-default)',
-  borderRadius: 4,
-};
-
-const chipBtn = {
-  all: 'unset', cursor: 'pointer',
-  fontSize: 11, padding: '4px 10px',
-  color: 'var(--text-primary)',
-  background: 'transparent',
-  border: '0.5px solid var(--border-default)',
-  borderRadius: 4,
-};
-
-const primaryBtn = {
-  all: 'unset', cursor: 'pointer',
-  fontSize: 11, fontWeight: 500,
-  padding: '4px 10px',
-  color: '#60a5fa',
-  background: 'rgba(96,165,250,0.10)',
-  border: '0.5px solid rgba(96,165,250,0.30)',
-  borderRadius: 4,
-};
-
-const inputStyle = {
-  fontSize: 11, padding: '4px 8px',
-  background: 'var(--bg-input)', color: 'var(--text-primary)',
-  border: '0.5px solid var(--border-default)', borderRadius: 4,
-  outline: 'none',
-};
-
-const selectStyle = {
-  fontSize: 11, padding: '4px 8px',
-  background: 'var(--bg-input)', color: 'var(--text-primary)',
-  border: '0.5px solid var(--border-default)', borderRadius: 4,
-};
+// ── ICS import modal ──────────────────
