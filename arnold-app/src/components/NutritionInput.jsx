@@ -591,7 +591,6 @@ function HealthSystemsGrid({ dateStr, refreshKey }) {
 // ═════════════════════════════════════════════════════════════════════════════
 function MicronutrientsPanel({ dateStr, refreshKey }) {
   const list = useMemo(() => getMicronutrientSummary(dateStr), [dateStr, refreshKey]);
-  const bio = useMemo(() => getBioactiveStack(dateStr), [dateStr, refreshKey]);
   return (
     <>
       <div style={sectionLabel}>
@@ -599,15 +598,22 @@ function MicronutrientsPanel({ dateStr, refreshKey }) {
         Micronutrients · food + supplements
       </div>
       <MicroRingGrid items={list} compact />
-      {bio && bio.length > 0 && (
-        <>
-          <div style={{ ...sectionLabel, marginTop: 14 }}>
-            <span style={sectionDot('#5eead4')} />
-            Bioactive stack · taken today
-          </div>
-          <BioactiveStack items={bio} />
-        </>
-      )}
+    </>
+  );
+}
+
+// Phase 4r.fuel.7 — Bio Stack renders standalone now (separated from
+// MicronutrientsPanel so the layout can place it side-by-side with macros).
+function BioStackPanel({ dateStr, refreshKey }) {
+  const bio = useMemo(() => getBioactiveStack(dateStr), [dateStr, refreshKey]);
+  if (!bio || bio.length === 0) return null;
+  return (
+    <>
+      <div style={sectionLabel}>
+        <span style={sectionDot('#5eead4')} />
+        Bioactive stack · taken today
+      </div>
+      <BioactiveStack items={bio} />
     </>
   );
 }
@@ -642,6 +648,31 @@ function MacroBar({ label, value, goal, gradient, unit = 'g' }) {
   );
 }
 
+// Phase 4r.fuel.7 — vertical fuel-gauge bars instead of horizontal list.
+// Five thin vertical columns side by side; bar fills bottom-up to % of goal.
+// Color-matches each macro's family. Reads as a "cockpit fuel cluster."
+function VerticalMacroBar({ label, short, value, goal, color }) {
+  const pct = Math.min(100, Math.round(((value || 0) / (goal || 1)) * 100));
+  return (
+    <div style={{
+      flex: 1, display: 'flex', flexDirection: 'column',
+      alignItems: 'center', gap: 3, minWidth: 0,
+    }} aria-label={`${label} ${pct}% of goal`}>
+      <div style={{ fontSize: 9, color, fontWeight: 500 }}>{pct}%</div>
+      <div style={{
+        position: 'relative', width: 16, height: 80,
+        background: `${color}1a`, borderRadius: 2, overflow: 'hidden',
+      }}>
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          height: `${pct}%`, background: color, transition: 'height 0.4s ease',
+        }} />
+      </div>
+      <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>{short}</div>
+    </div>
+  );
+}
+
 function MacrosVsGoal({ totals, goals }) {
   return (
     <>
@@ -649,21 +680,31 @@ function MacrosVsGoal({ totals, goals }) {
         <span style={sectionDot('#fbbf24')} />
         Macros vs Goal
       </div>
-      <MacroBar label="Calories" value={totals.calories}
-        goal={parseFloat(goals.dailyCalorieTarget) || 2200}
-        gradient="linear-gradient(90deg, #60a5fa, #22d3ee)" unit="kcal"/>
-      <MacroBar label="Protein" value={totals.protein}
-        goal={parseFloat(goals.dailyProteinTarget) || 150}
-        gradient="linear-gradient(90deg, #4ade80, #2dd4bf)"/>
-      <MacroBar label="Carbs" value={totals.carbs}
-        goal={parseFloat(goals.dailyCarbTarget) || 180}
-        gradient="linear-gradient(90deg, #fbbf24, #fb923c)"/>
-      <MacroBar label="Fat" value={totals.fat}
-        goal={parseFloat(goals.dailyFatTarget) || 65}
-        gradient="linear-gradient(90deg, #f472b6, #a78bfa)"/>
-      <MacroBar label="Fiber" value={totals.fiber}
-        goal={parseFloat(goals.dailyFiberTarget) || 35}
-        gradient="linear-gradient(90deg, #a78bfa, #60a5fa)"/>
+      <div style={{
+        display: 'flex', alignItems: 'flex-end',
+        gap: 6, padding: '4px 4px 0',
+      }}>
+        <VerticalMacroBar label="Calories" short="Cal"
+          value={totals.calories}
+          goal={parseFloat(goals.dailyCalorieTarget) || 2200}
+          color="#60a5fa" />
+        <VerticalMacroBar label="Protein" short="Pro"
+          value={totals.protein}
+          goal={parseFloat(goals.dailyProteinTarget) || 150}
+          color="#9b8ec4" />
+        <VerticalMacroBar label="Carbs" short="Carb"
+          value={totals.carbs}
+          goal={parseFloat(goals.dailyCarbTarget) || 180}
+          color="#6bcf9a" />
+        <VerticalMacroBar label="Fat" short="Fat"
+          value={totals.fat}
+          goal={parseFloat(goals.dailyFatTarget) || 65}
+          color="#e0b45e" />
+        <VerticalMacroBar label="Fiber" short="Fib"
+          value={totals.fiber}
+          goal={parseFloat(goals.dailyFiberTarget) || 35}
+          color="#6fd4e4" />
+      </div>
     </>
   );
 }
@@ -1454,13 +1495,24 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
                 compact={isMobile} />
             </div>
 
-            {/* Micronutrients */}
+            {/* Micronutrients — full width */}
             <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
             <MicronutrientsPanel dateStr={dateStr} refreshKey={refreshKey} />
 
-            {/* Macros vs Goal — uses the same dynamic targets */}
+            {/* Phase 4r.fuel.7 — 2-col split: bio stack (left) + vertical macro bars (right). */}
             <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
-            <MacrosVsGoal totals={totals} goals={effGoals} />
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : '1.7fr 1fr',
+              gap: 14, alignItems: 'start',
+            }}>
+              <div>
+                <BioStackPanel dateStr={dateStr} refreshKey={refreshKey} />
+              </div>
+              <div>
+                <MacrosVsGoal totals={totals} goals={effGoals} />
+              </div>
+            </div>
           </>
         )}
 

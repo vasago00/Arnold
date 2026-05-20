@@ -1,21 +1,35 @@
-// ─── BioactiveStack — Phase 4r.fuel.6 ───────────────────────────────────────
-// Single-line per system. Label on the left, compound chips wrapping inline
-// on the right. ~5 rows total instead of 15+. Subtle row-tint per system
-// matches Arnold's family colors.
+// ─── BioactiveStack — Phase 4r.fuel.7 ───────────────────────────────────────
+// Each system gets a single horizontal row:
+//   [bright tinted label · N/M count]  [mini-honeycomb of hexagons]
 //
-// Compound chip is just: ● Name dose (taken — colored) or ○ Name dose (not).
-// No box around each chip — text-only chips keep density high while the
-// row's background tint provides the system grouping signal.
+// Taken hex   = filled with system color (~22% bg, solid stroke)
+// Untaken hex = transparent fill, dashed-outline stroke, muted text
+//
+// System tints (bright, against dark background):
+//   Neural       light purple  #c4b5fd
+//   Longevity    light teal    #99f6e4
+//   Defense      light pink    #fecdd3
+//   Performance  light blue    #bfdbfe
+//   Adaptive     light amber   #fde68a
 
 import React from 'react';
 
 const GROUP_COLOR = {
-  'neural':            '#a78bfa',
-  'longevity':         '#5eead4',
-  'defense':           '#fb7185',
-  'performance':       '#60a5fa',
-  'adaptive':          '#fbbf24',
-  'other':             '#94a3b8',
+  'neural':       '#a78bfa',
+  'longevity':    '#5eead4',
+  'defense':      '#fb7185',
+  'performance':  '#60a5fa',
+  'adaptive':     '#fbbf24',
+  'other':        '#94a3b8',
+};
+
+const GROUP_LABEL_COLOR = {
+  'neural':       '#c4b5fd',
+  'longevity':    '#99f6e4',
+  'defense':      '#fecdd3',
+  'performance':  '#bfdbfe',
+  'adaptive':     '#fde68a',
+  'other':        '#cbd5e1',
 };
 
 const MECHANISM_TO_SYSTEM = {
@@ -30,7 +44,7 @@ const GROUP_LABEL = {
   'neural':       'Neural',
   'longevity':    'Longevity',
   'defense':      'Defense',
-  'performance':  'Performance',
+  'performance':  'Perform',
   'adaptive':     'Adaptive',
   'other':        'Other',
 };
@@ -46,12 +60,22 @@ const COMPOUND_OVERRIDE = {
   'Shilajit':     'adaptive',
 };
 
-function formatDose(amt, unit) {
-  if (!Number.isFinite(amt)) return '';
-  const u = unit || 'mg';
-  if (amt >= 1000) return (amt / 1000).toFixed(amt % 1000 === 0 ? 0 : 1) + 'g';
-  return Math.round(amt) + u;
-}
+const SHORT_CODE = {
+  'NMN': 'NMN',
+  'Resveratrol': 'Rv',
+  'Spermidine': 'Sp',
+  'TMG': 'TMG',
+  'Apigenin': 'Ap',
+  'Quercetin': 'Qc',
+  'Fisetin': 'Fis',
+  'Curcumin': 'Cur',
+  'Fish Oil': 'FO',
+  'Ashwagandha': 'Ash',
+  'Beetroot': 'Btr',
+  'Creatine': 'Cre',
+  'Mg Threonate': 'MgT',
+  'Shilajit': 'Shi',
+};
 
 function withAlpha(hex, a) {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -60,24 +84,36 @@ function withAlpha(hex, a) {
   return `rgba(${r},${g},${b},${a})`;
 }
 
-function CompoundChip({ label, taken, doseTaken, doseTarget, unit, color }) {
-  const dot = taken ? '●' : '○';
-  const txt = taken ? '#e2e8f0' : '#94a3b8';
-  const dose = taken ? formatDose(doseTaken, unit) : formatDose(doseTarget, unit);
+// Single mini-hive row of hexagons. Each hex is ~24px wide. Honeycomb tile
+// pattern with consistent horizontal spacing.
+function MiniHive({ items, color }) {
+  const HEX_W = 28;
+  const HEX_H = 24;
+  const N = items.length;
+  const width = N * HEX_W;
   return (
-    <span style={{
-      display: 'inline-flex',
-      alignItems: 'baseline',
-      gap: 4,
-      fontSize: 11,
-      lineHeight: 1.2,
-      whiteSpace: 'nowrap',
-      opacity: taken ? 1 : 0.6,
-    }}>
-      <span style={{ color, fontSize: 9 }}>{dot}</span>
-      <span style={{ color: txt, fontWeight: taken ? 500 : 400 }}>{label}</span>
-      <span style={{ color: '#64748b', fontSize: 10, fontFamily: 'ui-monospace, monospace' }}>{dose}</span>
-    </span>
+    <svg viewBox={`0 0 ${width} ${HEX_H}`} width={width} height={HEX_H}
+         xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}
+         fontFamily="ui-sans-serif" fontWeight="500" textAnchor="middle">
+      {items.map((it, i) => {
+        const cx = i * HEX_W + 14;
+        const cy = 12;
+        const code = SHORT_CODE[it.label] || it.label.slice(0, 3);
+        const filled = it.taken;
+        return (
+          <g key={it.name} transform={`translate(${cx},${cy})`}>
+            <polygon
+              points="-12,-7 -12,7 0,14 12,7 12,-7 0,-14"
+              fill={filled ? withAlpha(color, 0.22) : 'transparent'}
+              stroke={filled ? color : withAlpha(color, 0.40)}
+              strokeWidth={1.2}
+              strokeDasharray={filled ? undefined : '2 2'}
+            />
+            <text y="1" fill={filled ? color : '#94a3b8'} fontSize={8}>{code}</text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -94,47 +130,34 @@ export function BioactiveStack({ items }) {
   }
   const groupsInOrder = GROUP_ORDER.filter(g => byGroup[g] && byGroup[g].length);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0' }}>
       {groupsInOrder.map(g => {
         const color = GROUP_COLOR[g];
+        const labelColor = GROUP_LABEL_COLOR[g];
         const groupItems = byGroup[g];
         const takenCount = groupItems.filter(x => x.taken).length;
         return (
-          <div
-            key={g}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '5px 8px',
-              background: withAlpha(color, 0.04),
-              borderRadius: 4,
-              borderLeft: `2px solid ${withAlpha(color, 0.35)}`,
-            }}
-          >
-            <span style={{
-              fontSize: 9,
+          <div key={g} style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '2px 0',
+          }}>
+            <div style={{
+              fontSize: 10,
               fontWeight: 500,
-              color: withAlpha(color, 0.85),
+              color: labelColor,
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
-              minWidth: 78,
+              minWidth: 88,
               flexShrink: 0,
             }}>
               {GROUP_LABEL[g] || g}
-              <span style={{ color: '#64748b', fontWeight: 400, marginLeft: 4 }}>{takenCount}/{groupItems.length}</span>
-            </span>
-            <div style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              gap: '4px 12px',
-              flex: 1,
-            }}>
-              {groupItems.map(it => (
-                <CompoundChip key={it.name} {...it} color={color} />
-              ))}
+              <span style={{ color: '#cbd5e1', fontWeight: 400, marginLeft: 4 }}>
+                {takenCount}/{groupItems.length}
+              </span>
             </div>
+            <MiniHive items={groupItems} color={color} />
           </div>
         );
       })}
