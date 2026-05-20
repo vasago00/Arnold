@@ -1,8 +1,9 @@
-// ─── MicroRing — Phase 4r.fuel.4 ────────────────────────────────────────────
+// ─── MicroRing — Phase 4r.fuel.5 ────────────────────────────────────────────
 // Status-colored micronutrient ring with food-vs-supplement split marker.
-// Phase 4r.fuel.4 adds grouped rendering: items can carry a `group` field
-// ('vitamins' | 'minerals' | 'fats') and MicroRingGrid renders them in
-// stacked sub-sections with subtle headers.
+// Phase 4r.fuel.5: grouping is now a subtle BACKGROUND TINT band per group
+// row — no header text, no extra vertical space. The eye picks up the
+// group identity via the wash color (vitamins=blue, minerals=amber, fats=teal)
+// without anything labeled.
 
 import React from 'react';
 
@@ -17,6 +18,15 @@ function statusColor(pct) {
 const R = 26;
 const CIRC = 2 * Math.PI * R;
 
+// Background tint per group — barely-perceptible wash applied behind each
+// row of rings. Keeps total height the same as flat grid.
+const GROUP_BG = {
+  vitamins: 'rgba(96,165,250,0.05)',  // blue
+  minerals: 'rgba(251,191,36,0.05)',  // amber
+  fats:     'rgba(94,234,212,0.05)',  // teal
+  other:    'transparent',
+};
+
 export function MicroRing({ name, abbr, pct = 0, foodPct = 0, source = '—', value, target, compact = false }) {
   const clamped = Math.max(0, Math.min(150, Number(pct) || 0));
   const arcLen = (clamped / 100) * CIRC;
@@ -25,7 +35,6 @@ export function MicroRing({ name, abbr, pct = 0, foodPct = 0, source = '—', va
   const showFoodDot = foodPct > 0 && foodPct < clamped && source === 'food + supp';
   const size = compact ? 54 : 80;
   const displayLabel = compact ? (abbr || name.slice(0, 2)) : name;
-
   return (
     <div
       style={{
@@ -70,35 +79,12 @@ export function MicroRing({ name, abbr, pct = 0, foodPct = 0, source = '—', va
   );
 }
 
-// Subgroup labels (sentence case, muted)
-const GROUP_LABELS = {
-  vitamins: 'Vitamins',
-  minerals: 'Minerals',
-  fats:     'Essential fats',
-};
-
-// Section header used between groups. Subtle.
-function GroupHeader({ label }) {
-  return (
-    <div style={{
-      gridColumn: '1 / -1',
-      fontSize: 9, color: '#64748b', fontWeight: 500,
-      letterSpacing: '0.10em', textTransform: 'uppercase',
-      padding: '6px 0 2px',
-      borderTop: '0.5px solid rgba(148,163,184,0.10)',
-      marginTop: 4,
-    }}>
-      {label}
-    </div>
-  );
-}
-
-// Grid wrapper. When items have a `group` field, render grouped sub-sections.
-// Falls back to flat grid otherwise (backward-compat with Phase 4r.fuel.3).
+// Phase 4r.fuel.5 — Grid wrapper renders rows of items grouped by `group`
+// field. Each group gets a subtle background tint band (no header text).
+// If grouped:false or no group field present, falls back to flat grid.
 export function MicroRingGrid({ items, compact = false, columns, grouped = true }) {
   const cols = columns || (compact ? 7 : 5);
   const list = items || [];
-  // Detect grouping: any item with a group field AND grouped:true.
   const useGrouping = grouped && list.some(it => it && it.group);
   if (!useGrouping) {
     return (
@@ -114,30 +100,33 @@ export function MicroRingGrid({ items, compact = false, columns, grouped = true 
       </div>
     );
   }
-  // Group items preserving input order within each group.
+  // Group items and render each group as its own grid row band with tinted bg.
   const byGroup = {};
   for (const it of list) {
     const g = it.group || 'other';
     (byGroup[g] = byGroup[g] || []).push(it);
   }
-  // Preferred group order
   const ORDER = ['vitamins', 'minerals', 'fats', 'other'];
   const groupsInOrder = ORDER.filter(g => byGroup[g] && byGroup[g].length);
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-      gap: compact ? 3 : 8,
-      padding: compact ? '4px 0' : '8px 0',
-    }}>
-      {groupsInOrder.map((g, idx) => (
-        <React.Fragment key={g}>
-          {idx > 0 && <GroupHeader label={GROUP_LABELS[g] || g} />}
-          {idx === 0 && <GroupHeader label={GROUP_LABELS[g] || g} />}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0' }}>
+      {groupsInOrder.map(g => (
+        <div
+          key={g}
+          style={{
+            background: GROUP_BG[g] || 'transparent',
+            borderRadius: 6,
+            padding: compact ? '4px 4px' : '8px 8px',
+            display: 'grid',
+            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+            gap: compact ? 3 : 8,
+          }}
+          aria-label={g}
+        >
           {byGroup[g].map(item => (
             <MicroRing key={item.name} {...item} compact={compact} />
           ))}
-        </React.Fragment>
+        </div>
       ))}
     </div>
   );
