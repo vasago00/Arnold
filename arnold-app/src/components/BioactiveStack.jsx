@@ -1,18 +1,18 @@
-// ─── BioactiveStack — Phase 4r.fuel.7 ───────────────────────────────────────
-// Each system gets a single horizontal row:
-//   [bright tinted label · N/M count]  [mini-honeycomb of hexagons]
-//
-// Taken hex   = filled with system color (~22% bg, solid stroke)
-// Untaken hex = transparent fill, dashed-outline stroke, muted text
-//
-// System tints (bright, against dark background):
-//   Neural       light purple  #c4b5fd
-//   Longevity    light teal    #99f6e4
-//   Defense      light pink    #fecdd3
-//   Performance  light blue    #bfdbfe
-//   Adaptive     light amber   #fde68a
+// ─── BioactiveStack — Phase 4r.fuel.8 ───────────────────────────────────────
+// Each system row: [Phosphor icon · bright tinted label · N/M count]  [mini-honeycomb]
+// Taken hex  = filled with system color, solid stroke
+// Untaken    = transparent fill, dashed-outline stroke
 
 import React from 'react';
+import { Brain, Infinity as InfinityIcon, Shield, Lightning, Leaf } from '@phosphor-icons/react';
+
+const GROUP_ICON = {
+  'neural':       Brain,
+  'longevity':    InfinityIcon,
+  'defense':      Shield,
+  'performance':  Lightning,
+  'adaptive':     Leaf,
+};
 
 const GROUP_COLOR = {
   'neural':       '#a78bfa',
@@ -84,8 +84,6 @@ function withAlpha(hex, a) {
   return `rgba(${r},${g},${b},${a})`;
 }
 
-// Single mini-hive row of hexagons. Each hex is ~24px wide. Honeycomb tile
-// pattern with consistent horizontal spacing.
 function MiniHive({ items, color }) {
   const HEX_W = 28;
   const HEX_H = 24;
@@ -136,24 +134,22 @@ export function BioactiveStack({ items }) {
         const labelColor = GROUP_LABEL_COLOR[g];
         const groupItems = byGroup[g];
         const takenCount = groupItems.filter(x => x.taken).length;
+        const IconCmp = GROUP_ICON[g];
         return (
           <div key={g} style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '2px 0',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0',
           }}>
             <div style={{
-              fontSize: 10,
-              fontWeight: 500,
-              color: labelColor,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              minWidth: 88,
-              flexShrink: 0,
+              fontSize: 10, fontWeight: 500, color: labelColor,
+              letterSpacing: '0.08em', textTransform: 'uppercase',
+              minWidth: 102, flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 5,
             }}>
-              {GROUP_LABEL[g] || g}
-              <span style={{ color: '#cbd5e1', fontWeight: 400, marginLeft: 4 }}>
+              {IconCmp && (
+                <IconCmp size={13} color={labelColor} weight="regular" aria-hidden="true" />
+              )}
+              <span>{GROUP_LABEL[g] || g}</span>
+              <span style={{ color: '#cbd5e1', fontWeight: 400, marginLeft: 2 }}>
                 {takenCount}/{groupItems.length}
               </span>
             </div>
