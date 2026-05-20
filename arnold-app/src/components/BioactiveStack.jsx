@@ -1,31 +1,23 @@
-// ─── BioactiveStack — Phase 4r.fuel.5 ───────────────────────────────────────
-// Compact multi-column list of bioactive compounds. Each item is one row:
-//   ● Compound name · dose      (taken — bright)
-//   ○ Compound name · dose      (not taken — muted)
+// ─── BioactiveStack — Phase 4r.fuel.6 ───────────────────────────────────────
+// Single-line per system. Label on the left, compound chips wrapping inline
+// on the right. ~5 rows total instead of 15+. Subtle row-tint per system
+// matches Arnold's family colors.
 //
-// Grouped by which Arnold health system the compound feeds. Each group
-// renders as its own block with a subtle background tint matching the
-// system family color. No headers — the wash + an ultra-small tag at the
-// top-left of each block IS the header.
-//
-// Layout: 2 columns on desktop (>=480px container), wraps to 1 on mobile.
+// Compound chip is just: ● Name dose (taken — colored) or ○ Name dose (not).
+// No box around each chip — text-only chips keep density high while the
+// row's background tint provides the system grouping signal.
 
 import React from 'react';
 
-// Group color: matches the corresponding Arnold system family color.
 const GROUP_COLOR = {
-  'neural':            '#a78bfa', // brain / purple
-  'longevity':         '#5eead4', // mitochondria / teal
-  'defense':           '#fb7185', // immune+anti-inflammatory / coral
-  'performance':       '#60a5fa', // cardiovascular / blue
-  'adaptive':          '#fbbf24', // hormonal+energy / amber
+  'neural':            '#a78bfa',
+  'longevity':         '#5eead4',
+  'defense':           '#fb7185',
+  'performance':       '#60a5fa',
+  'adaptive':          '#fbbf24',
   'other':             '#94a3b8',
 };
 
-// Map the compound-mechanism group used by getBioactiveStack (nad,
-// senolytic, anti-inflammatory, performance, other) → the system-facing
-// label & color used here. Senolytics are pre-aging defense; NAD+ is
-// the longevity pillar; anti-inflammatory becomes defense.
 const MECHANISM_TO_SYSTEM = {
   'nad':                'longevity',
   'senolytic':          'defense',
@@ -35,19 +27,16 @@ const MECHANISM_TO_SYSTEM = {
 };
 
 const GROUP_LABEL = {
-  'neural':       'Neural · brain',
-  'longevity':    'Longevity · mitochondria',
-  'defense':      'Defense · immune + anti-inflammatory',
-  'performance':  'Performance · cardiovascular',
-  'adaptive':     'Adaptive · hormonal',
+  'neural':       'Neural',
+  'longevity':    'Longevity',
+  'defense':      'Defense',
+  'performance':  'Performance',
+  'adaptive':     'Adaptive',
   'other':        'Other',
 };
 
 const GROUP_ORDER = ['neural', 'longevity', 'defense', 'performance', 'adaptive', 'other'];
 
-// Per-compound override — for compounds that primarily serve a different
-// system than their mechanism class would suggest. Mg Threonate and
-// Creatine are brain-serving; Ashwagandha and Beetroot serve performance/cardio.
 const COMPOUND_OVERRIDE = {
   'Mg Threonate': 'neural',
   'Creatine':     'neural',
@@ -71,27 +60,29 @@ function withAlpha(hex, a) {
   return `rgba(${r},${g},${b},${a})`;
 }
 
-function BioactiveRow({ label, taken, doseTaken, doseTarget, unit, color }) {
+function CompoundChip({ label, taken, doseTaken, doseTarget, unit, color }) {
   const dot = taken ? '●' : '○';
-  const text = taken ? color : '#94a3b8';
+  const txt = taken ? '#e2e8f0' : '#94a3b8';
   const dose = taken ? formatDose(doseTaken, unit) : formatDose(doseTarget, unit);
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6,
-      padding: '3px 6px',
-      fontSize: 11, lineHeight: 1.2,
-      opacity: taken ? 1 : 0.55,
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'baseline',
+      gap: 4,
+      fontSize: 11,
+      lineHeight: 1.2,
+      whiteSpace: 'nowrap',
+      opacity: taken ? 1 : 0.6,
     }}>
-      <span style={{ color, fontSize: 10, lineHeight: 1, width: 10, flexShrink: 0 }}>{dot}</span>
-      <span style={{ color: text, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      <span style={{ color: '#64748b', fontSize: 10, fontFamily: 'ui-monospace, monospace', flexShrink: 0 }}>{dose}</span>
-    </div>
+      <span style={{ color, fontSize: 9 }}>{dot}</span>
+      <span style={{ color: txt, fontWeight: taken ? 500 : 400 }}>{label}</span>
+      <span style={{ color: '#64748b', fontSize: 10, fontFamily: 'ui-monospace, monospace' }}>{dose}</span>
+    </span>
   );
 }
 
 export function BioactiveStack({ items }) {
   if (!items || items.length === 0) return null;
-  // Map each item to a system group (override > mechanism-mapping > 'other').
   const enriched = items.map(it => ({
     ...it,
     system: COMPOUND_OVERRIDE[it.label] || MECHANISM_TO_SYSTEM[it.group] || 'other',
@@ -103,32 +94,45 @@ export function BioactiveStack({ items }) {
   }
   const groupsInOrder = GROUP_ORDER.filter(g => byGroup[g] && byGroup[g].length);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0' }}>
       {groupsInOrder.map(g => {
         const color = GROUP_COLOR[g];
+        const groupItems = byGroup[g];
+        const takenCount = groupItems.filter(x => x.taken).length;
         return (
           <div
             key={g}
             style={{
-              background: withAlpha(color, 0.05),
-              borderRadius: 6,
-              padding: '6px 8px',
-              borderLeft: `2px solid ${withAlpha(color, 0.40)}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '5px 8px',
+              background: withAlpha(color, 0.04),
+              borderRadius: 4,
+              borderLeft: `2px solid ${withAlpha(color, 0.35)}`,
             }}
           >
-            <div style={{
-              fontSize: 9, color: withAlpha(color, 0.85), fontWeight: 500,
-              letterSpacing: '0.08em', textTransform: 'uppercase',
-              marginBottom: 3,
-            }}>{GROUP_LABEL[g] || g}</div>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              columnGap: 4,
-              rowGap: 0,
+            <span style={{
+              fontSize: 9,
+              fontWeight: 500,
+              color: withAlpha(color, 0.85),
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              minWidth: 78,
+              flexShrink: 0,
             }}>
-              {byGroup[g].map(it => (
-                <BioactiveRow key={it.name} {...it} color={color} />
+              {GROUP_LABEL[g] || g}
+              <span style={{ color: '#64748b', fontWeight: 400, marginLeft: 4 }}>{takenCount}/{groupItems.length}</span>
+            </span>
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: '4px 12px',
+              flex: 1,
+            }}>
+              {groupItems.map(it => (
+                <CompoundChip key={it.name} {...it} color={color} />
               ))}
             </div>
           </div>
