@@ -1511,7 +1511,8 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
                 <BioStackPanel dateStr={dateStr} refreshKey={refreshKey} />
               </div>
               <div>
-                <EnergyTimingChart dateStr={dateStr} totals={totals} />
+                <EnergyTimingChart dateStr={dateStr} totals={totals}
+                  target={parseFloat(effGoals.dailyCalorieTarget) || 2200} />
               </div>
             </div>
           </>

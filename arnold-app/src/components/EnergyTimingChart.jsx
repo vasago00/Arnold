@@ -33,7 +33,7 @@ function dayLabel(dateStr) {
   } catch { return ''; }
 }
 
-export function EnergyTimingChart({ dateStr, totals }) {
+export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
   // Today's burn breakdown
   const burn = useMemo(() => {
     try {
@@ -50,23 +50,34 @@ export function EnergyTimingChart({ dateStr, totals }) {
   }, [dateStr]);
 
   const intake = Math.round(totals?.calories || 0);
-  const target = burn.total;
+  // Phase 4r.fuel.11 — use the same dynamic target the Nutrition header
+  // shows (passed in as `targetProp`). Falls back to TDEE if not provided.
+  const target = (Number.isFinite(targetProp) && targetProp > 0)
+    ? Math.round(targetProp)
+    : burn.total;
   const net = intake - target;       // negative = deficit, positive = surplus
   const isDeficit = net < 0;
 
-  // 7-day balance trend — compute one day at a time.
+  // 7-day balance trend — compute one day at a time. Each day's target is
+  // its own dynamic target (RMR + NEAT + TEF + activity * 0.75), so trend
+  // bars compare day-by-day against the same "eat-back" semantics the
+  // header uses.
   const trend = useMemo(() => {
     const days = [];
     for (let i = 6; i >= 0; i--) {
       const ds = shiftDate(dateStr, -i);
       if (!ds) continue;
-      let dayTotal = 0, dayIntake = 0;
-      try { dayTotal = (computeTDEE(ds) || {}).tdee || 0; } catch {}
+      let dayTarget = 0, dayIntake = 0;
+      try {
+        const t = computeTDEE(ds) || {};
+        const eatBack = (t.activityKcal || 0) * 0.75;
+        dayTarget = (t.rmr || 0) + (t.neatKcal || 0) + (t.tefKcal || 0) + eatBack;
+      } catch {}
       try { dayIntake = nutDailyTotals(ds)?.calories || 0; } catch {}
       days.push({
         date: ds,
         label: dayLabel(ds),
-        balance: dayIntake - dayTotal,
+        balance: dayIntake - dayTarget,
         isToday: i === 0,
       });
     }
