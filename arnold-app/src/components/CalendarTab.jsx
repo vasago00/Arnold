@@ -27,6 +27,7 @@ import { isRun, isStrength, isHIIT, isMobility, isCycling, isSwim } from "../cor
 import { getPlannerWeek, savePlannerWeek, weekKey } from "../core/planner.js";
 import { fetchAndParseICS } from "../core/parsers/icsParser.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
+import { resolveCalorieTarget } from "../core/calorieTarget.js";
 import { getGoals } from "../core/goals.js";
 import {
   RACE_CATALOG, REGION_OPTIONS, DISTANCE_FILTERS,
@@ -659,7 +660,8 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const nut = (() => {
     try { return nutDailyTotals(cell.date); } catch { return null; }
   })();
-  const calTarget = parseFloat(goals?.dailyCalorieTarget) || 2200;
+  // Phase 4r.fuel.1 — dynamic per-day target (RMR + activity + NEAT + TEF)
+  const calTarget = resolveCalorieTarget(cell.date, goals);
   const calLogged = nut?.calories || 0;
   const fuelPct = calLogged > 0 ? Math.min(Math.round((calLogged / calTarget) * 100), 200) : null;
 
@@ -1263,7 +1265,8 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onManualAdd
   // targets either from goals (if set) or derived from total calories
   // using a balanced default split: 30% protein, 45% carbs, 25% fat.
   const goals = getGoals?.() || {};
-  const calTarget = parseFloat(goals.dailyCalorieTarget) || 2200;
+  // Phase 4r.fuel.1 — dynamic per-day target (RMR + activity + NEAT + TEF)
+  const calTarget = resolveCalorieTarget(dateStr, goals);
   const proTarget = parseFloat(goals.dailyProteinTarget) || Math.round(calTarget * 0.30 / 4);
   const carbTarget = parseFloat(goals.dailyCarbTarget)    || Math.round(calTarget * 0.45 / 4);
   const fatTarget  = parseFloat(goals.dailyFatTarget)     || Math.round(calTarget * 0.25 / 9);

@@ -75,6 +75,7 @@ import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
 import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
 import { getTopCoachingPrompts, getPromptsByPillar } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
 import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget, getCurrentBodyComp, computeRMR } from "./core/energyBalance.js";
+import { resolveCalorieTarget } from "./core/calorieTarget.js";
 // Health system iconography — Gemini-generated line-art PNGs at 256×256 with
 // dark #0b0d12 background and the system's accent color baked in. Vite
 // resolves these to hashed asset URLs at build time.
@@ -1017,7 +1018,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.intel.6 · status-tint-and-maxHR-fallback-2026-05-19','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.fuel.1 · dynamic-calorie-target-2026-05-19','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true
@@ -5284,7 +5285,8 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     return out.sort((a,b)=>rank(a._groupKey)-rank(b._groupKey));
   })();
   const nutData=(todayNutrition&&(!todayNutrition.date||todayNutrition.date===todayStr))?todayNutrition:null;
-  const calT=parseFloat(profile.dailyCalorieTarget)||2200;
+  // Phase 4r.fuel.1 — dynamic daily target (RMR + activity + NEAT + TEF per day)
+  const calT=resolveCalorieTarget(todayStr, profile);
 
   // Pace helpers
   const paceToSecs=p=>{if(!p)return 0;const[m,s]=p.split(':').map(Number);return(isNaN(m)||isNaN(s))?0:m*60+s;};
