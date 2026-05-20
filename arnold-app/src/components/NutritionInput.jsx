@@ -28,6 +28,7 @@ import {
 import { getSystemsReport, getMicronutrientSummary, getBioactiveStack } from '../core/healthSystems.js';
 import { MicroRingGrid } from './MicroRing.jsx';
 import { BioactiveStack } from './BioactiveStack.jsx';
+import { EnergyTimingChart } from './EnergyTimingChart.jsx';
 
 // ─── Shared panel styling (uses CSS vars to match Activity panel in Daily Log) ─
 const panelStyle = {
@@ -1510,7 +1511,7 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
                 <BioStackPanel dateStr={dateStr} refreshKey={refreshKey} />
               </div>
               <div>
-                <MacrosVsGoal totals={totals} goals={effGoals} />
+                <EnergyTimingChart dateStr={dateStr} totals={totals} />
               </div>
             </div>
           </>
