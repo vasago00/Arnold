@@ -248,23 +248,41 @@ export function CalendarTab({ showToast }) {
 
   // Phase 4r.calendar.21 — swipe left to advance month, swipe right
   // to go back. Reuses the same useSwipeNav hook the mobile tab nav
-  // uses. Phase 4r.calendar.22 — wrap goNext/goPrev in setTimeout
-  // to defer the state change off the touch-event call stack. Some
-  // downstream component (likely a tile during re-render) was
-  // crashing on .id during the synchronous re-render and the error
-  // was surfacing as a touch-event-handler exception. Deferring
-  // breaks the chain so the gesture doesn't crash the page even
-  // if an individual tile renders bad data.
-  const swipeHandlers = useSwipeNav({
+  // uses. Phase 4r.calendar.22 — wrap goNext/goPrev in setTimeout to
+  // defer state changes off the touch-event call stack so any
+  // downstream render error doesn't crash the gesture.
+  // Phase 4r.calendar.26 — wrap raw touch events with stopPropagation
+  // so the page-level (Arnold.jsx) swipe handler doesn't ALSO fire
+  // and navigate to the next tab. Without this, swiping on the
+  // calendar grid jumps to Core instead of advancing the month.
+  const rawSwipeHandlers = useSwipeNav({
     onSwipeLeft:  () => setTimeout(() => { try { goNext(); } catch (e) { console.warn('[calendar] swipe next failed:', e); } }, 0),
     onSwipeRight: () => setTimeout(() => { try { goPrev(); } catch (e) { console.warn('[calendar] swipe prev failed:', e); } }, 0),
   });
+  const swipeHandlers = {
+    onTouchStart:  (e) => { e.stopPropagation(); rawSwipeHandlers.onTouchStart(e); },
+    onTouchEnd:    (e) => { e.stopPropagation(); rawSwipeHandlers.onTouchEnd(e); },
+    onTouchCancel: (e) => { e.stopPropagation(); rawSwipeHandlers.onTouchCancel(e); },
+  };
   const goToday = () => {
     const d = new Date();
     setViewYear(d.getFullYear());
     setViewMonth(d.getMonth());
     setSelectedDate(ymd(d));
   };
+
+  // Phase 4r.calendar.26 — belt-and-suspenders today-on-mount.
+  // CalendarTab unmounts when the user switches tabs (Arnold.jsx
+  // uses {tab==='races'&&<CalendarTab/>}) so state resets naturally,
+  // but if React ever preserves the component, this useEffect makes
+  // sure landing on Calendar always shows today's data first.
+  useEffect(() => {
+    const d = new Date();
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+    setSelectedDate(ymd(d));
+    // empty dep array — runs once on mount only
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
@@ -339,7 +357,7 @@ export function CalendarTab({ showToast }) {
           Tapping a different day just updates drawer content.
           Default selection is today (set in CalendarTab init). */}
       {isMobile && (
-        <div style={{ marginTop: 4, paddingBottom: 80 }}>
+        <div style={{ marginTop: 0, paddingBottom: 112 }}>
           <DayDrawer
             dateStr={selectedDate}
             activities={activitiesByDate.get(selectedDate) || []}
@@ -442,20 +460,20 @@ export function CalendarTab({ showToast }) {
 function CalendarHeader({ monthLabel, onPrev, onNext, onToday }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '0 4px 12px',
-      flexWrap: 'wrap',
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '0 4px 8px',
     }}>
-      {/* Phase 4r.calendar.22 — header now carries ONLY the month nav
-          (prev/next + Today). The race-adding buttons (catalog,
-          manual, ICS sync) moved to the day drawer where they're
-          contextual to the selected date. */}
+      {/* Phase 4r.calendar.26 — arrows grouped tightly around the
+          month label on the left; Today chip on the far right.
+          Previously a flex:1 spacer pushed the right arrow off into
+          empty space. */}
       <button onClick={onPrev} style={iconBtn} className="arnold-compact-btn" title="Previous month">‹</button>
       <span style={{
         fontSize: 16, fontWeight: 500, color: 'var(--text-primary)',
-        minWidth: 0, flex: 1,
+        minWidth: 0,
       }}>{monthLabel}</span>
       <button onClick={onNext} style={iconBtn} className="arnold-compact-btn" title="Next month">›</button>
+      <span style={{ flex: 1 }}/>
       <button onClick={onToday} style={chipBtn} className="arnold-compact-btn">Today</button>
     </div>
   );
@@ -471,7 +489,10 @@ function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByD
       border: '0.5px solid var(--border-default)',
       borderRadius: 'var(--radius-md)',
       padding: isMobile ? 4 : 6,
-      marginBottom: 12,
+      // Phase 4r.calendar.26 — tighter bottom margin on mobile so
+      // the always-open drawer sits flush against the grid instead
+      // of separated by ~16px of empty space.
+      marginBottom: isMobile ? 2 : 12,
     }}>
       {/* Phase 4r.calendar.22 — flexbox + fixed-width cells. Grid
           (even with minmax(0, 1fr) + !important) was collapsing to
@@ -644,8 +665,11 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
 
   // Body / Recovery — sleep score (or hrs as fallback). Single 0-100
   // value summarizing the night that preceded this day.
+  // Phase 4r.calendar.32 — accept both totalSleepMinutes (live Garmin
+  // worker field) and durationMinutes (legacy HC sync field).
   const sleepScore = sleep?.sleepScore != null ? Math.round(sleep.sleepScore) : null;
-  const sleepHrs   = sleep?.totalSleepHours != null ? sleep.totalSleepHours.toFixed(1) : null;
+  const _sleepMins = sleep?.totalSleepMinutes ?? sleep?.durationMinutes ?? null;
+  const sleepHrs   = _sleepMins != null ? (_sleepMins / 60).toFixed(1) : null;
   const bodyVal = sleepScore != null ? sleepScore : null;
 
   const tileBg = (hasCompleted || hasRace) ? style.bg : 'transparent';
@@ -735,7 +759,7 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
           }}>★ {(races[0].name || 'RACE').split(' ').slice(0, 2).join(' ')}</span>
         ) : headline ? (
           <span style={{
-            fontSize: 8.5, fontWeight: 700, letterSpacing: '0.06em',
+            fontSize: 8, fontWeight: 700, letterSpacing: '0.06em',
             color: style.color,
             textTransform: 'uppercase',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -905,7 +929,7 @@ function CockpitVital({ icon, value, color }) {
     }}>
       <VitalIcon kind={icon} size={9} color={c}/>
       <span style={{
-        fontSize: 9.5, fontWeight: 600, fontFamily: 'var(--font-mono)',
+        fontSize: 9, fontWeight: 600,
         color: c,
         opacity: isDim ? 0.5 : 1,
       }}>{isDim ? '—' : value}</span>
@@ -957,27 +981,40 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
     ? (totalMi >= 0.5 ? `${totalMi.toFixed(1)}mi` : totalSecs >= 60 ? `${Math.round(totalSecs / 60)}m` : null)
     : null;
 
-  const tileBg = (hasCompleted || hasRace) ? style.bg : 'transparent';
-  const tileBorder = isSelected ? 'var(--accent-border)'
+  // Phase 4r.calendar.27 — today gets a much more pronounced
+  // highlight: stronger blue tint, thicker glowing border, and
+  // the day-number renders inside a small filled blue circle.
+  // Previous treatment (faint 0.08 bg + 1px border) was too subtle
+  // to spot at a glance.
+  const tileBg = isToday ? 'rgba(55,138,221,0.18)'
+               : (hasCompleted || hasRace) ? style.bg
+               : 'transparent';
+  const tileBorder = isToday ? '#378ADD'
+                   : isSelected ? 'var(--accent-border)'
                    : (hasCompleted || hasRace || isPlannedOnly) ? style.border
                    : 'var(--border-subtle)';
   const borderStyle = isPlannedOnly && !hasCompleted && !hasRace ? 'dashed' : 'solid';
+  const borderWidth = isToday ? '1.5px' : isSelected ? '1.5px' : '0.5px';
 
   return (
     <button onClick={onPick}
       className="arnold-compact-btn arnold-cal-cell"
       style={{
         all: 'unset', cursor: 'pointer',
-        // Phase 4r.calendar.25 — back to square (1:1). The drawer
-        // is now always-open below the grid, so the grid doesn't
-        // need to stretch vertically to fill the screen. Square
-        // tiles keep the full month compact at the top.
-        aspectRatio: '1 / 1',
+        // Phase 4r.calendar.28 — shrink to 6:5 (wider than tall) so
+        // the full 6-row grid + drawer fits on a Samsung S25U
+        // screen without forcing the user to scroll to see the
+        // drawer's Body section. Square tiles were too tall: 6 rows
+        // × ~52px = ~312px just for the grid. 6:5 saves ~50px while
+        // keeping the signature figure readable.
+        aspectRatio: '6 / 5',
         width: '100%',
-        padding: '3px 4px',
+        padding: '2px 4px',
         position: 'relative',
         borderRadius: 5,
-        border: `${isSelected ? '1.5px' : '0.5px'} ${borderStyle} ${tileBorder}`,
+        border: `${borderWidth} ${borderStyle} ${tileBorder}`,
+        // Soft outer glow on today only — no shadow on others.
+        boxShadow: isToday ? '0 0 0 1px rgba(55,138,221,0.35) inset' : 'none',
         background: cell.inMonth ? tileBg : 'transparent',
         opacity: cell.inMonth ? 1 : 0.30,
         display: 'flex', flexDirection: 'column',
@@ -985,7 +1022,9 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
         overflow: 'hidden',
         minWidth: 0,
       }}>
-      {/* Top row: day number (left) + family/race label (right) */}
+      {/* Top row: day number (left) + family/race label (right).
+          Today's day number renders inside a filled blue pill for
+          unmistakable visual emphasis. */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
         gap: 2, lineHeight: 1, position: 'relative', zIndex: 1,
@@ -993,7 +1032,12 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
         <span style={{
           fontSize: isToday ? 11 : 10,
           fontWeight: isToday ? 700 : 500,
-          color: isToday ? 'var(--accent-border)' : (cell.inMonth ? 'var(--text-primary)' : 'var(--text-muted)'),
+          color: isToday ? '#fff' : (cell.inMonth ? 'var(--text-primary)' : 'var(--text-muted)'),
+          background: isToday ? '#378ADD' : 'transparent',
+          padding: isToday ? '1px 5px' : 0,
+          borderRadius: isToday ? 8 : 0,
+          minWidth: isToday ? 14 : 'auto',
+          textAlign: 'center',
         }}>{cell.day}</span>
         {topLabel && (
           <span style={{
@@ -1034,7 +1078,6 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
         <div style={{
           fontSize: 9, fontWeight: 600, color: style.color,
           textAlign: 'center', lineHeight: 1, marginTop: 1,
-          fontFamily: 'var(--font-mono)',
           letterSpacing: '-0.02em',
         }}>{headlineMetric}</div>
       )}
@@ -1065,7 +1108,7 @@ function CockpitVitalH({ icon, value, color }) {
     }}>
       <VitalIcon kind={icon} size={9} color={c}/>
       <span style={{
-        fontSize: 8.5, fontWeight: 600, fontFamily: 'var(--font-mono)',
+        fontSize: 8, fontWeight: 600,
         color: c,
         opacity: isDim ? 0.5 : 1,
         whiteSpace: 'nowrap',
@@ -1091,7 +1134,7 @@ function ThreeDomainCell({ label, value, color }) {
         opacity: isDim ? 0.5 : 0.8,
       }}>{label}</span>
       <span style={{
-        fontSize: 9, fontWeight: 600, fontFamily: 'var(--font-mono)',
+        fontSize: 9, fontWeight: 600,
         color: isDim ? 'var(--text-muted)' : color,
         opacity: isDim ? 0.4 : 1,
       }}>{isDim ? '—' : value}</span>
@@ -1113,44 +1156,178 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onManualAdd
   const isPast = dateStr < localDate();
 
   // Recovery snapshot
+  // Phase 4r.calendar.32 — live Garmin worker stores total sleep as
+  // `totalSleepMinutes` (per garmin-client.js normalizeSleepRow).
+  // The earlier code looked for `durationMinutes` (legacy HC field)
+  // and `totalSleepHours` (never existed), which is why every Sleep
+  // cell rendered empty for the user's live-Garmin data. Check both
+  // names in priority order for backward compat with any older HC
+  // rows still in storage.
   const sleep = (storage.get('sleep') || []).find(s => s.date === dateStr);
   const hrv = (storage.get('hrv') || []).find(h => h.date === dateStr);
   const sleepScore = sleep?.sleepScore != null ? Math.round(sleep.sleepScore) : null;
-  const sleepHrs   = sleep?.totalSleepHours != null ? sleep.totalSleepHours.toFixed(1) : null;
+  const sleepMins = sleep?.totalSleepMinutes ?? sleep?.durationMinutes ?? null;
+  const sleepHrs   = sleepMins != null ? (sleepMins / 60).toFixed(1) : null;
   const overnightHRV = sleep?.overnightHRV ?? hrv?.overnightHRV ?? null;
-  const rhr = sleep?.restingHR ?? null;
+  const rhr = sleep?.restingHR ?? sleep?.restingHeartRate ?? null;
+
+  // Phase 4r.calendar.32 — Weight is now EXACT-MATCH ONLY. Earlier
+  // (.29) a 7-day lookback inherited the most recent weigh-in, but
+  // that misrepresents days where you didn't actually weigh — today
+  // showed weight even when there was no weigh-in. The calendar is
+  // a "what happened today" log, not a "what does the data project."
+  // Days without an exact-date weigh-in render no Weight cell.
+  const allWeights = [
+    ...(storage.get('weight') || []),
+    ...(storage.get('arnold:garmin-weight') || []),
+  ].filter(w => w?.date && (w.weightLbs != null || w.weightKg != null));
+  const weightForDate = allWeights.find(w => w.date === dateStr) || null;
+  const weightLbs = weightForDate
+    ? (weightForDate.weightLbs != null
+        ? parseFloat(weightForDate.weightLbs)
+        : (weightForDate.weightKg != null ? parseFloat(weightForDate.weightKg) * 2.20462 : null))
+    : null;
+
+  // Phase 4r.calendar.27 — previous-day snapshot for delta arrows in
+  // the metric pills. We pull the same fields from the day before
+  // dateStr so MetricBox can show ↑/↓ vs yesterday.
+  const prevDateStr = (() => {
+    try {
+      const pd = new Date(dateStr + 'T12:00:00');
+      pd.setDate(pd.getDate() - 1);
+      return ymd(pd);
+    } catch { return null; }
+  })();
+  const prevSleep = prevDateStr ? (storage.get('sleep') || []).find(s => s.date === prevDateStr) : null;
+  const prevHrv   = prevDateStr ? (storage.get('hrv')   || []).find(h => h.date === prevDateStr) : null;
+  const prevSleepScore = prevSleep?.sleepScore != null ? Math.round(prevSleep.sleepScore) : null;
+  const prevSleepMins  = prevSleep?.totalSleepMinutes ?? prevSleep?.durationMinutes ?? null;
+  const prevSleepHrs   = prevSleepMins != null ? parseFloat((prevSleepMins / 60).toFixed(1)) : null;
+  const prevOvernightHRV = prevSleep?.overnightHRV ?? prevHrv?.overnightHRV ?? null;
+  const prevRhr = prevSleep?.restingHR ?? null;
+  const prevNut = (() => {
+    if (!prevDateStr) return null;
+    try { return nutDailyTotals(prevDateStr); } catch { return null; }
+  })();
+  // Phase 4r.calendar.29 — prev weight for the delta arrow.
+  const prevWeightEntry = prevDateStr ? allWeights.find(w => w.date === prevDateStr) : null;
+  const prevWeightLbs = prevWeightEntry
+    ? (prevWeightEntry.weightLbs != null
+        ? parseFloat(prevWeightEntry.weightLbs)
+        : (prevWeightEntry.weightKg != null ? parseFloat(prevWeightEntry.weightKg) * 2.20462 : null))
+    : null;
+
+  // Phase 4r.calendar.30 — 7-day history for Core sparklines. Walks
+  // back from dateStr inclusive and collects each day's value (or null
+  // if missing). Sparkline component will filter nulls and normalize.
+  const sleepRowsAll = storage.get('sleep') || [];
+  const hrvRowsAll   = storage.get('hrv')   || [];
+  const buildHistory = (extract) => {
+    const out = [];
+    if (!dateStr) return out;
+    try {
+      const d0 = new Date(dateStr + 'T12:00:00');
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(d0);
+        d.setDate(d.getDate() - i);
+        const ds = ymd(d);
+        out.push(extract(ds));
+      }
+    } catch {}
+    return out;
+  };
+  const rhrHistory    = buildHistory(ds => {
+    const s = sleepRowsAll.find(x => x.date === ds);
+    return s?.restingHR != null ? Number(s.restingHR) : null;
+  });
+  const hrvHistory    = buildHistory(ds => {
+    const s = sleepRowsAll.find(x => x.date === ds);
+    const h = hrvRowsAll.find(x => x.date === ds);
+    const v = s?.overnightHRV ?? h?.overnightHRV ?? null;
+    return v != null ? Number(v) : null;
+  });
+  const sleepHistory  = buildHistory(ds => {
+    const s = sleepRowsAll.find(x => x.date === ds);
+    const mins = s?.totalSleepMinutes ?? s?.durationMinutes ?? null;
+    return mins != null ? Number(mins) / 60 : null;
+  });
+  const weightHistory = buildHistory(ds => {
+    const w = allWeights.find(x => x.date === ds);
+    if (!w) return null;
+    if (w.weightLbs != null) return Number(w.weightLbs);
+    if (w.weightKg  != null) return Number(w.weightKg) * 2.20462;
+    return null;
+  });
+
+  // Phase 4r.calendar.30 — fueling targets. Calories from goals; macro
+  // targets either from goals (if set) or derived from total calories
+  // using a balanced default split: 30% protein, 45% carbs, 25% fat.
+  const goals = getGoals?.() || {};
+  const calTarget = parseFloat(goals.dailyCalorieTarget) || 2200;
+  const proTarget = parseFloat(goals.dailyProteinTarget) || Math.round(calTarget * 0.30 / 4);
+  const carbTarget = parseFloat(goals.dailyCarbTarget)    || Math.round(calTarget * 0.45 / 4);
+  const fatTarget  = parseFloat(goals.dailyFatTarget)     || Math.round(calTarget * 0.25 / 9);
 
   return (
     <div style={{
       background: 'var(--bg-surface)',
       border: '0.5px solid var(--border-default)',
       borderRadius: 'var(--radius-md)',
-      padding: '12px 14px',
-      marginBottom: 12,
+      // Phase 4r.calendar.29 — contour-less inside, but keep the
+      // outer panel border so the drawer reads as one unit. Stable
+      // min-height so the panel doesn't jump as the user picks
+      // different days with varying amounts of data.
+      padding: '10px 14px',
+      marginBottom: 8,
+      minHeight: 280,
     }}>
+      {/* Header: date label (left) + race pill OR +Add race (right) +
+          optional close button. Phase 4r.calendar.29 — no border-bottom
+          to keep the contour-less look. */}
       <div style={{
-        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-        borderBottom: '0.5px solid var(--border-subtle)', paddingBottom: 8, marginBottom: 10,
-        gap: 8,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+        gap: 8, marginBottom: 10,
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{dateLabel}</div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-            {races.length > 0
-              ? races.map(r => r.name).join(' · ')
+            {races.length > 0 && races[0].distanceMi
+              ? `${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}`
               : planned?.type && planned.type !== 'rest'
                 ? `Planned: ${prettyFamily(planned.type)}`
                 : 'No plan'}
           </div>
         </div>
-        {races.length > 0 && (
-          <span style={{
-            background: 'rgba(239,68,68,0.15)', color: '#ef4444',
-            fontSize: 10, fontWeight: 600,
+        {/* Phase 4r.calendar.29 — top-right slot: race pill if scheduled,
+            otherwise + Add race button (hidden on past dates per
+            4r.calendar.24). Manual entry + ICS sync removed from
+            drawer entirely. */}
+        {races.length > 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <span style={{
+              background: 'rgba(239,68,68,0.15)', color: '#ef4444',
+              fontSize: 10, fontWeight: 600,
+              padding: '3px 10px', borderRadius: 999,
+              maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>★ {races[0].name}</span>
+            {onDeleteRace && (
+              <button onClick={() => onDeleteRace(races[0].id)} style={{
+                all: 'unset', cursor: 'pointer', fontSize: 11,
+                color: '#f87171', padding: '0 4px',
+              }} title="Remove race">✕</button>
+            )}
+          </div>
+        ) : !isPast && onAddRace ? (
+          <button onClick={onAddRace} className="arnold-compact-btn" style={{
+            all: 'unset', cursor: 'pointer',
+            fontSize: 11, fontWeight: 500,
             padding: '3px 10px', borderRadius: 999,
+            color: '#60a5fa',
+            background: 'rgba(96,165,250,0.10)',
+            border: '0.5px solid rgba(96,165,250,0.30)',
             flexShrink: 0,
-          }}>Race day</span>
-        )}
+          }}>+ Add race</button>
+        ) : null}
         {onClose && (
           <button onClick={onClose} title="Close detail panel" style={{
             all: 'unset', cursor: 'pointer',
@@ -1161,22 +1338,29 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onManualAdd
         )}
       </div>
 
-      {/* Activity — Phase 4r.calendar.4. Renamed from "Completed" so
-          the drawer mirrors Arnold's three-pillar framing
-          (Activity · Fuel · Body) carried into the calendar. */}
+      {/* Activity — Phase 4r.calendar.30 — single-line rows, no
+          signature (calendar tile carries the imagery). HR zone bar
+          renders only below the primary (first) activity. */}
       <SectionTitle>Activity</SectionTitle>
       {activities.length === 0 ? (
         <EmptyHint>No activities logged.</EmptyHint>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 10 }}>
           {activities.map((a, i) => (
-            <ActivityRow key={i} activity={a}/>
+            <div key={i}>
+              <ActivityRow activity={a}/>
+              {i === 0 && Array.isArray(a.hrZones) && a.hrZones.length > 0 && (
+                <ZoneBar zones={a.hrZones}/>
+              )}
+            </div>
           ))}
         </div>
       )}
 
-      {/* Fuel — Phase 4r.calendar.4. Pull daily nutrition totals so the
-          drawer surfaces the three-pillar story (Activity / Fuel / Body). */}
+      {/* Fuel — Phase 4r.calendar.30 — horizontal progress bars.
+          Each bar shows value/target so users see progress-to-goal
+          at a glance, not just an absolute number. Colors aligned to
+          BOWL_PALETTES in NutritionInput.jsx. */}
       <SectionTitle>Fuel</SectionTitle>
       {(() => {
         let nut = null;
@@ -1185,136 +1369,350 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onManualAdd
           return <EmptyHint>No nutrition logged for this day.</EmptyHint>;
         }
         return (
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6,
-            marginBottom: 12,
-          }}>
-            {nut.calories > 0 && <MetricBox label="Calories" value={Math.round(nut.calories)} unit="kcal" color="#fb923c"/>}
-            {nut.protein  > 0 && <MetricBox label="Protein"  value={Math.round(nut.protein)}  unit="g"    color="#e088ab"/>}
-            {nut.carbs    > 0 && <MetricBox label="Carbs"    value={Math.round(nut.carbs)}    unit="g"    color="#fbbf24"/>}
-            {nut.fat      > 0 && <MetricBox label="Fat"      value={Math.round(nut.fat)}      unit="g"    color="#60a5fa"/>}
+          <div style={{ marginBottom: 10 }}>
+            <FuelBar label="Cal"  value={Math.round(nut.calories || 0)} target={calTarget}  unit=""  color="#60a5fa"/>
+            <FuelBar label="Pro"  value={Math.round(nut.protein  || 0)} target={proTarget}  unit="g" color="#4ade80"/>
+            <FuelBar label="Carb" value={Math.round(nut.carbs    || 0)} target={carbTarget} unit="g" color="#fbbf24"/>
+            <FuelBar label="Fat"  value={Math.round(nut.fat      || 0)} target={fatTarget}  unit="g" color="#f472b6"/>
           </div>
         );
       })()}
 
-      {/* Body / Recovery */}
-      <SectionTitle>Body</SectionTitle>
-      {!sleepHrs && !overnightHRV && !rhr ? (
+      {/* Core — Phase 4r.calendar.30 — 4-up compact vital row.
+          Each cell carries icon + delta + value + label + 7-day
+          sparkline. RHR lowerIsBetter (down=green), HRV/Sleep
+          higher=better, Weight neutral. */}
+      <SectionTitle>Core</SectionTitle>
+      {!sleepHrs && !overnightHRV && !rhr && weightLbs == null ? (
         <EmptyHint>No body data for this day.</EmptyHint>
       ) : (
         <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6,
-          marginBottom: 12,
+          display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+          gap: 6, marginBottom: 4,
         }}>
-          {sleepHrs           && <MetricBox label="Sleep"       value={sleepHrs}                unit="h"    color="#22d3ee"/>}
-          {sleepScore != null && <MetricBox label="Sleep score" value={sleepScore}              unit="/100" color="#22d3ee"/>}
-          {overnightHRV != null && <MetricBox label="HRV"       value={Math.round(overnightHRV)} unit="ms"   color="#4ade80"/>}
-          {rhr != null        && <MetricBox label="RHR"         value={Math.round(rhr)}         unit="bpm"  color="#f87171"/>}
-        </div>
-      )}
-
-      {/* Races */}
-      <SectionTitle>Races / events</SectionTitle>
-      {races.length === 0 ? (
-        <EmptyHint>No race scheduled for this day.</EmptyHint>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
-          {races.map(r => (
-            <div key={r.id} style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '5px 8px',
-              background: 'rgba(239,68,68,0.06)',
-              border: '0.5px solid rgba(239,68,68,0.25)',
-              borderRadius: 6,
-            }}>
-              <span style={{ color: '#ef4444', fontSize: 12 }}>★</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
-                {(r.city || r.country) && (
-                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>
-                    {[r.city, r.country].filter(Boolean).join(', ')}
-                  </div>
-                )}
-              </div>
-              {r.distanceMi && (
-                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                  {distanceLabel(r)}
-                </span>
-              )}
-              <button onClick={() => onDeleteRace(r.id)} style={{
-                all: 'unset', cursor: 'pointer', fontSize: 11,
-                color: '#f87171', padding: '0 6px',
-              }} title="Remove this race">✕</button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Phase 4r.calendar.22 — race-adding actions moved out of the
-          calendar header into this contextual row. All three pills
-          are compact (.arnold-compact-btn opts out of the mobile.css
-          42px floor that was making them oversized).
-          Phase 4r.calendar.24 — past dates hide these buttons since
-          you can't schedule a race in the past. Existing past-date
-          races still render above this row (so users can review or
-          delete them) but no new entries are offered. */}
-      {!isPast && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-          <button onClick={onAddRace} style={{ ...primaryBtn, padding: '4px 10px' }} className="arnold-compact-btn">+ Add race</button>
-          {onManualAdd && (
-            <button onClick={onManualAdd} style={{ ...chipBtn, padding: '4px 10px' }} className="arnold-compact-btn">+ Manual</button>
+          {rhr != null && (
+            <CompactVital
+              icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 11, height: 11 }}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>}
+              value={Math.round(rhr)} unit="bpm" label="RHR" color="#f87171"
+              prev={prevRhr != null ? Math.round(prevRhr) : null}
+              lowerIsBetter history={rhrHistory}
+            />
           )}
-          {onIcsImport && (
-            <button onClick={onIcsImport} style={{ ...chipBtn, padding: '4px 10px' }} className="arnold-compact-btn" title="Import races from a calendar URL">⇣ ICS sync</button>
+          {overnightHRV != null && (
+            <CompactVital
+              icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 11, height: 11 }}><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>}
+              value={Math.round(overnightHRV)} unit="ms" label="HRV" color="#4ade80"
+              prev={prevOvernightHRV != null ? Math.round(prevOvernightHRV) : null}
+              history={hrvHistory}
+            />
+          )}
+          {sleepHrs && (
+            <CompactVital
+              icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 11, height: 11 }}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
+              value={sleepHrs} unit="h" label="Sleep" color="#22d3ee"
+              prev={prevSleepHrs}
+              history={sleepHistory}
+            />
+          )}
+          {weightLbs != null && (
+            <CompactVital
+              icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 11, height: 11 }}><circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/></svg>}
+              value={weightLbs.toFixed(1)} unit="lb" label="Weight" color="#fbbf24"
+              prev={prevWeightLbs != null ? parseFloat(prevWeightLbs.toFixed(1)) : null}
+              neutral history={weightHistory}
+            />
           )}
         </div>
       )}
+
+      {/* Phase 4r.calendar.29 — bottom action row removed entirely.
+          + Add race lives in the top-right slot when no race is
+          scheduled (replaces the race pill when present). + Manual
+          and ⇣ ICS sync were rarely used and added clutter, so they
+          moved out of the drawer. If you need them, they're still
+          available via the calendar header (desktop) or can be
+          re-introduced behind a long-press menu later. */}
     </div>
   );
 }
 
+// Phase 4r.calendar.30 — single-line activity row. No signature
+// (the calendar tile above already carries the imagery). Glyph +
+// name + metric string. Time formatted "1h 35m" when >= 60 min.
+// Avg HR appended when available.
 function ActivityRow({ activity }) {
   const fam = activityFamily(activity);
   const style = FAMILY_STYLE[fam] || FAMILY_STYLE.rest;
-  const mins = activity.durationSecs ? Math.round(activity.durationSecs / 60) : null;
+  const secs = activity.durationSecs || 0;
+  const mins = secs ? Math.round(secs / 60) : null;
+  const timeStr = mins ? (mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`) : null;
   const mi = activity.distanceMi ? activity.distanceMi.toFixed(1) : null;
+  const avgHR = activity.avgHR || activity.avgHeartRate || null;
+  const bits = [];
+  if (mi) bits.push(`${mi} mi`);
+  if (timeStr) bits.push(timeStr);
+  if (avgHR) bits.push(`♥ ${Math.round(avgHR)}`);
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '5px 8px',
-      background: style.bg,
-      border: `0.5px solid ${style.border}`,
-      borderRadius: 6,
+      display: 'flex', alignItems: 'baseline', gap: 8,
+      padding: '2px 0',
     }}>
-      <span style={{ color: style.color, fontSize: 12, fontWeight: 700 }}>{style.icon}</span>
-      <span style={{ flex: 1, fontSize: 11, color: 'var(--text-primary)' }}>
+      <span style={{
+        color: style.color, fontSize: 13, fontWeight: 700,
+        lineHeight: 1, width: 14, flexShrink: 0, textAlign: 'center',
+      }}>{style.icon}</span>
+      <span style={{
+        flex: 1, fontSize: 12, color: 'var(--text-primary)', fontWeight: 500,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
         {activity.activityName || activity.activityType || prettyFamily(fam)}
       </span>
-      <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-        {mi && `${mi} mi · `}{mins && `${mins} min`}
+      <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, letterSpacing: '-0.01em' }}>
+        {bits.join(' · ')}
       </span>
     </div>
   );
 }
 
-// Phase 4r.calendar.14 — colored MetricBox. Each metric carries the
-// color Arnold uses for it across the app (sleep=cyan, HRV=green,
-// RHR=coral, calories=orange, protein=pink, carbs=amber, fat=blue).
-// A subtle tinted background + accent left-bar makes the drawer feel
-// like the rest of Arnold's domain-coded UI instead of grey on grey.
-function MetricBox({ label, value, unit, color = '#94a3b8' }) {
+// Phase 4r.calendar.30 — HR zone time-in-zone bar. 5-segment colored
+// bar showing the share of activity time spent in each HR zone.
+// Renders only when the primary activity has an hrZones array.
+function ZoneBar({ zones }) {
+  if (!Array.isArray(zones) || zones.length === 0) return null;
+  // Each zone entry can be { secsInZone } or just a number. Tolerate both.
+  const secs = zones.map(z => typeof z === 'object' ? (z.secsInZone || z.seconds || 0) : (Number(z) || 0));
+  const total = secs.reduce((a, b) => a + b, 0);
+  if (total <= 0) return null;
+  const colors = ['#5DCAA5', '#378ADD', '#4ade80', '#EF9F27', '#f87171']; // Z1..Z5
+  return (
+    <div>
+      <div style={{
+        display: 'flex', gap: 1,
+        marginLeft: 22, marginTop: 4, marginBottom: 2,
+        height: 3, borderRadius: 2, overflow: 'hidden',
+      }}>
+        {secs.slice(0, 5).map((s, i) => {
+          const frac = s / total;
+          if (frac <= 0) return null;
+          return (
+            <div key={i} style={{
+              background: colors[i] || '#888', flex: frac,
+            }}/>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Phase 4r.calendar.30 — horizontal progress bar for Fuel macros.
+// Label left (muted small-caps) + colored progress bar (fill = value/target)
+// + value/target text right. Reads cleaner than bowls at the drawer's
+// compact width and surfaces progress-to-goal at a glance.
+function FuelBar({ label, value, target, unit, color }) {
+  const pct = target > 0 ? Math.min(100, (value / target) * 100) : 0;
+  const fmtNum = (n) => n >= 1000 ? n.toLocaleString() : String(n);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+      <span style={{
+        width: 30, fontSize: 9, fontWeight: 600,
+        color, textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>{label}</span>
+      <div style={{
+        flex: 1, height: 5,
+        background: 'rgba(255,255,255,0.06)',
+        borderRadius: 3, overflow: 'hidden',
+      }}>
+        <div style={{
+          height: '100%', width: `${pct}%`,
+          background: color, borderRadius: 3,
+        }}/>
+      </div>
+      <span style={{
+        minWidth: 76, textAlign: 'right',
+        fontSize: 10, color: 'var(--text-primary)',
+        letterSpacing: '-0.01em',
+      }}>{fmtNum(value)} / {fmtNum(target)}{unit ? ` ${unit}` : ''}</span>
+    </div>
+  );
+}
+
+// Phase 4r.calendar.30 — compact vital cell for the Core 4-up row.
+// Cockpit-style cell: icon top-left, delta top-right, big value
+// centered, label below, mini 7-day sparkline at the floor. Subtle
+// family-color left rail + barely-tinted background.
+function CompactVital({ icon, value, unit, label, prev = null, lowerIsBetter = false, neutral = false, history = null, color }) {
+  let delta = null;
+  if (typeof prev === 'number' && !isNaN(prev) && typeof value !== 'undefined') {
+    const cur = parseFloat(value);
+    if (!isNaN(cur) && cur !== prev) {
+      const diff = cur - prev;
+      const fmt = Math.abs(diff) >= 10 ? Math.round(diff) : (Math.round(diff * 10) / 10);
+      const isUp = diff > 0;
+      const good = neutral ? null : lowerIsBetter ? !isUp : isUp;
+      const arrowColor = good == null ? 'var(--text-muted)' : good ? '#4ade80' : '#f87171';
+      delta = { text: `${isUp ? '↑' : '↓'}${Math.abs(fmt)}`, color: arrowColor };
+    }
+  }
+  // Sparkline: normalize history to 0-1 over its own range.
+  let sparkPath = null;
+  if (Array.isArray(history) && history.length >= 2) {
+    const vals = history.filter(v => typeof v === 'number' && !isNaN(v));
+    if (vals.length >= 2) {
+      const min = Math.min(...vals);
+      const max = Math.max(...vals);
+      const range = max - min || 1;
+      const w = 100, h = 9;
+      const points = vals.map((v, i) => {
+        const x = (i / (vals.length - 1)) * w;
+        const y = h - ((v - min) / range) * h;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      sparkPath = points;
+    }
+  }
+  return (
+    <div style={{
+      padding: '6px 4px 4px 6px',
+      borderRadius: 8,
+      background: 'rgba(255,255,255,0.02)',
+      borderLeft: `2px solid ${color}`,
+      display: 'flex', flexDirection: 'column', gap: 1,
+      minWidth: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+        <span style={{ width: 11, height: 11, color, display: 'flex' }}>{icon}</span>
+        {delta && (
+          <span style={{
+            fontSize: 8.5, fontWeight: 600, color: delta.color,
+            letterSpacing: '-0.02em',
+          }}>{delta.text}</span>
+        )}
+      </div>
+      <div style={{
+        fontSize: 13, fontWeight: 600, color,
+        lineHeight: 1, letterSpacing: '-0.02em',
+      }}>
+        {value}<span style={{ fontSize: 8, color: 'var(--text-muted)', marginLeft: 1, fontWeight: 400 }}>{unit}</span>
+      </div>
+      <div style={{
+        fontSize: 7.5, color: 'var(--text-muted)',
+        textTransform: 'uppercase', letterSpacing: '0.08em', lineHeight: 1,
+      }}>{label}</div>
+      {sparkPath && (
+        <svg width="100%" height="9" viewBox="0 0 100 9" preserveAspectRatio="none" style={{ marginTop: 1, display: 'block' }}>
+          <polyline points={sparkPath} fill="none" stroke={color} strokeWidth="1.4" opacity="0.7"/>
+        </svg>
+      )}
+    </div>
+  );
+}
+
+// Phase 4r.calendar.29 — inline metric row. Kept for any caller that
+// still wants the simple row layout; the drawer now uses FuelBar +
+// CompactVital instead.
+function MetricRow({ label, value, unit, color = 'var(--text-primary)', prev = null, lowerIsBetter = false, neutral = false }) {
+  let delta = null;
+  if (typeof prev === 'number' && !isNaN(prev) && typeof value !== 'undefined') {
+    const cur = parseFloat(value);
+    if (!isNaN(cur) && cur !== prev) {
+      const diff = cur - prev;
+      const fmt = Math.abs(diff) >= 10 ? Math.round(diff) : (Math.round(diff * 10) / 10);
+      const isUp = diff > 0;
+      const good = neutral ? null : lowerIsBetter ? !isUp : isUp;
+      const arrowColor = good == null ? 'var(--text-muted)' : good ? '#4ade80' : '#f87171';
+      delta = { text: `${isUp ? '↑' : '↓'}${Math.abs(fmt)}`, color: arrowColor };
+    }
+  }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'baseline', gap: 8,
+      padding: '3px 0',
+    }}>
+      <span style={{
+        flex: 1, fontSize: 11, color: 'var(--text-muted)',
+        textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 500,
+      }}>{label}</span>
+      <span style={{
+        fontSize: 14, fontWeight: 600, color, lineHeight: 1, flexShrink: 0,
+      }}>
+        {value}<span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 2, fontWeight: 400 }}>{unit}</span>
+      </span>
+      <span style={{
+        fontSize: 10, fontWeight: 600,
+        color: delta ? delta.color : 'transparent',
+        width: 36, textAlign: 'right', flexShrink: 0,
+        letterSpacing: '-0.02em',
+      }}>{delta ? delta.text : '·'}</span>
+    </div>
+  );
+}
+
+// Phase 4r.calendar.14 / .27 — colored MetricBox.
+// Each metric carries the color Arnold uses for it across the app:
+//   Nutrition (matches BOWL_PALETTES in NutritionInput.jsx):
+//     calories #60a5fa (blue), protein #4ade80 (green),
+//     carbs #fbbf24 (amber), fat #f472b6 (pink)
+//   Body: sleep #22d3ee (cyan), HRV #4ade80 (green), RHR #f87171 (red)
+// Phase 4r.calendar.27 — right-aligned value + optional delta arrow
+// vs previous day. prev = previous-day numeric value; lowerIsBetter
+// flips arrow coloring (RHR: down=good). Neutral metrics (calories,
+// macros tied to a plan) pass neutral=true to skip color judgment.
+function MetricBox({ label, value, unit, color = '#94a3b8', prev = null, lowerIsBetter = false, neutral = false }) {
+  // Delta arrow only renders when prev is a real number AND current
+  // value is too. Skip when no comparable data exists.
+  let delta = null;
+  if (typeof prev === 'number' && !isNaN(prev) && typeof value !== 'undefined') {
+    const cur = parseFloat(value);
+    if (!isNaN(cur) && cur !== prev) {
+      const diff = cur - prev;
+      // Pick rounding: integers stay integers, decimals get 1 place.
+      const fmt = Math.abs(diff) >= 10 ? Math.round(diff) : (Math.round(diff * 10) / 10);
+      const isUp = diff > 0;
+      const good = neutral ? null
+                 : lowerIsBetter ? !isUp
+                 : isUp;
+      const arrowColor = good == null ? 'var(--text-muted)'
+                       : good ? '#4ade80' : '#f87171';
+      delta = {
+        text: `${isUp ? '↑' : '↓'}${Math.abs(fmt)}`,
+        color: arrowColor,
+      };
+    }
+  }
   return (
     <div style={{
       background: `${color}10`,
       border: `0.5px solid ${color}30`,
       borderLeft: `2px solid ${color}`,
       borderRadius: 6, padding: '6px 8px',
-      textAlign: 'left',
+      position: 'relative',
     }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color }}>
+      {/* Delta indicator — top-right corner, fills what used to be dead space */}
+      {delta && (
+        <span style={{
+          position: 'absolute', top: 4, right: 6,
+          fontSize: 9, fontWeight: 600,
+          color: delta.color, lineHeight: 1,
+          letterSpacing: '-0.02em',
+        }}>{delta.text}</span>
+      )}
+      <div style={{
+        fontSize: 14, fontWeight: 600, color,
+        textAlign: 'right',
+        // Phase 4r.calendar.28 — dropped mono from the value because
+        // Android WebView renders it fuzzy at 14px. Sans-serif at
+        // weight 600 stays crisp. Mono is kept on the delta arrow
+        // only (9px, where it still reads cleanly).
+        paddingRight: delta ? 24 : 0,
+      }}>
         {value}<span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 2, fontWeight: 400 }}>{unit}</span>
       </div>
-      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</div>
+      <div style={{
+        fontSize: 9, color: 'var(--text-muted)', marginTop: 1,
+        textTransform: 'uppercase', letterSpacing: '0.04em',
+        textAlign: 'right',
+      }}>{label}</div>
     </div>
   );
 }

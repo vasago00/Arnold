@@ -34,6 +34,11 @@ import { ImportDiagnostics } from "./components/ImportDiagnostics.jsx";
 import { GoalsHub } from "./components/GoalsHub.jsx";
 import { StartTilePicker, StartTilePickerInner } from "./components/StartTilePicker.jsx";
 import { buildTileContext, TILE_METRICS, deriveStatus } from "./core/derive/tileMetrics.js";
+// Phase 4r.intel.1 — conditions-aware metric status. Replaces hardcoded
+// "color this tile red because it's an intensity metric" with status
+// computed against published norms adjusted for temp/humidity. See
+// core/expectedRanges.js for the bands + adjustment math.
+import { paintMetric as paintMetricStatus } from "./core/expectedRanges.js";
 import { resolveAllStartTiles } from "./core/derive/autoPromote.js";
 import { KRITile, InlineKRIStat } from "./components/KRITile.jsx";
 import { normalizeTilePrefs } from "./core/derive/tileMetrics.js";
@@ -1012,7 +1017,11 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.utc.2 · full-utc-sweep-15-localdate-consolidated-36-bare-newdate-fixed-2026-05-18','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.intel.6 · status-tint-and-maxHR-fallback-2026-05-19','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
+      // the browser console then re-click an activity:
+      //   window.__INTEL_DEBUG__ = true
+      // Every _paintM call will log: metric, value, status, band, family, conditions.
 
       // ── Garmin Wellness backfill (Phase 4c) ──
       // If the user has configured Garmin credentials + the Cloud Sync Worker,
@@ -4669,24 +4678,171 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     const avgCad = safeN(fd.avgCadence,'avgCadence');
     const vert = fd.avgVerticalOscillation ?? null;
 
+    // Phase 4r.intel.1 — intel context for status-aware coloring.
+    // Replaces the old "category-color = red because metric is intense"
+    // pattern with status against published norms (core/expectedRanges.js).
+    // When a metric is within expected range for this family + conditions,
+    // value renders in neutral primary text color. Mild outliers → amber.
+    // Concerns → red. The family/category info still lives in the icon
+    // and label, so the visual taxonomy is preserved.
+    //
+    // Conditions injection: per-activity temperature isn't currently
+    // attached on sync. fd.avgTemperature may be present on some FIT
+    // imports — if so, use it. Otherwise the bands are population-baseline
+    // only (no heat adjustment), which still fixes the false-red issue
+    // for HIIT because the band is wide enough.
+    // TODO Phase 4r.intel.2 — attach per-activity weather during sync.
+    // intelMaxHR with fallback chain (Phase 4r.intel.6):
+    //   1. profile.maxHR via getEffectiveMaxHR (preferred — uses user-set or recent training peak)
+    //   2. highest recorded maxHR across all activities (uses what your body has actually shown)
+    //   3. null — let avgHR_pctMax compute to null and tiles fall to neutral
+    const intelMaxHR = (() => {
+      try {
+        const fromFn = getEffectiveMaxHR?.(profile, activities);
+        if (fromFn && Number.isFinite(fromFn) && fromFn > 100) return fromFn;
+        // Fallback: max(activities[].maxHR) across recorded activities. Filter
+        // out missing/zero values. Robust to one bad reading via the >100 sanity gate.
+        const maxes = (activities || [])
+          .map(a => Number(a && a.maxHR))
+          .filter(n => Number.isFinite(n) && n > 100);
+        if (maxes.length) return Math.max(...maxes);
+        return null;
+      } catch { return null; }
+    })();
+    // Compounding fatigue inputs (Phase 4r.intel.4). The intel layer reads
+    // these to widen/shift expected bands when the body was tired going IN.
+    //   - sleepScorePrev: Garmin Sleep Score for the night BEFORE this
+    //     activity. We look up the sleep entry matching activity date.
+    //   - rollingTSS7 / rollingTSS28: TSS sums across recent windows.
+    //   - consecutiveHardDays: hard sessions in the 2 days before this.
+    const _intelFatigue = (() => {
+      try {
+        const actDate = (fd.date && typeof fd.date === 'string') ? fd.date : null;
+        if (!actDate) return null;
+        // Prior-night sleep score — sleep entry for the activity date.
+        // (Garmin records sleep that ENDS on the activity date; that IS the
+        // prior night for a morning workout. For PM workouts, this is still
+        // the most-recent overnight sleep, which is what we want.)
+        const sleepArr = (() => {
+          try { return storage.get('sleep') || []; } catch { return []; }
+        })();
+        const sleepEntry = sleepArr.find(s => s?.date === actDate);
+        const sleepScorePrev = (sleepEntry?.sleepScore && sleepEntry.sleepScore > 0)
+          ? sleepEntry.sleepScore : null;
+        // Rolling TSS — sum activities' tss in the 7d / 28d trailing windows
+        // ending the day BEFORE this activity (we don't include the current
+        // session's load in its own context).
+        const cur = parseLocalDate(actDate);
+        if (!cur) return { sleepScorePrev, rollingTSS7: null, rollingTSS28: null, consecutiveHardDays: 0 };
+        const d7 = new Date(cur); d7.setDate(d7.getDate() - 7);
+        const d28 = new Date(cur); d28.setDate(d28.getDate() - 28);
+        const d2 = new Date(cur); d2.setDate(d2.getDate() - 2);
+        let tss7 = 0, tss28 = 0, hardInPrior2 = 0;
+        for (const a of (activities || [])) {
+          const ad = a?.date && parseLocalDate(a.date);
+          if (!ad || ad >= cur) continue;
+          const tss = Number(a.trainingStressScore || a.tss || 0);
+          if (ad >= d28) tss28 += tss;
+          if (ad >= d7)  tss7  += tss;
+          if (ad >= d2) {
+            if (isHIITAct(a) || isHardSession(a)) hardInPrior2 += 1;
+          }
+        }
+        return {
+          sleepScorePrev,
+          rollingTSS7: tss7 || null,
+          rollingTSS28: tss28 || null,
+          consecutiveHardDays: hardInPrior2,
+        };
+      } catch { return null; }
+    })();
+    const intelCtx = {
+      family: planType,
+      // Duration gate — sessions under 15min are excluded from band lookup
+      // (warmup mobility, sub-15-min "incidental" records). expectedRanges
+      // returns neutral status for these.
+      durationSec: fd.durationSecs ?? null,
+      conditions: {
+        tempC: fd.avgTemperature ?? fd.tempC ?? null,
+        humidityPct: fd.avgHumidity ?? null,
+      },
+      fatigue: _intelFatigue,
+      // baseline: undefined — Session 3 will populate from learnedBaselines.
+    };
+    // Helper: paint a metric value against its expected range. Returns the
+    // color to use for the value. Pass the metric's "category color" as
+    // fallback (used when no published norm exists or status is neutral).
+    const _paintM = (metricId, value, categoryColor) => {
+      try {
+        const result = paintMetricStatus(metricId, value, categoryColor, intelCtx);
+        // DIAGNOSTIC — Phase 4r.intel.4. Toggle via window.__INTEL_DEBUG__=true
+        // in the browser console to log every metric decision once per render.
+        // Output: [intel] metricId value=N status='expected'|'mild'|'concern'|'neutral'
+        //         band=[lo,hi] family=hiit temp=null hum=null fat=null
+        if (typeof window !== 'undefined' && window.__INTEL_DEBUG__) {
+          // eslint-disable-next-line no-console
+          console.log(
+            '[intel]', metricId,
+            'value=', value,
+            'status=', result.status,
+            'band=', result.expected,
+            'family=', intelCtx.family,
+            'temp=', intelCtx?.conditions?.tempC,
+            'hum=', intelCtx?.conditions?.humidityPct,
+            'fat=', intelCtx?.fatigue,
+            'dur=', intelCtx?.durationSec,
+          );
+        }
+        // 'expected' should look neutral so the eye is only drawn to
+        // outliers — preserving the family color on every metric defeats
+        // the purpose. 'neutral' (no published norm) falls back to
+        // category color so we don't regress unhandled metrics.
+        if (result.status === 'expected') return 'var(--text-primary)';
+        return result.color;
+      } catch (e) {
+        if (typeof window !== 'undefined' && window.__INTEL_DEBUG__) {
+          // eslint-disable-next-line no-console
+          console.error('[intel] EXCEPTION', metricId, e && e.message);
+        }
+        return categoryColor;
+      }
+    };
+    // Tint companion to _paintM (Phase 4r.intel.6). Same logic; returns the
+    // background-wash color. When status is 'expected' we replace the
+    // category tint (e.g. soft pink for HR) with a soft teal — the active
+    // "in band" affirmation. 'mild' uses amber wash; 'concern' uses red wash.
+    // 'neutral' (insufficient data) keeps the category tint as the fallback.
+    const _paintT = (metricId, value, categoryTint) => {
+      try {
+        const result = paintMetricStatus(metricId, value, '#000', intelCtx);
+        if (result.status === 'expected') return 'rgba(94,234,212,0.08)'; // teal — in band
+        if (result.status === 'mild')     return 'rgba(251,191,36,0.10)'; // amber
+        if (result.status === 'concern')  return 'rgba(248,113,113,0.10)'; // red
+        return categoryTint;
+      } catch { return categoryTint; }
+    };
+    // For avgHR/maxHR we need %maxHR to look up the band. Compute once.
+    const avgHRPctMax = (intelMaxHR && avgHR) ? (avgHR / intelMaxHR) * 100 : null;
+    const maxHRPctMax = (intelMaxHR && maxHR) ? (maxHR / intelMaxHR) * 100 : null;
+
     const TILE = {
       // Headline tiles (Row 1 candidates)
       distance:   () => fd.distanceMi   ? { icon:'route',           color:'#60a5fa', label:'Distance · mi', value: fd.distanceMi.toFixed(1), tint:'rgba(96,165,250,0.06)' } : null,
       pace:       () => fd.avgPacePerMi ? { icon:'stopwatch',       color:'#4ade80', label:'Pace · /mi',    value: fd.avgPacePerMi,           tint:'rgba(74,222,128,0.06)' } : null,
-      avgHR:      () => avgHR           ? { icon:'heartbeat',       color:'#f87171', label:'Avg HR · bpm',  value: safeDisp(fd.avgHR,'avgHR'),tint:'rgba(248,113,113,0.06)' } : null,
-      maxHRHero:  () => maxHR           ? { icon:'heart-rate-monitor', color:'#ef4444', label:'Max HR · bpm',value: safeDisp(fd.maxHR,'maxHR'),tint:'rgba(239,68,68,0.06)' } : null,
+      avgHR:      () => avgHR           ? { icon:'heartbeat',       color: _paintM('avgHR_pctMax', avgHRPctMax, '#f87171'), label:'Avg HR · bpm',  value: safeDisp(fd.avgHR,'avgHR'),tint: _paintT('avgHR_pctMax', avgHRPctMax, 'rgba(248,113,113,0.06)') } : null,
+      maxHRHero:  () => maxHR           ? { icon:'heart-rate-monitor', color: _paintM('avgHR_pctMax', maxHRPctMax, '#ef4444'), label:'Max HR · bpm',value: safeDisp(fd.maxHR,'maxHR'),tint: _paintT('avgHR_pctMax', maxHRPctMax, 'rgba(239,68,68,0.06)') } : null,
       cadence:    () => avgCad          ? { icon:'shoe',            color:'#a78bfa', label:'Cadence · spm', value: safeDisp(fd.avgCadence,'avgCadence'), tint:'rgba(167,139,250,0.06)' } : null,
       vertOsc:    () => vert            ? { icon:'wave-sine',       color:'#fbbf24', label:'Vert osc · cm', value: vert.toFixed(1),           tint:'rgba(251,191,36,0.06)' } : null,
       elevation:  () => fd.totalAscentFt? { icon:'mountain',        color:'#94a3b8', label:'Elev · ft',     value: String(fd.totalAscentFt),  tint:'rgba(148,163,184,0.06)' } : null,
       duration:   () => (fd.duration && fd.duration !== '—') ? { icon:'clock-hour-4', color:'#94a3b8', label:'Duration', value: fd.duration, tint:'rgba(148,163,184,0.06)' } : null,
       z2pct:      () => z2 != null      ? { icon:'target-arrow',    color:'#4ade80', label:'Z2 time',       value: _fmtPct(z2),               tint:'rgba(74,222,128,0.06)' } : null,
       z34pct:     () => z34             ? { icon:'target-arrow',    color:'#fbbf24', label:'Z3–Z4 time',    value: _fmtPct(z34),              tint:'rgba(251,191,36,0.06)' } : null,
-      z45pct:     () => z45             ? { icon:'activity',        color:'#fb7185', label:'Z4–Z5 time',    value: _fmtPct(z45),              tint:'rgba(251,113,133,0.06)' } : null,
-      cardiacDrift: () => drift != null ? { icon:'activity',        color: drift > 5 ? '#fb7185' : '#4ade80', label:'Cardiac drift', value: `${drift>=0?'+':''}${drift.toFixed(1)}%`, tint:'rgba(251,113,133,0.06)' } : null,
+      z45pct:     () => z45             ? { icon:'activity',        color: _paintM('z45Pct', z45, '#fb7185'), label:'Z4–Z5 time',    value: _fmtPct(z45),              tint: _paintT('z45Pct', z45, 'rgba(251,113,133,0.06)') } : null,
+      cardiacDrift: () => drift != null ? { icon:'activity',        color: _paintM('cardiacDrift', drift, '#fb7185'), label:'Cardiac drift', value: `${drift>=0?'+':''}${drift.toFixed(1)}%`, tint: _paintT('cardiacDrift', drift, 'rgba(251,113,133,0.06)') } : null,
       gap:        () => fd.avgGapPerMi  ? { icon:'mountain',        color:'#fbbf24', label:'GAP · /mi',     value: fd.avgGapPerMi,            tint:'rgba(251,191,36,0.06)' } : null,
-      anaerTE:    () => anaerTE         ? { icon:'activity',        color:'#fb7185', label:'Anaer TE',      value: anaerTE.toFixed(1),        tint:'rgba(251,113,133,0.06)' } : null,
-      decouplingHero: () => decoupling != null ? { icon:'wave-sine', color: decoupling > 5 ? '#fb7185' : '#4ade80', label:'Aero decoupling', value: `${decoupling.toFixed(1)}%`, tint:'rgba(74,222,128,0.06)' } : null,
-      hrRecovery: () => hrRecovery      ? { icon:'heartbeat',       color:'#22d3ee', label:'HR recovery 1m', value: `−${Math.round(hrRecovery)}`, tint:'rgba(34,211,238,0.06)' } : null,
+      anaerTE:    () => anaerTE         ? { icon:'activity',        color: _paintM('anaerobicTE', anaerTE, '#fb7185'), label:'Anaer TE',      value: anaerTE.toFixed(1),        tint: _paintT('anaerobicTE', anaerTE, 'rgba(251,113,133,0.06)') } : null,
+      decouplingHero: () => decoupling != null ? { icon:'wave-sine', color: _paintM('decoupling', decoupling, '#fb7185'), label:'Aero decoupling', value: `${decoupling.toFixed(1)}%`, tint: _paintT('decoupling', decoupling, 'rgba(74,222,128,0.06)') } : null,
+      hrRecovery: () => hrRecovery      ? { icon:'heartbeat',       color: _paintM('hrRecovery1m', hrRecovery, '#22d3ee'), label:'HR recovery 1m', value: `−${Math.round(hrRecovery)}`, tint: _paintT('hrRecovery1m', hrRecovery, 'rgba(34,211,238,0.06)') } : null,
       sets:       () => fd.setsCount    ? { icon:'barbell',         color:'#a78bfa', label:'Sets',          value: String(fd.setsCount),      tint:'rgba(167,139,250,0.06)' } : null,
       reps:       () => fd.totalReps    ? { icon:'repeat',          color:'#fbbf24', label:'Reps',          value: String(fd.totalReps),      tint:'rgba(251,191,36,0.06)' } : null,
       bodyBatt:   () => fd.bodyBatteryDrain ? { icon:'gauge',       color:'#94a3b8', label:'Body batt',     value: `−${fd.bodyBatteryDrain}`, tint:'rgba(148,163,184,0.06)' } : null,
@@ -4700,16 +4856,16 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       caloriesHero: () => calories      ? { icon:'flame',           color:'#fb923c', label:'Calories',      value: String(calories),          tint:'rgba(251,146,60,0.06)' } : null,
       // Row 2 (context) tiles — same component, smaller display.
       r2_duration:   () => (fd.duration && fd.duration !== '—') ? { icon:'clock-hour-4', color:'#94a3b8', value: fd.duration,                       label:'duration' } : null,
-      r2_avgHR:      () => avgHR        ? { icon:'heartbeat',          color:'#f87171', value: safeDisp(fd.avgHR,'avgHR'),       label:'avg HR' } : null,
-      r2_maxHR:      () => maxHR        ? { icon:'heart-rate-monitor', color:'#ef4444', value: safeDisp(fd.maxHR,'maxHR'),       label:'max HR' } : null,
+      r2_avgHR:      () => avgHR        ? { icon:'heartbeat',          color: _paintM('avgHR_pctMax', avgHRPctMax, '#f87171'), value: safeDisp(fd.avgHR,'avgHR'),       label:'avg HR' } : null,
+      r2_maxHR:      () => maxHR        ? { icon:'heart-rate-monitor', color: _paintM('avgHR_pctMax', maxHRPctMax, '#ef4444'), value: safeDisp(fd.maxHR,'maxHR'),       label:'max HR' } : null,
       r2_calories:   () => calories     ? { icon:'flame',              color:'#fb923c', value: String(calories),                  label:'calories' } : null,
       r2_aeroTE:     () => aeroTE       ? { icon:'target-arrow',       color:'#4ade80', value: aeroTE.toFixed(1),                 label:'aero TE' } : null,
-      r2_anaerTE:    () => anaerTE      ? { icon:'activity',           color:'#fb7185', value: anaerTE.toFixed(1),                label:'anaer TE' } : null,
+      r2_anaerTE:    () => anaerTE      ? { icon:'activity',           color: _paintM('anaerobicTE', anaerTE, '#fb7185'), value: anaerTE.toFixed(1),                label:'anaer TE' } : null,
       r2_tss:        () => tss          ? { icon:'activity',           color:'#a78bfa', value: String(Math.round(tss)),            label:'TSS' } : null,
-      r2_decoupling: () => decoupling != null ? { icon:'wave-sine',    color:'#fbbf24', value: `${decoupling.toFixed(1)}%`,        label:'decoupling' } : null,
+      r2_decoupling: () => decoupling != null ? { icon:'wave-sine',    color: _paintM('decoupling', decoupling, '#fbbf24'), value: `${decoupling.toFixed(1)}%`,        label:'decoupling' } : null,
       r2_z2pct:      () => z2 != null   ? { icon:'target-arrow',       color:'#4ade80', value: _fmtPct(z2),                        label:'Z2 time' } : null,
       r2_vertOsc:    () => vert         ? { icon:'wave-sine',          color:'#fbbf24', value: vert.toFixed(1),                    label:'vert osc · cm' } : null,
-      r2_hrRecovery: () => hrRecovery   ? { icon:'heartbeat',          color:'#22d3ee', value: `−${Math.round(hrRecovery)}`,       label:'HR recov 1m' } : null,
+      r2_hrRecovery: () => hrRecovery   ? { icon:'heartbeat',          color: _paintM('hrRecovery1m', hrRecovery, '#22d3ee'), value: `−${Math.round(hrRecovery)}`,       label:'HR recov 1m' } : null,
       r2_avgPace:    () => fd.avgPacePerMi ? { icon:'stopwatch',       color:'#4ade80', value: fd.avgPacePerMi,                    label:'avg pace' } : null,
       r2_avgPower:   () => fd.avgPowerW ? { icon:'bolt',               color:'#fbbf24', value: `${fd.avgPowerW} W`,                label:'avg power' } : null,
       r2_normPower:  () => fd.normalizedPower ? { icon:'bolt',         color:'#fb923c', value: `${fd.normalizedPower} W`,          label:'NP' } : null,
@@ -5766,10 +5922,15 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
             catch { return []; }
           })();
           const _todayMid = new Date(); _todayMid.setHours(0,0,0,0);
+          // Phase 4r.play.1 — only surface the race card on Play tab
+          // within the 7-day pre-race window. Outside that window the
+          // race lives on the Calendar tab; surfacing it on Play
+          // months out clutters the daily-action view.
+          const _sevenDaysOut = new Date(_todayMid); _sevenDaysOut.setDate(_sevenDaysOut.getDate() + 7);
           const _upcomingPlayRace = _playRaces
             .filter(r => {
               const d = parseLocalDate(r.date);
-              return d && d >= _todayMid;
+              return d && d >= _todayMid && d <= _sevenDaysOut;
             })
             .sort((a,b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null;
           let _playSweatRate = null;
@@ -9590,9 +9751,12 @@ Structure:
                   }
                   return total > 0 ? Math.round(total) : null;
                 })();
-                // Today completed = any logged session (run or strength)
-                // produced load. Drives the green ✓ next to the Today tile.
-                const todayCompleted = todayRTSS != null && todayRTSS > 0;
+                // Today completed = any logged session today. Phase
+                // 4r.edgeiq.1 — mobility sessions produce 0 rTSS but
+                // still count as "done" for the daily completion ✓.
+                // Previously only run + strength flipped this flag.
+                const todayActsCount = (activities || []).filter(a => a.date === today).length;
+                const todayCompleted = (todayRTSS != null && todayRTSS > 0) || todayActsCount > 0;
 
                 // 7-day history for HRV + Sleep (sparkline data)
                 const hrvHist = days.map(d => {

@@ -64,12 +64,12 @@ export function GoalsHub({ showToast }) {
   const input = {
     fontSize: 12, padding: '5px 8px',
     background: 'var(--bg-input)', border: '0.5px solid var(--border-default)',
-    borderRadius: 4, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)',
+    borderRadius: 4, color: 'var(--text-primary)',
     textAlign: 'right',
     MozAppearance: 'textfield',
   };
   const unit = { fontSize: 10, color: 'var(--text-muted)' };
-  const suffix = { fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textAlign: 'right' };
+  const suffix = { fontSize: 11, color: 'var(--text-muted)', textAlign: 'right' };
   const saveBtn = {
     background: 'var(--accent-dim)', color: 'var(--text-accent)',
     border: '0.5px solid var(--accent-border)', borderLeft: '3px solid var(--accent)',
@@ -320,7 +320,7 @@ function NutritionCalibrationPanel({ draft }) {
   };
   const labelStyle  = { fontSize: 9, fontWeight: 500, letterSpacing: '0.07em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 8 };
   const subLabel    = { fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 };
-  const value       = { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' };
+  const value       = { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' };
   const smallNote   = { fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' };
   const grid3       = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 10 };
   const grid4       = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 10 };

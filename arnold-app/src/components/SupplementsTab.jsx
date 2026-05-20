@@ -568,7 +568,7 @@ Rules:
                     {(sup.nutrients || []).map((n, i) => (
                       <div key={i} style={nutTile}>
                         <span style={{ color: 'var(--text-secondary)' }}>{n.name}</span>
-                        <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{n.amount} {n.unit}</span>
+                        <span style={{ color: 'var(--text-primary)' }}>{n.amount} {n.unit}</span>
                       </div>
                     ))}
                     {sup.verify && (
@@ -721,7 +721,7 @@ Rules:
                             transition: 'width 0.3s ease',
                           }} />
                         </div>
-                        <div style={{ width: 52, fontSize: 8, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ width: 52, fontSize: 10, color: 'var(--text-secondary)', textAlign: 'right', flexShrink: 0 }}>
                           {displayAmt}
                         </div>
                       </div>

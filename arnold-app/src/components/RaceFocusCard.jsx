@@ -467,21 +467,21 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
           <span style={{fontSize:SZ.title,fontWeight:500,color:'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0}}>
             ⚑ {expanded ? (race.name || 'Next race') : shortName}
           </span>
-          <span style={{fontSize:SZ.days,color:accent,fontFamily:'var(--font-mono)',flexShrink:0}}>{days}d</span>
+          <span style={{fontSize:SZ.days,color:accent,flexShrink:0}}>{days}d</span>
           {/* Collapsed only — inline date + weather chip */}
           {!expanded && (
             <>
-              <span style={{fontSize:SZ.dateLbl,color:'var(--text-muted)',fontFamily:'var(--font-mono)',flexShrink:0}}>· {dateLbl}</span>
+              <span style={{fontSize:SZ.dateLbl,color:'var(--text-muted)',flexShrink:0}}>· {dateLbl}</span>
               {wx && (
                 <span style={{display:'inline-flex',alignItems:'center',gap:3,flexShrink:0,color:wx.color}}>
                   <span style={{fontSize:SZ.dateLbl + 2}}>{wx.icon}</span>
-                  <span style={{fontSize:SZ.dateLbl,fontFamily:'var(--font-mono)'}}>{weather.tMax}°</span>
+                  <span style={{fontSize:SZ.dateLbl}}>{weather.tMax}°</span>
                 </span>
               )}
             </>
           )}
         </span>
-        <span style={{fontFamily:'var(--font-mono)',color:'var(--text-muted)',fontSize:SZ.inputFs - 2,flexShrink:0}}>
+        <span style={{color:'var(--text-muted)',fontSize:SZ.inputFs - 2,flexShrink:0}}>
           {expanded ? '▾' : '▸'}
         </span>
       </button>
@@ -489,7 +489,7 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
       {/* META LINE — date · location · weather chip (only when expanded) */}
       {expanded && (
         <div style={{display:'flex',alignItems:'center',gap:8,fontSize:SZ.metaLine,color:'var(--text-muted)',flexWrap:'wrap'}}>
-          <span style={{fontFamily:'var(--font-mono)'}}>{dateLblFull}</span>
+          <span>{dateLblFull}</span>
           {race.location && <>
             <span>·</span>
             <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{race.location}</span>
@@ -499,7 +499,7 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
               <span>·</span>
               <span style={{display:'inline-flex',alignItems:'center',gap:4,color:wx.color}}>
                 <span style={{fontSize:SZ.wxLine + 3}}>{wx.icon}</span>
-                <span style={{fontFamily:'var(--font-mono)'}}>{weather.tMax}°/{weather.tMin}°F</span>
+                <span>{weather.tMax}°/{weather.tMin}°F</span>
                 {weather.precip != null && weather.precip > 0 && (
                   <span style={{color:'#60a5fa'}}>· {weather.precip}% rain</span>
                 )}
@@ -510,7 +510,7 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
           {weather?.historical && <span style={{fontStyle:'italic'}}>· last year</span>}
           {(race.distanceKm || race.distanceMi || distanceMi) && <>
             <span>·</span>
-            <span style={{fontFamily:'var(--font-mono)'}}>
+            <span>
               {(distanceMi).toFixed(distanceMi<10?1:0)} mi
             </span>
           </>}
@@ -628,7 +628,7 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
               <BowlIcon size={20} color="#fb923c"/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:SZ.rowVal,fontWeight:500,color:'var(--text-primary)'}}>Breakfast</div>
-                <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)',fontFamily:'var(--font-mono)'}}>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)'}}>
                   {plan.carbs.preRaceG}g carbs · {plan.hydration.preRaceMl} mL
                 </div>
                 <div style={{fontSize:SZ.rowSub,color:'var(--text-muted)',marginTop:1}}>60–90 min before</div>
@@ -643,10 +643,10 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
                     <span>In-race</span>
                     <span style={{fontSize:SZ.rowSub,color:'var(--text-muted)',fontWeight:400}}>× {plan.schedule.length}</span>
                   </div>
-                  <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)',fontFamily:'var(--font-mono)',display:'flex',alignItems:'center',gap:3}}>
+                  <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)',display:'flex',alignItems:'center',gap:3}}>
                     {plan.schedule[0].fuelG}g gel · {plan.schedule[0].fluidMl}<DropIcon size={11} color="#60a5fa"/>
                   </div>
-                  <div style={{fontSize:SZ.rowSub,color:'var(--text-muted)',marginTop:1,fontFamily:'var(--font-mono)'}}>
+                  <div style={{fontSize:SZ.rowSub,color:'var(--text-muted)',marginTop:1}}>
                     every {plan.schedule.length >= 2 ? Math.round(plan.schedule[1].atMin - plan.schedule[0].atMin) : 25}m · min {plan.schedule[0].atMin} → {plan.schedule[plan.schedule.length-1].atMin}
                   </div>
                 </div>

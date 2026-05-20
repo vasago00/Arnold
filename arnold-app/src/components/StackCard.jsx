@@ -40,7 +40,7 @@ export function StackCard({ dateStr, showToast }) {
         {/* Label */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <span style={{ fontSize: 15 }}>💊</span>
-          <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)' }}>
             {takenCount}/{totalCount}{allDone ? ' ✓' : ''}
           </span>
         </div>
@@ -66,7 +66,7 @@ export function StackCard({ dateStr, showToast }) {
                 }}>
                 <span style={{ fontSize: 11 }}>{slot.icon}</span>
                 <span>{slot.label}</span>
-                <span style={{ fontSize: 7, opacity: 0.7, fontFamily: 'var(--font-mono)' }}>
+                <span style={{ fontSize: 8, opacity: 0.85 }}>
                   {slotTaken}/{entries.length}
                 </span>
                 {done && <span style={{ fontSize: 8 }}>✓</span>}

@@ -16,7 +16,7 @@ export function Sparkline({
     return (
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
         <line x1="2" y1={height/2} x2={width-2} y2={height/2}
-              stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="2 2" opacity="0.4"/>
+              stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="2 2" opacity="0.6"/>
       </svg>
     );
   }

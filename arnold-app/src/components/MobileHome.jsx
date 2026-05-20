@@ -1145,7 +1145,7 @@ function CategoryLabel({ label, color }) {
   return (
     <div style={{
       fontSize: 11, fontWeight: 700, color: T2, textTransform: 'uppercase',
-      letterSpacing: '0.12em', padding: '3px 0 2px',
+      letterSpacing: '0.08em', padding: '3px 0 2px',
       display: 'flex', alignItems: 'center', gap: 5,
     }}>
       <div style={{ width: 5, height: 5, borderRadius: '50%', background: color }} />
@@ -1318,12 +1318,12 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
             position: 'absolute', top: -1, left: `${r.pct * 100}%`, transform: 'translateX(-6px)',
           }}>
             <div style={{
-              width: 12, height: 12, borderRadius: 6,
+              width: 14, height: 14, borderRadius: 6,
               background: r.isPast ? 'rgba(91,191,138,0.15)' : 'rgba(212,139,78,0.15)',
               border: `1.5px solid ${r.isPast ? C.green : C.orange}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <span style={{ fontSize: 6 }}>{r.isPast ? '✓' : '⚑'}</span>
+              <span style={{ fontSize: 8 }}>{r.isPast ? '✓' : '⚑'}</span>
             </div>
           </div>
         ))}
@@ -1335,7 +1335,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
           {raceMarkers.map((r, i) => (
             <div key={i} style={{
               position: 'absolute', left: `${r.pct * 100}%`, transform: 'translateX(-50%)',
-              fontSize: 7, fontWeight: 600, color: r.isPast ? C.green : C.orange, whiteSpace: 'nowrap',
+              fontSize: 8, fontWeight: 500, color: r.isPast ? C.green : C.orange, whiteSpace: 'nowrap',
             }}>
               {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
             </div>

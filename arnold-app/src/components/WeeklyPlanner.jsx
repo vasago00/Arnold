@@ -132,7 +132,7 @@ export function WeeklyPlanner({ showToast }) {
                 width: 7, height: 7, borderRadius: '50%', background: t.color, flexShrink: 0,
                 display: sigSrc ? 'none' : 'block',  // shown if no image OR image fails
               }} />
-              <span style={{ fontSize: 7.5, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', whiteSpace: 'nowrap' }}>{t.label}</span>
+              <span style={{ fontSize: 8, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', whiteSpace: 'nowrap' }}>{t.label}</span>
               {detail && <span style={{ fontSize: 7, color: 'var(--text-muted)', lineHeight: 1 }}>{detail}</span>}
             </div>
           );

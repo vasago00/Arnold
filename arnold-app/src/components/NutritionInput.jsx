@@ -359,7 +359,7 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
         }}>
         <span style={{ fontSize: 11 }}>{slot.icon}</span>
         <span>{slotShort[slot.id]}</span>
-        <span style={{ fontSize: 7, opacity: 0.7, fontFamily: 'var(--font-mono)' }}>
+        <span style={{ fontSize: 8, opacity: 0.85 }}>
           {slotTaken}/{entries.length}
         </span>
         {done && <span style={{ fontSize: 8 }}>✓</span>}
@@ -417,7 +417,7 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, paddingTop: 8, borderTop: '0.5px solid var(--border-subtle)' }}>
             <span style={{ fontSize: 28, flexShrink: 0, lineHeight: 1 }}>💊</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-              <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+              <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', flexShrink: 0 }}>
                 {takenCount}/{totalCount}{allDone ? ' ✓' : ''}
               </span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
@@ -458,7 +458,7 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
       {/* Stack side */}
       {hasStack && <>
         <span style={{ fontSize: 15 }}>💊</span>
-        <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+        <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', flexShrink: 0 }}>
           {takenCount}/{totalCount}{allDone ? ' ✓' : ''}
         </span>
         <div style={{ display: 'flex', gap: 5, flex: 1 }}>
@@ -623,7 +623,7 @@ function MicronutrientsPanel({ dateStr, refreshKey }) {
               }}>{n.name}</span>
               <span style={{
                 fontSize: 9, color: pctColor(n.pct),
-                fontFamily: 'var(--font-mono)', fontWeight: 600,
+                fontWeight: 600,
               }}>{n.pct}%</span>
             </div>
             <div style={{
@@ -673,7 +673,7 @@ function MacroBar({ label, value, goal, gradient, unit = 'g' }) {
       </div>
       <span style={{
         fontSize: 10, color: 'var(--text-muted)',
-        fontFamily: 'var(--font-mono)', textAlign: 'right',
+        textAlign: 'right',
       }}>{Math.round(value || 0)} / {goal}{unit !== 'kcal' ? unit : ''}</span>
     </div>
   );
