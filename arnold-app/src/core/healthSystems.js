@@ -554,7 +554,7 @@ export function getMicronutrientSummary(dateStr) {
     // Essential fats
     'EPA', 'DHA',
   ];
-  // 2-letter abbreviations for dense (7-col) layout
+  // 2-letter abbreviations + group classification for the dense grid.
   const ABBR = {
     'Vitamin A': 'VA', 'Vitamin C': 'VC', 'Vitamin D': 'VD',
     'Vitamin E': 'VE', 'Vitamin K': 'VK',
@@ -563,6 +563,17 @@ export function getMicronutrientSummary(dateStr) {
     'Calcium': 'Ca', 'Iron': 'Fe', 'Magnesium': 'Mg', 'Zinc': 'Zn',
     'Selenium': 'Se', 'Potassium': 'K', 'Copper': 'Cu',
     'EPA': 'EPA', 'DHA': 'DHA',
+  };
+  // Phase 4r.fuel.4 — group tag used by UI to render Vitamins / Minerals /
+  // Essential Fats sections with gentle subheaders.
+  const GROUP = {
+    'Vitamin A': 'vitamins', 'Vitamin C': 'vitamins', 'Vitamin D': 'vitamins',
+    'Vitamin E': 'vitamins', 'Vitamin K': 'vitamins',
+    'Thiamin (B1)': 'vitamins', 'Riboflavin (B2)': 'vitamins', 'Niacin (B3)': 'vitamins',
+    'Vitamin B6': 'vitamins', 'Folate': 'vitamins', 'Vitamin B12': 'vitamins',
+    'Calcium': 'minerals', 'Iron': 'minerals', 'Magnesium': 'minerals',
+    'Zinc': 'minerals', 'Selenium': 'minerals', 'Potassium': 'minerals', 'Copper': 'minerals',
+    'EPA': 'fats', 'DHA': 'fats',
   };
   const list = [];
   for (const name of show) {
@@ -610,6 +621,7 @@ export function getMicronutrientSummary(dateStr) {
     list.push({
       name,
       abbr: ABBR[name] || name.slice(0, 2),
+      group: GROUP[name] || 'other',
       value: Math.round(val * 10) / 10,
       target,
       pct: Math.round(pct),
@@ -662,6 +674,23 @@ export function getBioactiveStack(dateStr) {
     'Shilajit resin': 'Shilajit',
     'Fish Oil (total)': 'Fish Oil',
   };
+  // Phase 4r.fuel.4 — group by mechanism for the UI sections.
+  const BIO_GROUP = {
+    'NMN (Nicotinamide Mononucleotide)': 'nad',
+    'Trans-Resveratrol': 'nad',
+    'Spermidine (wheat germ extract)': 'nad',
+    'Trimethylglycine (TMG/Betaine anhydrous)': 'nad',
+    'Apigenin': 'nad',
+    'Quercetin': 'senolytic',
+    'Fisetin': 'senolytic',
+    'Turmeric (curcumin extract)': 'anti-inflammatory',
+    'Fish Oil (total)': 'anti-inflammatory',
+    'Ashwagandha (KSM-66)': 'performance',
+    'Beetroot powder concentrate': 'performance',
+    'Creatine': 'performance',
+    'Magnesium L-Threonate (Magtein)': 'other',
+    'Shilajit resin': 'other',
+  };
 
   // Walk the user's stack; for each entry that contains a bioactive, sum
   // the dose taken today and produce one row per compound.
@@ -685,10 +714,16 @@ export function getBioactiveStack(dateStr) {
     }
   }
 
-  // Sort by stack order (most-taken first, then alpha)
+  // Phase 4r.fuel.4 — return with label, group, and a deterministic group sort
+  // so the UI can render NAD+ → Senolytics → Anti-inflam → Performance → Other.
+  const GROUP_ORDER = { 'nad': 0, 'senolytic': 1, 'anti-inflammatory': 2, 'performance': 3, 'other': 4 };
   return Object.values(byCompound)
-    .map(c => ({ ...c, label: SHORT[c.name] || c.name }))
-    .sort((a, b) => (b.taken ? 1 : 0) - (a.taken ? 1 : 0) || a.label.localeCompare(b.label));
+    .map(c => ({ ...c, label: SHORT[c.name] || c.name, group: BIO_GROUP[c.name] || 'other' }))
+    .sort((a, b) => {
+      const g = (GROUP_ORDER[a.group] ?? 9) - (GROUP_ORDER[b.group] ?? 9);
+      if (g !== 0) return g;
+      return a.label.localeCompare(b.label);
+    });
 }
 
 // ─── 10 Health Systems ──────────────────────────────────────────────────────
