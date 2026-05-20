@@ -1496,25 +1496,39 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
                 compact={isMobile} />
             </div>
 
-            {/* Micronutrients — full width */}
-            <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
-            <MicronutrientsPanel dateStr={dateStr} refreshKey={refreshKey} />
-
-            {/* Phase 4r.fuel.7 — 2-col split: bio stack (left) + vertical macro bars (right). */}
-            <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : '1.7fr 1fr',
-              gap: 14, alignItems: 'start',
-            }}>
-              <div>
-                <BioStackPanel dateStr={dateStr} refreshKey={refreshKey} />
-              </div>
-              <div>
+            {/* Phase 4r.fuel.13 — Mobile reorders to Energy → Micros → Bio.
+                Desktop keeps Micros full-width then 2-col bio + energy.
+                Tighter dividers (margin 6px vs 10px) to reduce vertical gap. */}
+            {isMobile ? (
+              <>
+                <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'6px 0'}} />
                 <EnergyTimingChart dateStr={dateStr} totals={totals}
                   target={parseFloat(effGoals.dailyCalorieTarget) || 2200} />
-              </div>
-            </div>
+                <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'6px 0'}} />
+                <MicronutrientsPanel dateStr={dateStr} refreshKey={refreshKey} />
+                <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'6px 0'}} />
+                <BioStackPanel dateStr={dateStr} refreshKey={refreshKey} />
+              </>
+            ) : (
+              <>
+                <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
+                <MicronutrientsPanel dateStr={dateStr} refreshKey={refreshKey} />
+                <div style={{height:'0.5px',background:'var(--border-subtle)',margin:'10px 0'}} />
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1.7fr 1fr',
+                  gap: 14, alignItems: 'start',
+                }}>
+                  <div>
+                    <BioStackPanel dateStr={dateStr} refreshKey={refreshKey} />
+                  </div>
+                  <div>
+                    <EnergyTimingChart dateStr={dateStr} totals={totals}
+                      target={parseFloat(effGoals.dailyCalorieTarget) || 2200} />
+                  </div>
+                </div>
+              </>
+            )}
           </>
         )}
 
