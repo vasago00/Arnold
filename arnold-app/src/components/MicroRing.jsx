@@ -1,9 +1,6 @@
-// ─── MicroRing — Phase 4r.fuel.5 ────────────────────────────────────────────
-// Status-colored micronutrient ring with food-vs-supplement split marker.
-// Phase 4r.fuel.5: grouping is now a subtle BACKGROUND TINT band per group
-// row — no header text, no extra vertical space. The eye picks up the
-// group identity via the wash color (vitamins=blue, minerals=amber, fats=teal)
-// without anything labeled.
+// ─── MicroRing — Phase 4r.fuel.14 ────────────────────────────────────────────
+// Continuous grid with per-cell group tint (no banded blocks, no gaps).
+// Group identity flows naturally across rows. Tighter cell padding.
 
 import React from 'react';
 
@@ -18,28 +15,32 @@ function statusColor(pct) {
 const R = 26;
 const CIRC = 2 * Math.PI * R;
 
-// Background tint per group — barely-perceptible wash applied behind each
-// row of rings. Keeps total height the same as flat grid.
-const GROUP_BG = {
-  vitamins: 'rgba(96,165,250,0.05)',  // blue
-  minerals: 'rgba(251,191,36,0.05)',  // amber
-  fats:     'rgba(94,234,212,0.05)',  // teal
+// Background tint per group — applied to each individual cell.
+const CELL_BG = {
+  vitamins: 'rgba(96,165,250,0.05)',
+  minerals: 'rgba(251,191,36,0.05)',
+  fats:     'rgba(94,234,212,0.05)',
   other:    'transparent',
 };
 
-export function MicroRing({ name, abbr, pct = 0, foodPct = 0, source = '—', value, target, compact = false }) {
+export function MicroRing({ name, abbr, pct = 0, foodPct = 0, source = '—', value, target, compact = false, group }) {
   const clamped = Math.max(0, Math.min(150, Number(pct) || 0));
   const arcLen = (clamped / 100) * CIRC;
   const color = statusColor(clamped);
   const foodAngle = -90 + (Math.max(0, Math.min(100, Number(foodPct) || 0)) / 100) * 360;
   const showFoodDot = foodPct > 0 && foodPct < clamped && source === 'food + supp';
-  const size = compact ? 54 : 80;
+  const size = compact ? 50 : 80;
   const displayLabel = compact ? (abbr || name.slice(0, 2)) : name;
+  const bg = CELL_BG[group] || 'transparent';
+
   return (
     <div
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center',
-        padding: compact ? '4px 2px' : '10px 6px', textAlign: 'center',
+        padding: compact ? '3px 2px 4px' : '10px 6px',
+        textAlign: 'center',
+        background: bg,
+        borderRadius: 4,
       }}
       role="img"
       aria-label={`${name} at ${Math.round(clamped)} percent of target, ${source}`}
@@ -72,61 +73,32 @@ export function MicroRing({ name, abbr, pct = 0, foodPct = 0, source = '—', va
       {!compact && (
         <div style={{ fontSize: 10, color: '#e2e8f0', fontWeight: 500, marginTop: 4 }}>{name}</div>
       )}
-      <div style={{ fontSize: compact ? 8 : 9, color: '#64748b', marginTop: 1, lineHeight: 1.2 }}>
+      <div style={{
+        fontSize: compact ? 9 : 9,
+        color: '#94a3b8',
+        marginTop: 1, lineHeight: 1.1,
+      }}>
         {source}
       </div>
     </div>
   );
 }
 
-// Phase 4r.fuel.5 — Grid wrapper renders rows of items grouped by `group`
-// field. Each group gets a subtle background tint band (no header text).
-// If grouped:false or no group field present, falls back to flat grid.
-export function MicroRingGrid({ items, compact = false, columns, grouped = true }) {
-  const cols = columns || (compact ? 7 : 5);
+// Phase 4r.fuel.14 — single continuous grid, no per-band wrappers. Each cell
+// carries its own group tint via the item.group field. On mobile (compact)
+// we use 4 cols so cells are bigger and labels readable; on desktop 7.
+export function MicroRingGrid({ items, compact = false, columns }) {
+  const cols = columns || (compact ? 4 : 7);
   const list = items || [];
-  const useGrouping = grouped && list.some(it => it && it.group);
-  if (!useGrouping) {
-    return (
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-        gap: compact ? 3 : 8,
-        padding: compact ? '4px 0' : '8px 0',
-      }}>
-        {list.map(item => (
-          <MicroRing key={item.name} {...item} compact={compact} />
-        ))}
-      </div>
-    );
-  }
-  // Group items and render each group as its own grid row band with tinted bg.
-  const byGroup = {};
-  for (const it of list) {
-    const g = it.group || 'other';
-    (byGroup[g] = byGroup[g] || []).push(it);
-  }
-  const ORDER = ['vitamins', 'minerals', 'fats', 'other'];
-  const groupsInOrder = ORDER.filter(g => byGroup[g] && byGroup[g].length);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0' }}>
-      {groupsInOrder.map(g => (
-        <div
-          key={g}
-          style={{
-            background: GROUP_BG[g] || 'transparent',
-            borderRadius: 6,
-            padding: compact ? '4px 4px' : '8px 8px',
-            display: 'grid',
-            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-            gap: compact ? 3 : 8,
-          }}
-          aria-label={g}
-        >
-          {byGroup[g].map(item => (
-            <MicroRing key={item.name} {...item} compact={compact} />
-          ))}
-        </div>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+      gap: 4,
+      padding: '4px 0',
+    }}>
+      {list.map(item => (
+        <MicroRing key={item.name} {...item} compact={compact} />
       ))}
     </div>
   );
