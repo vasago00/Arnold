@@ -263,6 +263,7 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
           <button
             onClick={handleDropPin}
             disabled={pinning}
+            className="arnold-compact-btn"
             title="Use my current location (6h cache)"
             style={{
               all: 'unset', cursor: pinning ? 'wait' : 'pointer',
