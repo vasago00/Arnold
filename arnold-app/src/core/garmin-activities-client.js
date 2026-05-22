@@ -21,6 +21,7 @@ import { unzipSync } from 'fflate';
 import { storage } from './storage.js';
 import { getGarminAuth, isGarminConfigured } from './garmin-client.js';
 import { parseFITFile } from './parsers/fitParser.js';
+import { fetchWeatherForActivity, extractActivityCoords } from './weather.js';
 
 const CFG_ENDPOINT = 'arnold:cloud-sync:endpoint';
 const CFG_TOKEN    = 'arnold:cloud-sync:token';
@@ -590,6 +591,31 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
       }
       // Also capture the activity name (less critical but useful for diagnostics)
       if (ga.activityName) parsed.activityName = ga.activityName;
+
+      // Phase 4r.intel.9 — Weather lookup at sync time.
+      // Best-effort: skip outdoor-but-no-GPS, indoor sports, or Open-Meteo
+      // outages. Attaches tempC + avgHumidity so expectedRanges.js can widen
+      // the intel bands on hot/humid days.
+      try {
+        if (parsed.avgTemperature == null || parsed.avgHumidity == null) {
+          const coords = extractActivityCoords(ga, null);
+          const startMs = parseGarminLocalTime(ga.startTimeLocal);
+          if (coords && Number.isFinite(startMs)) {
+            const wx = await fetchWeatherForActivity({
+              lat: coords.lat, lon: coords.lon, startMs,
+            });
+            if (wx) {
+              if (parsed.avgTemperature == null) parsed.avgTemperature = wx.tempC;
+              if (parsed.avgHumidity    == null) parsed.avgHumidity    = wx.humidityPct;
+              parsed.weatherSource = 'open-meteo';
+            }
+          }
+        }
+      } catch (e) {
+        // Non-fatal — activity imports without weather.
+        console.warn(`[weather] activity ${ga.activityId} lookup failed:`, e?.message || e);
+      }
+
       // Push into activities collection
       const all = storage.get('activities') || [];
       all.push(parsed);
