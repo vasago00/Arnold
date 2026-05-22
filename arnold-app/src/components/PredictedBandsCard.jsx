@@ -260,38 +260,51 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
               ))}
             </span>
           )}
-          <button
-            onClick={handleDropPin}
-            disabled={pinning}
-            className="arnold-compact-btn"
-            title="Use my current location (6h cache)"
-            style={{
-              all: 'unset', cursor: pinning ? 'wait' : 'pointer',
-              fontSize: 9, fontWeight: 600, padding: '0 6px',
-              borderRadius: 4, color,
-              background: `${color}14`,
-              border: `0.5px solid ${color}44`,
-              letterSpacing: '0.04em', whiteSpace: 'nowrap',
-              opacity: pinning ? 0.6 : 1,
-              // Hard-cap height so the button matches the condition pills
-              // alongside it. Without this the line-height + icon was
-              // pushing the pill ~25px tall on Android.
-              height: 16, boxSizing: 'border-box',
-              lineHeight: 1,
-              display: 'inline-flex', alignItems: 'center',
-            }}
-          >
-            {pinning ? '···'
-              : pinError
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
-                    <MapPin size={10} weight="fill" />
-                    {pinError}
-                  </span>
-                : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
-                    Drop a
-                    <MapPin size={10} weight="fill" />
-                  </span>}
-          </button>
+          {(() => {
+            // Phase 4r.calendar.36b — Pinned state when the active location
+            // came from the drop-pin cache. Stronger background tint +
+            // 'Pinned' label so the user knows the location is captured.
+            const isPinned = src.locationSource === 'pin';
+            const titleAttr = isPinned
+              ? 'Pinned to your current location (refreshes every 6h · tap to re-pin)'
+              : 'Use my current location (6h cache)';
+            return (
+              <button
+                onClick={handleDropPin}
+                disabled={pinning}
+                className="arnold-compact-btn"
+                title={titleAttr}
+                style={{
+                  all: 'unset', cursor: pinning ? 'wait' : 'pointer',
+                  fontSize: 9, fontWeight: 600, padding: '0 6px',
+                  borderRadius: 4, color,
+                  background: isPinned ? `${color}28` : `${color}14`,
+                  border: `0.5px solid ${isPinned ? `${color}88` : `${color}44`}`,
+                  letterSpacing: '0.04em', whiteSpace: 'nowrap',
+                  opacity: pinning ? 0.6 : 1,
+                  height: 16, boxSizing: 'border-box',
+                  lineHeight: 1,
+                  display: 'inline-flex', alignItems: 'center',
+                }}
+              >
+                {pinning ? '···'
+                  : pinError
+                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
+                        <MapPin size={10} weight="fill" />
+                        {pinError}
+                      </span>
+                    : isPinned
+                      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
+                          <MapPin size={10} weight="fill" />
+                          Pinned
+                        </span>
+                      : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
+                          Drop a
+                          <MapPin size={10} weight="fill" />
+                        </span>}
+              </button>
+            );
+          })()}
         </div>
       </div>
       <div style={{
