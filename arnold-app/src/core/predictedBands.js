@@ -1,0 +1,203 @@
+// ─── Predicted Bands assembly (Phase 4r.intel.11 — Layer 3) ────────────────
+// Wraps expectedRanges.predictedBandsForFamily with everything it needs to
+// build a UI-ready forecast: family + conditions + fatigue + baseline.
+//
+// API:
+//   buildPredictionContext({ family, dateStr }) → ctx
+//   getPredictedBands({ family, dateStr }) → { bands, ctx, source }
+//
+// "Source" tells the UI which inputs were filled in vs. defaulted, so the
+// card can render "personalized (n=18)" vs "population norm" annotations.
+
+import { predictedBandsForFamily, EXPECTED_RANGES } from './expectedRanges.js';
+import { getBaseline } from './learnedBaselines.js';
+import { storage } from './storage.js';
+import { parseLocalDate } from './dateUtils.js';
+import { fetchWeatherForActivity } from './weather.js';
+import { isHIIT, isHardSession } from './activityClass.js';
+
+// ─── helpers ───────────────────────────────────────────────────────────────
+
+function getHomeCoords() {
+  try {
+    const p = storage.get('profile') || {};
+    const lat = Number(p.homeLatitude ?? p.lat);
+    const lon = Number(p.homeLongitude ?? p.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lon)
+        && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      return { lat, lon };
+    }
+  } catch {}
+  // Fallback: last activity with GPS
+  try {
+    const acts = storage.get('activities') || [];
+    for (let i = acts.length - 1; i >= 0; i--) {
+      const a = acts[i];
+      const lat = Number(a?.startLatitude ?? a?.lat);
+      const lon = Number(a?.startLongitude ?? a?.lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon)
+          && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001) {
+        return { lat, lon };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function computeFatigueForDate(dateStr) {
+  try {
+    const cur = parseLocalDate(dateStr);
+    if (!cur) return null;
+    const acts  = storage.get('activities') || [];
+    const sleep = storage.get('sleep') || [];
+    const d7  = new Date(cur); d7.setDate(d7.getDate() - 7);
+    const d28 = new Date(cur); d28.setDate(d28.getDate() - 28);
+    const d2  = new Date(cur); d2.setDate(d2.getDate() - 2);
+    let tss7 = 0, tss28 = 0, hardInPrior2 = 0;
+    for (const a of acts) {
+      const ad = a && a.date && parseLocalDate(a.date);
+      if (!ad || ad >= cur) continue;
+      const tss = Number(a.trainingStressScore || a.tss || 0);
+      if (ad >= d28) tss28 += tss;
+      if (ad >= d7)  tss7  += tss;
+      if (ad >= d2) {
+        if (isHIIT(a) || isHardSession(a)) hardInPrior2 += 1;
+      }
+    }
+    // Prior-night sleep score: the sleep record dated `dateStr` is the
+    // night BEFORE dateStr (sleeps are stamped by wake-up date).
+    const sleepEntry = sleep.find(s => s && s.date === dateStr);
+    const sleepScorePrev = (sleepEntry && sleepEntry.sleepScore && sleepEntry.sleepScore > 0)
+      ? sleepEntry.sleepScore : null;
+    return {
+      sleepScorePrev,
+      rollingTSS7: tss7 || null,
+      rollingTSS28: tss28 || null,
+      consecutiveHardDays: hardInPrior2,
+    };
+  } catch { return null; }
+}
+
+async function fetchForecastConditions(dateStr) {
+  try {
+    const target = parseLocalDate(dateStr);
+    if (!target) return null;
+    const coords = getHomeCoords();
+    if (!coords) return null;
+    // Use noon of the target date as the anchor — most workouts happen
+    // morning or evening, noon strikes a reasonable midpoint and lets
+    // Open-Meteo's hourly index find a sensible row.
+    const startMs = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 12, 0, 0).getTime();
+    return await fetchWeatherForActivity({ lat: coords.lat, lon: coords.lon, startMs });
+  } catch { return null; }
+}
+
+// ─── public API ────────────────────────────────────────────────────────────
+
+/**
+ * Build the prediction context for a (family, date). Pure-ish: only reads
+ * storage. The weather lookup is in getPredictedBands() so callers that
+ * already have conditions can avoid the round trip.
+ */
+export function buildPredictionContext({ family, dateStr, conditions }) {
+  const validFamily = (family && EXPECTED_RANGES[family]) ? family : 'run';
+  const fatigue = computeFatigueForDate(dateStr);
+  // Pick one representative baseline metric to surface in the UI's "n=" line
+  // — avgHR_pctMax is the most universally applicable. (The math itself uses
+  // metric-specific baselines via the band fn.)
+  let baselineN = 0;
+  try {
+    const b = getBaseline(validFamily, 'avgHR_pctMax');
+    if (b) baselineN = b.n || 0;
+  } catch {}
+  return {
+    family: validFamily,
+    conditions: conditions || null,
+    fatigue,
+    baselineN,
+    // baseline NOT set on ctx — predictedBand will resolve it per-metric
+    // via blendWithBaseline if we pass it through. Instead we pre-resolve
+    // below in getPredictedBands so callers can see "personalized" status
+    // per metric.
+  };
+}
+
+/**
+ * Async variant that pulls the forecast for the date when conditions
+ * aren't supplied. Returns { bands, ctx, source } where bands have the
+ * shape { metricId, min, max, direction } plus baseline annotation.
+ *
+ * @param {{family:string, dateStr:string, conditions?:{tempC?:number,humidityPct?:number}}} opts
+ */
+export async function getPredictedBands({ family, dateStr, conditions }) {
+  let cond = conditions || null;
+  if (!cond) cond = await fetchForecastConditions(dateStr);
+  const ctx = buildPredictionContext({ family, dateStr, conditions: cond });
+
+  // Resolve per-metric baselines and inject into the band call so each
+  // metric blends with the user's stats individually.
+  const familyRanges = EXPECTED_RANGES[ctx.family] || EXPECTED_RANGES.run;
+  const bands = [];
+  for (const metricId of Object.keys(familyRanges)) {
+    let baseline = null;
+    try { baseline = getBaseline(ctx.family, metricId); } catch {}
+    const bandCtx = baseline ? { ...ctx, baseline } : ctx;
+    // Pull the single-metric band so per-metric baselines stick.
+    const single = predictedBandsForFamily(ctx.family, bandCtx)
+      .find(b => b.metricId === metricId);
+    if (single) {
+      bands.push({
+        ...single,
+        baselineN: baseline?.n || 0,
+        personalized: !!baseline,
+      });
+    }
+  }
+
+  return {
+    bands,
+    ctx,
+    source: {
+      hasConditions: !!cond,
+      tempC: cond?.tempC ?? null,
+      humidityPct: cond?.humidityPct ?? null,
+      hasFatigue: !!ctx.fatigue,
+      baselineN: ctx.baselineN || 0,
+    },
+  };
+}
+
+/**
+ * Sync variant for callers that already have conditions (or want to skip
+ * the network round trip).
+ */
+export function getPredictedBandsSync({ family, dateStr, conditions }) {
+  const ctx = buildPredictionContext({ family, dateStr, conditions });
+  const familyRanges = EXPECTED_RANGES[ctx.family] || EXPECTED_RANGES.run;
+  const bands = [];
+  for (const metricId of Object.keys(familyRanges)) {
+    let baseline = null;
+    try { baseline = getBaseline(ctx.family, metricId); } catch {}
+    const bandCtx = baseline ? { ...ctx, baseline } : ctx;
+    const single = predictedBandsForFamily(ctx.family, bandCtx)
+      .find(b => b.metricId === metricId);
+    if (single) {
+      bands.push({
+        ...single,
+        baselineN: baseline?.n || 0,
+        personalized: !!baseline,
+      });
+    }
+  }
+  return {
+    bands,
+    ctx,
+    source: {
+      hasConditions: !!conditions,
+      tempC: conditions?.tempC ?? null,
+      humidityPct: conditions?.humidityPct ?? null,
+      hasFatigue: !!ctx.fatigue,
+      baselineN: ctx.baselineN || 0,
+    },
+  };
+}

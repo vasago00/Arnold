@@ -27,6 +27,7 @@ import { isRun, isStrength, isHIIT, isMobility, isCycling, isSwim } from "../cor
 import { getPlannerWeek, savePlannerWeek, weekKey } from "../core/planner.js";
 import { fetchAndParseICS } from "../core/parsers/icsParser.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
+import { PredictedBandsCard } from "./PredictedBandsCard.jsx";
 import { resolveCalorieTarget } from "../core/calorieTarget.js";
 import { getGoals } from "../core/goals.js";
 import {
@@ -1383,6 +1384,20 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onAddPlan, 
           }}>✕</button>
         )}
       </div>
+
+      {/* Phase 4r.intel.11 — Predicted bands for the planned workout.
+          Renders only when today (or a future date) has a non-rest plan.
+          Pulls weather forecast + fatigue + personal baselines via
+          getPredictedBands(); shows nothing on past dates or rest days. */}
+      {planned && planned.type && planned.type !== 'rest' && !isPast && (
+        <div style={{ marginBottom: 10 }}>
+          <PredictedBandsCard
+            family={planned.type}
+            dateStr={dateStr}
+            maxHR={parseFloat((storage.get('profile') || {}).maxHR) || null}
+          />
+        </div>
+      )}
 
       {/* Activity — Phase 4r.calendar.30 — single-line rows, no
           signature (calendar tile carries the imagery). HR zone bar

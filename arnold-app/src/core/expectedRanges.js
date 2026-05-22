@@ -209,6 +209,60 @@ export function metricStatus(metricId, value, ctx) {
   return { status, explanation, expected: [min, max] };
 }
 
+/**
+ * Predicted band for a single metric (no value required). Mirrors the
+ * min/max derivation inside metricStatus(). Used by Layer 3 predictive
+ * overlays — "what's the expected range for tomorrow's tempo at 28C?".
+ *
+ * @returns {{min:number, max:number, direction:string} | null}
+ */
+export function predictedBand(metricId, ctx) {
+  ctx = ctx || {};
+  const family = ctx.family || 'run';
+  const familyRanges = EXPECTED_RANGES[family] || EXPECTED_RANGES.run;
+  const rangeDef = familyRanges[metricId];
+  if (!rangeDef) return null;
+  let min = rangeDef.range[0], max = rangeDef.range[1];
+  const blended = blendWithBaseline([min, max], ctx.baseline);
+  min = blended[0]; max = blended[1];
+  const tempC = ctx.conditions && ctx.conditions.tempC;
+  const humidityPct = ctx.conditions && (ctx.conditions.humidityPct != null ? ctx.conditions.humidityPct : ctx.conditions.humidity);
+  const heat = heatAdjustment(tempC);
+  const humMult = humidityMultiplier(humidityPct, tempC);
+  const fat = fatigueAdjustment(ctx.fatigue);
+  const adjustments = {
+    avgHR_pctMax:  { both: heat.hrPct * humMult + fat.hrPct },
+    z2Pct:         { max: -heat.z45Pct * humMult },
+    z45Pct:        { max: heat.z45Pct * humMult + fat.z45Pct },
+    aerobicTE:     { max: heat.aerobicTE * humMult + fat.aerobicTE },
+    anaerobicTE:   { max: heat.anaerobicTE * humMult + fat.anaerobicTE },
+    cardiacDrift:  { max: heat.cardiacDrift * humMult + fat.cardiacDrift },
+    hrRecovery1m:  { min: heat.hrRecovery1m * humMult + fat.hrRecovery1m },
+    decoupling:    { max: heat.cardiacDrift * humMult + fat.cardiacDrift },
+  };
+  const adj = adjustments[metricId] || {};
+  if (adj.both != null) { min += adj.both; max += adj.both; }
+  if (adj.min  != null) { min += adj.min; }
+  if (adj.max  != null) { max += adj.max; }
+  return { min, max, direction: rangeDef.direction || 'expected' };
+}
+
+/**
+ * All predicted bands for a given family, ordered as the EXPECTED_RANGES
+ * declaration. Skips metrics that don't have a band for the family.
+ */
+export function predictedBandsForFamily(family, ctx) {
+  ctx = ctx || {};
+  ctx = { ...ctx, family };
+  const familyRanges = EXPECTED_RANGES[family] || EXPECTED_RANGES.run;
+  const out = [];
+  for (const metricId of Object.keys(familyRanges)) {
+    const band = predictedBand(metricId, ctx);
+    if (band) out.push({ metricId, ...band });
+  }
+  return out;
+}
+
 function formatRange(n) {
   if (Math.abs(n) >= 100) return String(Math.round(n));
   if (Math.abs(n) >= 10)  return n.toFixed(0);
