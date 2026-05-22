@@ -240,6 +240,23 @@
     transform: scale(0.97) !important;
   }
 
+  /* Phase 4r.calendar.35d — compact buttons preserve their visual size but
+     get an invisible 8px-extended hit area via ::before. Brings the actual
+     tap target up to roughly 32-36px even for a 16px-tall pill, which is
+     comfortably above the WCAG 2.5.8 (Level AA) 24px floor without
+     compromising the cockpit-dense look. Apply to any future small button
+     by adding className="arnold-compact-btn" — the wider hit area comes
+     along automatically. */
+  .arnold-compact-btn {
+    position: relative;
+  }
+  .arnold-compact-btn::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    /* No background; this is a pure hit-area extension. */
+  }
+
   /* Phase 4r.calendar.22 — calendar weekday header + day grid now
      use FLEXBOX with calc((100% - 12px) / 7) per cell (set inline
      in CalendarTab.jsx). CSS grid kept overriding with surprise
@@ -411,19 +428,4 @@
     50%      { box-shadow: 0 0 16px rgba(107,171,223,0.35), 0 0 6px rgba(107,171,223,0.2); }
   }
 
-} /* end @media (max-width: 600px) */
-
-/* ─── Touch-friendly scrollbar styling ────────────────────────────────────── */
-@media (pointer: coarse) {
-  ::-webkit-scrollbar { width: 3px; height: 3px; }
-  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-}
-
-/* ─── Smooth transitions for interactive elements ─────────────────────────── */
-@media (max-width: 600px) {
-  .arnold-tab-panel * {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-}
+} /* end @media (max-width: 
