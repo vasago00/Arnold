@@ -107,7 +107,15 @@ export function dropPin() {
 function classifyFatigueSeverity(f) {
   if (!f) return 0;
   let score = 0;
-  // Prior-night sleep score: <70 mild, <60 moderate.
+  // Sleep duration (hours): below 5 hits hard, 5-6 is mild, 6-7 nudges if
+  // anything else is also off. Independent of Garmin's sleep score so a
+  // short night with good deep-sleep distribution still flags as fatigue.
+  if (Number.isFinite(f.sleepHrs)) {
+    if (f.sleepHrs < 5)      score += 2;
+    else if (f.sleepHrs < 6) score += 1;
+    else if (f.sleepHrs < 7) score += 0.5;  // half-point — needs another signal to count
+  }
+  // Sleep score (Garmin's quality 0-100): <60 moderate, <70 mild.
   if (Number.isFinite(f.sleepScorePrev)) {
     if (f.sleepScorePrev < 60) score += 2;
     else if (f.sleepScorePrev < 70) score += 1;
@@ -121,8 +129,9 @@ function classifyFatigueSeverity(f) {
   }
   // Consecutive hard days: 2+ in prior 2 days = mild.
   if (Number(f.consecutiveHardDays) >= 2) score += 1;
-  // Cap at 3.
-  return Math.min(3, score);
+  // Round down to integer level (so the 0.5 half-points only matter when
+  // they push past a whole-number threshold). Cap at 3.
+  return Math.min(3, Math.floor(score));
 }
 
 function computeFatigueForDate(dateStr) {
@@ -150,8 +159,14 @@ function computeFatigueForDate(dateStr) {
     const sleepEntry = sleep.find(s => s && s.date === dateStr);
     const sleepScorePrev = (sleepEntry && sleepEntry.sleepScore && sleepEntry.sleepScore > 0)
       ? sleepEntry.sleepScore : null;
+    // Duration-based signal: a short night is fatigue regardless of how
+    // Garmin scored the sleep quality. Accept both totalSleepMinutes (live
+    // Garmin worker field) and durationMinutes (legacy HC sync field).
+    const sleepMins = (sleepEntry && (sleepEntry.totalSleepMinutes ?? sleepEntry.durationMinutes)) || null;
+    const sleepHrs  = sleepMins != null ? sleepMins / 60 : null;
     return {
       sleepScorePrev,
+      sleepHrs,
       rollingTSS7: tss7 || null,
       rollingTSS28: tss28 || null,
       consecutiveHardDays: hardInPrior2,
