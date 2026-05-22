@@ -3139,7 +3139,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const avgConsumed=thisWeekNut.length?Math.round(avg2(thisWeekNut,'calories')):null;
   const avgBurned=weekCals>0&&thisWeekActs.length?Math.round(weekCals/thisWeekActs.length+1880):1880;
   const netCalories=avgConsumed?Math.round(avgConsumed-avgBurned):null;
-  const consumedPct=avgConsumed?Math.min(avgConsumed/(parseFloat(profile?.dailyCalorieTarget)||2200),1):0;
+  const consumedPct=avgConsumed?Math.min(avgConsumed/resolveCalorieTarget(todayStr,profile),1):0;
   const burnedPct=Math.min(avgBurned/2500,1);
   const avgProtein=thisWeekNut.length?avg2(thisWeekNut,'protein'):null;
   const avgCarbs=thisWeekNut.length?avg2(thisWeekNut,'carbs'):null;
@@ -3251,8 +3251,8 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // 30-day average daily burn for the Nutrition donut: RMR floor + activity calories ÷ 30
   const last30Acts=activities.filter(a=>a.date>=td(d30));
   const last30ActKcal=last30Acts.reduce((s,a)=>s+(parseFloat(a.calories)||0),0);
-  const avg30Burned=Math.round(((parseFloat(profile?.dailyCalorieTarget)||1880)+(last30ActKcal/30)));
-  const calT=parseFloat(profile?.dailyCalorieTarget)||2200;
+  const avg30Burned=Math.round((resolveCalorieTarget(todayStr,profile)+(last30ActKcal/30)));
+  const calT=resolveCalorieTarget(todayStr,profile);
 
   // ── Training analysis variables (Phase 4l moves from EdgeIQ) ──
   // Suffixed with Ytd / Trend where Dashboard already has same-name
@@ -5798,7 +5798,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
             try {
               const totals = nutDailyTotals(td()) || { calories: 0, protein: 0 };
               const dyn = getDynamicMacroTarget();
-              const calT = dyn?.dynamicTarget ?? (parseFloat(profile?.dailyCalorieTarget) || 2200);
+              const calT = dyn?.dynamicTarget ?? resolveCalorieTarget(todayStr, profile);
               const proT = dyn?.proteinG       ?? (parseFloat(profile?.dailyProteinTarget) || 150);
               return {
                 calLeft: Math.max(0, Math.round(calT - (totals.calories || 0))),
@@ -9218,7 +9218,7 @@ Structure:
   const avgCarbs=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.carbs||0),0)/recentNut.length):null;
   const avgFat=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.fat||0),0)/recentNut.length):null;
   const avgBurned=(avgCalories||0)+341;
-  const calT=parseFloat(profile?.dailyCalorieTarget)||2200;
+  const calT=resolveCalorieTarget(td(),profile);
 
   // 7-day recovery — HRV merge same pattern as the upper card.
   // Worker writes overnightHRV onto sleep rows (Phase 4c); legacy `hrv`
@@ -9501,7 +9501,7 @@ Structure:
           try { return getDynamicMacroTarget(); } catch { return null; }
         })();
         const calTarget = dynTarget?.dynamicTarget
-                        ?? (parseFloat(profile?.dailyCalorieTarget) || 2200);
+                        ?? resolveCalorieTarget(td(), profile);
         const proTarget = dynTarget?.proteinG
                         ?? (parseFloat(profile?.dailyProteinTarget) || 150);
         const calRemaining = Math.max(0, Math.round(calTarget - (todayNutTotals.calories || 0)));

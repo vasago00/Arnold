@@ -22,6 +22,7 @@
 import { canonicalActivityType } from '../dcyMath.js';
 import { isRun, isStrength as isStrengthAct } from '../activityClass.js';
 import { timeframesFromCollection, aggregateTimeframes } from './kriAggregate.js';
+import { resolveCalorieTarget } from '../calorieTarget.js';
 
 // Phase 4m.2.7 — VDOT race-time predictor (Jack Daniels' lookup table).
 // Used by the Race Predictor metric as a fallback when Garmin doesn't
@@ -1695,7 +1696,7 @@ export const TILE_METRICS = [
       const today = localToday();
       const cal = macroForDate(ctx, today, 'calories');
       if (cal <= 0) return null;
-      const target = ctx.profile?.dailyCalorieTarget || 2200;
+      const target = resolveCalorieTarget(today, ctx.profile);
       const pct = cal / target;
       return {
         value: Math.round(cal),

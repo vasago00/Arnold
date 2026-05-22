@@ -14,6 +14,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { STATUS } from '../core/semantics.js';
 import { getGoals } from '../core/goals.js';
 import { getDynamicMacroTarget } from '../core/energyBalance.js';
+import { resolveCalorieTarget } from '../core/calorieTarget.js';
 import {
   MEAL_CATEGORIES, createEntry, saveEntry, deleteEntry,
   getEntriesForDate, dailyTotals, goalImpact,
@@ -1401,7 +1402,7 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
   let dyn = null;
   try { dyn = getDynamicMacroTarget(); } catch {}
   const effGoals = {
-    dailyCalorieTarget: dyn?.dynamicTarget ?? (parseFloat(G.dailyCalorieTarget) || 2200),
+    dailyCalorieTarget: dyn?.dynamicTarget ?? resolveCalorieTarget(dateStr, G),
     dailyProteinTarget: dyn?.proteinG       ?? (parseFloat(G.dailyProteinTarget) || 150),
     dailyCarbTarget:    dyn?.carbsG         ?? (parseFloat(G.dailyCarbTarget)    || 200),
     dailyFatTarget:     dyn?.fatG           ?? (parseFloat(G.dailyFatTarget)     || 70),
