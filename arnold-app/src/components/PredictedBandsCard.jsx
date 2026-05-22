@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import { getPredictedBands, dropPin } from '../core/predictedBands.js';
-import { BatteryLow } from '@phosphor-icons/react';
+import { BatteryLow, MapPin } from '@phosphor-icons/react';
 
 const FAMILY_COLOR = {
   easy_run:  '#60a5fa',
@@ -200,7 +200,16 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
               opacity: pinning ? 0.6 : 1,
             }}
           >
-            {pinning ? '···' : pinError ? `📍 ${pinError}` : '📍 Drop a pin'}
+            {pinning ? '···'
+              : pinError
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    <MapPin size={11} weight="fill" />
+                    {pinError}
+                  </span>
+                : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    Drop a
+                    <MapPin size={11} weight="fill" />
+                  </span>}
           </button>
         </div>
       </div>
