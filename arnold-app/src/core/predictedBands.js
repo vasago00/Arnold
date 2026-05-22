@@ -18,30 +18,90 @@ import { isHIIT, isHardSession } from './activityClass.js';
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
+const PIN_CACHE_KEY = 'arnold:dropPinCoords';
+const PIN_TTL_MS    = 6 * 60 * 60 * 1000;          // 6 hours
+const RECENT_ACT_MS = 3 * 24 * 60 * 60 * 1000;     // 3 days
+
+function _validCoord(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon)
+      && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+      && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001;
+}
+
+/**
+ * Priority order (Phase 4r.intel.11c — travel-aware):
+ *   1. Drop-a-pin cache (last 6h, set by user tapping the card button)
+ *   2. Most recent activity with GPS in the last 3 days — "where you are now"
+ *   3. profile.homeLatitude / homeLongitude — explicit home set by user
+ *   4. Any activity with GPS anywhere in history — last resort
+ *
+ * The flip from home-first to recent-first means traveling for the summer
+ * doesn't render predictions against your home weather.
+ */
 function getHomeCoords() {
+  // 1. Drop-a-pin cache (6h TTL)
+  try {
+    const pin = storage.get(PIN_CACHE_KEY);
+    if (pin && Number.isFinite(pin.at) && (Date.now() - pin.at) < PIN_TTL_MS
+        && _validCoord(Number(pin.lat), Number(pin.lon))) {
+      return { lat: Number(pin.lat), lon: Number(pin.lon), source: 'pin' };
+    }
+  } catch {}
+  // 2. Most recent activity with GPS in the last 3 days
+  try {
+    const acts = storage.get('activities') || [];
+    const cutoff = Date.now() - RECENT_ACT_MS;
+    for (let i = acts.length - 1; i >= 0; i--) {
+      const a = acts[i];
+      const lat = Number(a?.startLatitude ?? a?.lat);
+      const lon = Number(a?.startLongitude ?? a?.lon);
+      if (!_validCoord(lat, lon)) continue;
+      const ad = a?.date && parseLocalDate(a.date);
+      if (ad && ad.getTime() >= cutoff) return { lat, lon, source: 'recent-act' };
+    }
+  } catch {}
+  // 3. Profile-set home location
   try {
     const p = storage.get('profile') || {};
     const lat = Number(p.homeLatitude ?? p.lat);
     const lon = Number(p.homeLongitude ?? p.lon);
-    if (Number.isFinite(lat) && Number.isFinite(lon)
-        && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-      return { lat, lon };
-    }
+    if (_validCoord(lat, lon)) return { lat, lon, source: 'home' };
   } catch {}
-  // Fallback: last activity with GPS
+  // 4. Any historical activity with GPS
   try {
     const acts = storage.get('activities') || [];
     for (let i = acts.length - 1; i >= 0; i--) {
       const a = acts[i];
       const lat = Number(a?.startLatitude ?? a?.lat);
       const lon = Number(a?.startLongitude ?? a?.lon);
-      if (Number.isFinite(lat) && Number.isFinite(lon)
-          && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001) {
-        return { lat, lon };
-      }
+      if (_validCoord(lat, lon)) return { lat, lon, source: 'history' };
     }
   } catch {}
   return null;
+}
+
+/**
+ * User-triggered geolocation pin. Caches in storage with a TTL so subsequent
+ * predictions use it. Should only be called from a user-gesture handler
+ * (browsers block geolocation requests outside that).
+ */
+export function dropPin() {
+  return new Promise((resolve) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      resolve({ ok: false, error: 'unsupported' });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos?.coords?.latitude, lon = pos?.coords?.longitude;
+        if (!_validCoord(lat, lon)) { resolve({ ok: false, error: 'invalid' }); return; }
+        try { storage.set(PIN_CACHE_KEY, { lat, lon, at: Date.now() }, { skipValidation: true }); } catch {}
+        resolve({ ok: true, lat, lon });
+      },
+      err => resolve({ ok: false, error: err?.message || 'denied' }),
+      { timeout: 8000, maximumAge: 5 * 60 * 1000, enableHighAccuracy: false },
+    );
+  });
 }
 
 function computeFatigueForDate(dateStr) {
@@ -88,7 +148,9 @@ async function fetchForecastConditions(dateStr) {
     // morning or evening, noon strikes a reasonable midpoint and lets
     // Open-Meteo's hourly index find a sensible row.
     const startMs = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 12, 0, 0).getTime();
-    return await fetchWeatherForActivity({ lat: coords.lat, lon: coords.lon, startMs });
+    const wx = await fetchWeatherForActivity({ lat: coords.lat, lon: coords.lon, startMs });
+    if (wx) wx.locationSource = coords.source || null;
+    return wx;
   } catch { return null; }
 }
 
@@ -187,6 +249,7 @@ export async function getPredictedBands({ family, dateStr, conditions }) {
       hasConditions: !!cond,
       tempC: cond?.tempC ?? null,
       humidityPct: cond?.humidityPct ?? null,
+      locationSource: cond?.locationSource ?? null,
       hasFatigue: !!ctx.fatigue,
       baselineN: ctx.baselineN || 0,
     },
@@ -222,6 +285,7 @@ export function getPredictedBandsSync({ family, dateStr, conditions }) {
       hasConditions: !!conditions,
       tempC: conditions?.tempC ?? null,
       humidityPct: conditions?.humidityPct ?? null,
+      locationSource: conditions?.locationSource ?? null,
       hasFatigue: !!ctx.fatigue,
       baselineN: ctx.baselineN || 0,
     },

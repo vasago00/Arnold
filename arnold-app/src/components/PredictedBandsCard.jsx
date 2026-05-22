@@ -17,7 +17,7 @@
 // degrades gracefully when offline (no weather).
 
 import { useEffect, useState } from 'react';
-import { getPredictedBands } from '../core/predictedBands.js';
+import { getPredictedBands, dropPin } from '../core/predictedBands.js';
 
 const FAMILY_COLOR = {
   easy_run:  '#60a5fa',
@@ -66,6 +66,9 @@ function bandText(band, defMeta, maxHR) {
 
 export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
   const [state, setState] = useState({ loading: true, bands: null, source: null });
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [pinning, setPinning] = useState(false);
+  const [pinError, setPinError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,7 +77,25 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
       .then(r => { if (!cancelled) setState({ loading: false, bands: r.bands, source: r.source }); })
       .catch(()  => { if (!cancelled) setState({ loading: false, bands: [],   source: null      }); });
     return () => { cancelled = true; };
-  }, [family, dateStr, conditions?.tempC, conditions?.humidityPct]);
+  }, [family, dateStr, conditions?.tempC, conditions?.humidityPct, refreshTrigger]);
+
+  const handleDropPin = async () => {
+    if (pinning) return;
+    setPinning(true);
+    setPinError(null);
+    try {
+      const r = await dropPin();
+      if (r.ok) {
+        setRefreshTrigger(n => n + 1);  // re-pull bands with new pin
+      } else {
+        setPinError(r.error === 'denied' ? 'permission denied'
+          : r.error === 'unsupported' ? 'not supported'
+          : 'failed');
+      }
+    } finally {
+      setPinning(false);
+    }
+  };
 
   const color = FAMILY_COLOR[family] || FAMILY_COLOR.run;
 
@@ -139,11 +160,29 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
         }}>
           Expected today
         </span>
-        {condBits.length > 0 && (
-          <span style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-            {condBits.join(' · ')}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexShrink: 0 }}>
+          {condBits.length > 0 && (
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+              {condBits.join(' · ')}
+            </span>
+          )}
+          <button
+            onClick={handleDropPin}
+            disabled={pinning}
+            title="Use my current location (6h cache)"
+            style={{
+              all: 'unset', cursor: pinning ? 'wait' : 'pointer',
+              fontSize: 9, fontWeight: 600, padding: '2px 7px',
+              borderRadius: 4, color,
+              background: `${color}14`,
+              border: `0.5px solid ${color}44`,
+              letterSpacing: '0.04em', whiteSpace: 'nowrap',
+              opacity: pinning ? 0.6 : 1,
+            }}
+          >
+            {pinning ? '···' : pinError ? `📍 ${pinError}` : '📍 Drop a pin'}
+          </button>
+        </div>
       </div>
       <div style={{
         display: 'grid',
