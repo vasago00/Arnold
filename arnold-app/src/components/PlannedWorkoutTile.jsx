@@ -35,7 +35,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   PersonSimpleRun, Barbell, Lightning, PersonSimpleTaiChi, Bicycle, Trophy,
   Drop as PhDrop, Moon as PhMoon,
-  BatteryLow,
+  BatteryLow, BatteryMedium,
 } from "@phosphor-icons/react";
 import { getPredictedBands } from "../core/predictedBands.js";
 import { storage } from "../core/storage.js";
@@ -1513,8 +1513,15 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
       // use. RH from Open-Meteo, battery from the intel fatigue model.
       const humPct = (predicted && predicted.source && Number.isFinite(predicted.source.humidityPct))
         ? Math.round(predicted.source.humidityPct) : null;
-      const fatigued = !!(predicted && predicted.source && predicted.source.hasFatigue);
-      if (tempC == null && humPct == null && !fatigued) return null;
+      const fatLevel = Number(predicted && predicted.source && predicted.source.fatigueLevel) || 0;
+      if (tempC == null && humPct == null && fatLevel < 1) return null;
+      const FatIcon = fatLevel >= 2 ? BatteryLow : BatteryMedium;
+      const fatColor = fatLevel >= 3 ? '#f87171'
+                     : fatLevel >= 2 ? '#fbbf24'
+                     :                 T3;
+      const fatTitle = fatLevel >= 3 ? 'Heavy fatigue · bands widened significantly'
+                     : fatLevel >= 2 ? 'Moderate fatigue · bands widened'
+                     :                 'Mild fatigue · bands slightly widened';
       return (
         <span style={{
           display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -1522,7 +1529,7 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
           fontVariantNumeric: 'tabular-nums',
         }}>
           {tempC != null && cond && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
               {weatherIcon({ condition: cond, color: weatherIconColor(cond), size: 12 })}
               <span>{tempC}°C</span>
             </span>
@@ -1535,10 +1542,10 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
               <span>{humPct}%</span>
             </span>
           )}
-          {fatigued && (
-            <BatteryLow size={12} weight="bold" color={T3}>
-              <title>Bands widened for accumulated fatigue</title>
-            </BatteryLow>
+          {fatLevel >= 1 && (
+            <FatIcon size={12} weight="bold" color={fatColor}>
+              <title>{fatTitle}</title>
+            </FatIcon>
           )}
         </span>
       );

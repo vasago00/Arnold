@@ -104,6 +104,27 @@ export function dropPin() {
   });
 }
 
+function classifyFatigueSeverity(f) {
+  if (!f) return 0;
+  let score = 0;
+  // Prior-night sleep score: <70 mild, <60 moderate.
+  if (Number.isFinite(f.sleepScorePrev)) {
+    if (f.sleepScorePrev < 60) score += 2;
+    else if (f.sleepScorePrev < 70) score += 1;
+  }
+  // Rolling TSS ratio (acute/chronic): >1.3 mild, >1.5 moderate.
+  const t7 = Number(f.rollingTSS7), t28 = Number(f.rollingTSS28);
+  if (t7 > 0 && t28 > 0) {
+    const ratio = (t7 / 7) / (t28 / 28);
+    if (ratio > 1.5) score += 2;
+    else if (ratio > 1.3) score += 1;
+  }
+  // Consecutive hard days: 2+ in prior 2 days = mild.
+  if (Number(f.consecutiveHardDays) >= 2) score += 1;
+  // Cap at 3.
+  return Math.min(3, score);
+}
+
 function computeFatigueForDate(dateStr) {
   try {
     const cur = parseLocalDate(dateStr);
@@ -251,7 +272,7 @@ export async function getPredictedBands({ family, dateStr, conditions }) {
       humidityPct: cond?.humidityPct ?? null,
       condition: cond?.condition ?? null,
       locationSource: cond?.locationSource ?? null,
-      hasFatigue: !!ctx.fatigue,
+      fatigueLevel: classifyFatigueSeverity(ctx.fatigue),
       baselineN: ctx.baselineN || 0,
     },
   };
@@ -288,7 +309,7 @@ export function getPredictedBandsSync({ family, dateStr, conditions }) {
       humidityPct: conditions?.humidityPct ?? null,
       condition: conditions?.condition ?? null,
       locationSource: conditions?.locationSource ?? null,
-      hasFatigue: !!ctx.fatigue,
+      fatigueLevel: classifyFatigueSeverity(ctx.fatigue),
       baselineN: ctx.baselineN || 0,
     },
   };

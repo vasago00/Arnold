@@ -19,7 +19,8 @@
 import { useEffect, useState } from 'react';
 import { getPredictedBands, dropPin } from '../core/predictedBands.js';
 import {
-  BatteryLow, MapPin,
+  BatteryLow, BatteryMedium, BatteryHigh, BatteryFull,
+  MapPin,
   Drop as PhDrop,
   Sun as PhSun, Cloud as PhCloud, CloudRain as PhCloudRain,
   CloudSnow as PhCloudSnow, CloudFog as PhCloudFog, Lightning as PhLightning,
@@ -166,11 +167,23 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
 
   const src = state.source || {};
   const condBits = [];
-  if (src.condition)                    condBits.push({ kind: 'weather', condition: src.condition });
-  if (Number.isFinite(src.tempC))       condBits.push({ kind: 'text', text: `${Math.round(src.tempC)}°C` });
+  const _tempStr = Number.isFinite(src.tempC) ? `${Math.round(src.tempC)}°C` : null;
+  // Combine weather icon + temperature into ONE cell so the spacing matches
+  // the humidity / battery cells (icon ⨯ value with 2px gap, not separated
+  // by a · dot).
+  if (src.condition && _tempStr) {
+    condBits.push({ kind: 'weatherTemp', condition: src.condition, temp: _tempStr });
+  } else if (src.condition) {
+    condBits.push({ kind: 'weather', condition: src.condition });
+  } else if (_tempStr) {
+    condBits.push({ kind: 'text', text: _tempStr });
+  }
   if (Number.isFinite(src.humidityPct)) condBits.push({ kind: 'humidity', value: Math.round(src.humidityPct) });
-  if (src.hasFatigue)                   condBits.push({ kind: 'fatigue' });
-  if (src.baselineN >= 5)               condBits.push({ kind: 'text', text: `n=${src.baselineN}` });
+  // Fatigue level: 0 = fresh, 1 = mild, 2 = moderate, 3 = heavy.
+  // Only render the battery when level >= 1 (otherwise it's misleading).
+  const _fat = Number(src.fatigueLevel) || 0;
+  if (_fat >= 1) condBits.push({ kind: 'fatigue', level: _fat });
+  if (src.baselineN >= 5) condBits.push({ kind: 'text', text: `n=${src.baselineN}` });
   // Surface the empty-state explicitly when there's literally no weather
   // (no home coords + no recent weathered activities). Helps the user
   // understand why the bands aren't conditions-adjusted.
@@ -203,18 +216,31 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
               {condBits.map((b, i) => (
                 <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                   {i > 0 && <span aria-hidden style={{ opacity: 0.45 }}>·</span>}
-                  {b.kind === 'weather' ? (
+                  {b.kind === 'weatherTemp' ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                      <WeatherIcon condition={b.condition}/>
+                      <span>{b.temp}</span>
+                    </span>
+                  ) : b.kind === 'weather' ? (
                     <WeatherIcon condition={b.condition}/>
-                  ) : b.kind === 'fatigue' ? (
-                    <BatteryLow
-                      size={12}
-                      weight="bold"
-                      color="var(--text-muted)"
-                      aria-label="Bands widened for accumulated fatigue"
-                    >
-                      <title>Bands widened for accumulated fatigue (CTL / TSB / consecutive hard days)</title>
-                    </BatteryLow>
-                  ) : b.kind === 'humidity' ? (
+                  ) : b.kind === 'fatigue' ? (() => {
+                    // Phase 4r.intel.11h — graded battery: low = fried, full = fresh.
+                    // We only get here when level >= 1, so map 1/2/3 → medium/low/empty-ish.
+                    const FatIcon = b.level >= 3 ? BatteryLow
+                                  : b.level >= 2 ? BatteryLow
+                                  : BatteryMedium;
+                    const label  = b.level >= 3 ? 'Heavy fatigue · bands widened significantly'
+                                 : b.level >= 2 ? 'Moderate fatigue · bands widened'
+                                 :                'Mild fatigue · bands slightly widened';
+                    const tint   = b.level >= 3 ? '#f87171'
+                                 : b.level >= 2 ? '#fbbf24'
+                                 :                'var(--text-muted)';
+                    return (
+                      <FatIcon size={12} weight="bold" color={tint} aria-label={label}>
+                        <title>{label}</title>
+                      </FatIcon>
+                    );
+                  })() : b.kind === 'humidity' ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
                       <PhDrop size={11} weight="fill" color="var(--text-muted)">
                         <title>Relative humidity</title>
