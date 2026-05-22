@@ -35,7 +35,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   PersonSimpleRun, Barbell, Lightning, PersonSimpleTaiChi, Bicycle, Trophy,
   Drop as PhDrop, Moon as PhMoon,
+  BatteryLow,
 } from "@phosphor-icons/react";
+import { getPredictedBands } from "../core/predictedBands.js";
 import { storage } from "../core/storage.js";
 import { fetchWeatherForDate } from "../core/pdfParser.js";
 import { isRun, isStrength, isHIIT, isMobility } from "../core/activityClass.js";
@@ -1257,6 +1259,20 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
   }, [allActivities, storageVersion]);
 
   const [weather, setWeather] = useState(() => getCachedWeather(todayDate));
+  // Phase 4r.intel.11e — Layer 3 bands embedded in this tile. Fetched async
+  // (network call to Open-Meteo); rendered when available, silently absent
+  // otherwise. Maxes out at one call per plan + date change.
+  const [predicted, setPredicted] = useState(null);
+  useEffect(() => {
+    const planType = plannedToday?.type;
+    if (!planType || planType === 'rest' || state.kind !== 'pre') return;
+    let cancelled = false;
+    const _maxHR = parseFloat(profile?.maxHR) || null;
+    getPredictedBands({ family: planType, dateStr: todayDate })
+      .then(r => { if (!cancelled) setPredicted({ ...r, maxHR: _maxHR }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [plannedToday?.type, todayDate, state.kind, profile?.maxHR]);
   // Phase 4q.weather.1 — keep weather live. Three triggers:
   //   1. mount / state-change : pull fresh if cache is stale (>30 min)
   //   2. visibilitychange      : re-pull when the user foregrounds the app
@@ -1485,22 +1501,38 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
     // icon, falling back to the daily mid-point if `current` isn't on the
     // payload (archive endpoint, older cached entries).
     const headerRight = (() => {
-      if (!weather) return null;
-      const cond = weather.currentCondition || weather.condition;
-      const tempC = weather.currentTempC != null
+      if (!weather && !predicted) return null;
+      const cond = weather && (weather.currentCondition || weather.condition);
+      const tempC = weather && (weather.currentTempC != null
         ? Math.round(weather.currentTempC)
         : (weather.tempMaxC != null && weather.tempMinC != null
             ? Math.round((weather.tempMaxC + weather.tempMinC) / 2)
-            : null);
-      if (tempC == null) return null;
+            : null));
+      // Phase 4r.intel.11e — pull RH + fatigue flag from the predicted-bands
+      // source, so the header carries the same conditions story the bands
+      // use. RH from Open-Meteo, battery from the intel fatigue model.
+      const humPct = (predicted && predicted.source && Number.isFinite(predicted.source.humidityPct))
+        ? Math.round(predicted.source.humidityPct) : null;
+      const fatigued = !!(predicted && predicted.source && predicted.source.hasFatigue);
+      if (tempC == null && humPct == null && !fatigued) return null;
       return (
         <span style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
+          display: 'inline-flex', alignItems: 'center', gap: 6,
           fontSize: 10, fontWeight: 600, color: T3,
           fontVariantNumeric: 'tabular-nums',
         }}>
-          {weatherIcon({ condition: cond, color: weatherIconColor(cond), size: 12 })}
-          <span>{tempC}°C</span>
+          {tempC != null && cond && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              {weatherIcon({ condition: cond, color: weatherIconColor(cond), size: 12 })}
+              <span>{tempC}°C</span>
+            </span>
+          )}
+          {humPct != null && <span style={{ opacity: 0.85 }}>{humPct}% RH</span>}
+          {fatigued && (
+            <BatteryLow size={12} weight="bold" color={T3}>
+              <title>Bands widened for accumulated fatigue</title>
+            </BatteryLow>
+          )}
         </span>
       );
     })();
@@ -1617,6 +1649,57 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
           </div>
         )}
         {statusChips.length > 0 && <PerfQualityRow chips={statusChips} reserveRightSpace={!!family}/>}
+        {/* Phase 4r.intel.11e — Targets strip. Shows 3-4 expected bands
+            inline beneath the status chips. Pulled from Layer 3 (weather +
+            fatigue + baselines). Renders only when bands resolved. */}
+        {predicted && Array.isArray(predicted.bands) && predicted.bands.length > 0 && (() => {
+          const pickIds = ['avgHR_pctMax', 'z45Pct', 'cardiacDrift', 'hrRecovery1m'];
+          const cells = pickIds.map(id => predicted.bands.find(b => b.metricId === id)).filter(Boolean);
+          if (!cells.length) return null;
+          const mh = predicted.maxHR;
+          const fmt = (n) => Math.abs(n) >= 10 ? n.toFixed(0) : n.toFixed(1);
+          const valOf = (b) => {
+            if (b.metricId === 'avgHR_pctMax' && mh) {
+              return `${Math.round((b.min/100)*mh)}-${Math.round((b.max/100)*mh)}`;
+            }
+            if (b.direction === 'lower-better')  return `≤${fmt(b.max)}`;
+            if (b.direction === 'higher-better') return `≥${fmt(b.min)}`;
+            return `${fmt(b.min)}-${fmt(b.max)}`;
+          };
+          const labelOf = (id) => id === 'avgHR_pctMax' ? 'HR'
+                              : id === 'z45Pct'        ? 'Z4-5'
+                              : id === 'cardiacDrift'  ? 'Drift'
+                              : id === 'hrRecovery1m'  ? 'Rec'
+                              : id;
+          const unitOf = (id) => id === 'avgHR_pctMax' && mh ? 'bpm'
+                             : id === 'z45Pct'              ? '%'
+                             : id === 'cardiacDrift'        ? '%'
+                             : id === 'hrRecovery1m'        ? 'bpm'
+                             : '';
+          return (
+            <div style={{
+              padding: '2px 12px 6px',
+              display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: '0.10em',
+                color: familyColor, textTransform: 'uppercase',
+              }}>Targets</span>
+              {cells.map(b => (
+                <span key={b.metricId} style={{
+                  display: 'inline-flex', alignItems: 'baseline', gap: 2,
+                  fontSize: 10, color: T2, whiteSpace: 'nowrap',
+                }}>
+                  <span style={{ color: T3, fontWeight: 600 }}>{labelOf(b.metricId)}</span>
+                  <span style={{ fontWeight: 700 }}>{valOf(b)}</span>
+                  {unitOf(b.metricId) && <span style={{ color: T3, fontSize: 9 }}>{unitOf(b.metricId)}</span>}
+                  {b.personalized && <span style={{ color: familyColor, fontSize: 8 }} title={`personalized (n=${b.baselineN})`}>★</span>}
+                </span>
+              ))}
+            </div>
+          );
+        })()}
         {fuelChips.length > 0 && (
           <RecoverySection
             chips={fuelChips}

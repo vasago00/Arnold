@@ -51,7 +51,6 @@ import {
 } from "../core/derive/tileMetrics.js";
 import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
-import { PredictedBandsCard } from "./PredictedBandsCard.jsx";
 import { localDate, ymd } from "../core/time.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2654,24 +2653,6 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         storageVersion={storageVersion}
         onTap={() => onOpenTab?.('plan')}
       />
-
-      {/* ── Phase 4r.intel.11 — Predicted bands strip ──
-          Shown when today has a non-rest plan that hasn't been logged yet.
-          Disappears post-completion (the tiles below already paint via
-          intel.8 against the actual result). */}
-      {(() => {
-        const _plan = todayPlanned();
-        if (!_plan || !_plan.type || _plan.type === 'rest') return null;
-        let _comp = { completed: false };
-        try { _comp = checkTodayCompletion(localDate(), _plan); } catch {}
-        if (_comp.completed) return null;
-        const _maxHR = parseFloat((storage.get('profile') || {}).maxHR) || null;
-        return (
-          <div style={{ marginBottom: 8 }}>
-            <PredictedBandsCard family={_plan.type} dateStr={localDate()} maxHR={_maxHR} />
-          </div>
-        );
-      })()}
 
       {(() => {
         // Hide CoachingHeroCard when the planned-workout tile rendered

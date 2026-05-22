@@ -70,6 +70,15 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [pinning, setPinning] = useState(false);
   const [pinError, setPinError] = useState(null);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth <= 600
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobile(window.innerWidth <= 600);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,11 +158,11 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
       border: '0.5px solid var(--border-default)',
       borderLeft: `2px solid ${color}`,
       borderRadius: 'var(--radius-md, 8px)',
-      padding: '8px 10px',
+      padding: isMobile ? '6px 8px' : '8px 10px',
     }}>
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-        marginBottom: 6,
+        marginBottom: isMobile ? 4 : 6,
       }}>
         <span style={{
           fontSize: 10, fontWeight: 700, color, letterSpacing: '0.08em',
@@ -192,12 +201,13 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
             title="Use my current location (6h cache)"
             style={{
               all: 'unset', cursor: pinning ? 'wait' : 'pointer',
-              fontSize: 9, fontWeight: 600, padding: '2px 7px',
+              fontSize: 9, fontWeight: 600, padding: '1px 6px',
               borderRadius: 4, color,
               background: `${color}14`,
               border: `0.5px solid ${color}44`,
               letterSpacing: '0.04em', whiteSpace: 'nowrap',
               opacity: pinning ? 0.6 : 1,
+              lineHeight: 1.2,
             }}
           >
             {pinning ? '···'
@@ -215,20 +225,22 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
       </div>
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(82px, 1fr))',
-        gap: '6px 10px',
+        gridTemplateColumns: isMobile
+          ? 'repeat(auto-fit, minmax(70px, 1fr))'
+          : 'repeat(auto-fit, minmax(82px, 1fr))',
+        gap: isMobile ? '3px 8px' : '6px 10px',
       }}>
         {cells.map(c => (
           <div key={c.id} style={{ minWidth: 0 }}>
             <div style={{
-              fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.04em',
+              fontSize: isMobile ? 8 : 9, color: 'var(--text-muted)', letterSpacing: '0.04em',
               textTransform: 'uppercase', lineHeight: 1.1,
             }}>
               {c.label}
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 3, marginTop: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 3, marginTop: isMobile ? 1 : 2 }}>
               <span style={{
-                fontSize: 13, fontWeight: 700, color: 'var(--text-primary)',
+                fontSize: isMobile ? 12 : 13, fontWeight: 700, color: 'var(--text-primary)',
                 lineHeight: 1, whiteSpace: 'nowrap',
               }}>
                 {c.text}
