@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import { getPredictedBands, dropPin } from '../core/predictedBands.js';
-import { BatteryLow, MapPin } from '@phosphor-icons/react';
+import { BatteryLow, MapPin, Drop as PhDrop } from '@phosphor-icons/react';
 
 const FAMILY_COLOR = {
   easy_run:  '#60a5fa',
@@ -144,7 +144,7 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
   const src = state.source || {};
   const condBits = [];
   if (Number.isFinite(src.tempC))       condBits.push({ kind: 'text', text: `${Math.round(src.tempC)}°C` });
-  if (Number.isFinite(src.humidityPct)) condBits.push({ kind: 'text', text: `${Math.round(src.humidityPct)}% RH` });
+  if (Number.isFinite(src.humidityPct)) condBits.push({ kind: 'humidity', value: Math.round(src.humidityPct) });
   if (src.hasFatigue)                   condBits.push({ kind: 'fatigue' });
   if (src.baselineN >= 5)               condBits.push({ kind: 'text', text: `n=${src.baselineN}` });
   // Surface the empty-state explicitly when there's literally no weather
@@ -188,6 +188,13 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
                     >
                       <title>Bands widened for accumulated fatigue (CTL / TSB / consecutive hard days)</title>
                     </BatteryLow>
+                  ) : b.kind === 'humidity' ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                      <PhDrop size={11} weight="fill" color="var(--text-muted)">
+                        <title>Relative humidity</title>
+                      </PhDrop>
+                      <span>{b.value}%</span>
+                    </span>
                   ) : (
                     <span>{b.text}</span>
                   )}

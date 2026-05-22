@@ -1527,7 +1527,14 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
               <span>{tempC}°C</span>
             </span>
           )}
-          {humPct != null && <span style={{ opacity: 0.85 }}>{humPct}% RH</span>}
+          {humPct != null && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.85 }}>
+              <PhDrop size={11} weight="fill">
+                <title>Relative humidity</title>
+              </PhDrop>
+              <span>{humPct}%</span>
+            </span>
+          )}
           {fatigued && (
             <BatteryLow size={12} weight="bold" color={T3}>
               <title>Bands widened for accumulated fatigue</title>
