@@ -3179,7 +3179,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const avgConsumed=thisWeekNut.length?Math.round(avg2(thisWeekNut,'calories')):null;
   const avgBurned=weekCals>0&&thisWeekActs.length?Math.round(weekCals/thisWeekActs.length+1880):1880;
   const netCalories=avgConsumed?Math.round(avgConsumed-avgBurned):null;
-  const consumedPct=avgConsumed?Math.min(avgConsumed/resolveCalorieTarget(todayStr,profile),1):0;
+  const consumedPct=avgConsumed?Math.min(avgConsumed/resolveCalorieTarget(td(),profile),1):0;
   const burnedPct=Math.min(avgBurned/2500,1);
   const avgProtein=thisWeekNut.length?avg2(thisWeekNut,'protein'):null;
   const avgCarbs=thisWeekNut.length?avg2(thisWeekNut,'carbs'):null;
@@ -3291,8 +3291,8 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // 30-day average daily burn for the Nutrition donut: RMR floor + activity calories ÷ 30
   const last30Acts=activities.filter(a=>a.date>=td(d30));
   const last30ActKcal=last30Acts.reduce((s,a)=>s+(parseFloat(a.calories)||0),0);
-  const avg30Burned=Math.round((resolveCalorieTarget(todayStr,profile)+(last30ActKcal/30)));
-  const calT=resolveCalorieTarget(todayStr,profile);
+  const avg30Burned=Math.round((resolveCalorieTarget(td(),profile)+(last30ActKcal/30)));
+  const calT=resolveCalorieTarget(td(),profile);
 
   // ── Training analysis variables (Phase 4l moves from EdgeIQ) ──
   // Suffixed with Ytd / Trend where Dashboard already has same-name
