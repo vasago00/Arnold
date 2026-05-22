@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import { getPredictedBands, dropPin } from '../core/predictedBands.js';
+import { BatteryLow } from '@phosphor-icons/react';
 
 const FAMILY_COLOR = {
   easy_run:  '#60a5fa',
@@ -133,10 +134,10 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
 
   const src = state.source || {};
   const condBits = [];
-  if (Number.isFinite(src.tempC))       condBits.push(`${Math.round(src.tempC)}°C`);
-  if (Number.isFinite(src.humidityPct)) condBits.push(`${Math.round(src.humidityPct)}% RH`);
-  if (src.hasFatigue)                   condBits.push('fatigue-adj');
-  if (src.baselineN >= 5)               condBits.push(`n=${src.baselineN}`);
+  if (Number.isFinite(src.tempC))       condBits.push({ kind: 'text', text: `${Math.round(src.tempC)}°C` });
+  if (Number.isFinite(src.humidityPct)) condBits.push({ kind: 'text', text: `${Math.round(src.humidityPct)}% RH` });
+  if (src.hasFatigue)                   condBits.push({ kind: 'fatigue' });
+  if (src.baselineN >= 5)               condBits.push({ kind: 'text', text: `n=${src.baselineN}` });
   // Surface the empty-state explicitly when there's literally no weather
   // (no home coords + no recent weathered activities). Helps the user
   // understand why the bands aren't conditions-adjusted.
@@ -162,8 +163,27 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
         </span>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexShrink: 0 }}>
           {condBits.length > 0 && (
-            <span style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-              {condBits.join(' · ')}
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap',
+            }}>
+              {condBits.map((b, i) => (
+                <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  {i > 0 && <span aria-hidden style={{ opacity: 0.45 }}>·</span>}
+                  {b.kind === 'fatigue' ? (
+                    <BatteryLow
+                      size={12}
+                      weight="bold"
+                      color="var(--text-muted)"
+                      aria-label="Bands widened for accumulated fatigue"
+                    >
+                      <title>Bands widened for accumulated fatigue (CTL / TSB / consecutive hard days)</title>
+                    </BatteryLow>
+                  ) : (
+                    <span>{b.text}</span>
+                  )}
+                </span>
+              ))}
             </span>
           )}
           <button
