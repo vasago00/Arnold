@@ -213,7 +213,7 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
             }}>· {planLabel}</span>
           )}
         </span>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           {condBits.length > 0 && (
             <span style={{
               display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -266,25 +266,29 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
             title="Use my current location (6h cache)"
             style={{
               all: 'unset', cursor: pinning ? 'wait' : 'pointer',
-              fontSize: 9, fontWeight: 600, padding: '0px 6px',
+              fontSize: 9, fontWeight: 600, padding: '0 6px',
               borderRadius: 4, color,
               background: `${color}14`,
               border: `0.5px solid ${color}44`,
               letterSpacing: '0.04em', whiteSpace: 'nowrap',
               opacity: pinning ? 0.6 : 1,
-              lineHeight: 1.4,
+              // Hard-cap height so the button matches the condition pills
+              // alongside it. Without this the line-height + icon was
+              // pushing the pill ~25px tall on Android.
+              height: 16, boxSizing: 'border-box',
+              lineHeight: 1,
               display: 'inline-flex', alignItems: 'center',
             }}
           >
             {pinning ? '···'
               : pinError
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                    <MapPin size={11} weight="fill" />
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
+                    <MapPin size={10} weight="fill" />
                     {pinError}
                   </span>
-                : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, lineHeight: 1 }}>
                     Drop a
-                    <MapPin size={11} weight="fill" />
+                    <MapPin size={10} weight="fill" />
                   </span>}
           </button>
         </div>
