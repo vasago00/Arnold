@@ -278,8 +278,11 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
                   all: 'unset', cursor: pinning ? 'wait' : 'pointer',
                   fontSize: 9, fontWeight: 600, padding: '0 6px',
                   borderRadius: 4, color,
-                  background: isPinned ? `${color}28` : `${color}14`,
-                  border: `0.5px solid ${isPinned ? `${color}88` : `${color}44`}`,
+                  background: isPinned ? 'rgba(74,222,128,0.18)' : `${color}14`,
+                  border: `0.5px solid ${isPinned ? 'rgba(74,222,128,0.55)' : `${color}44`}`,
+                  // Phase 4r.calendar.36c — text + icon turn green in the
+                  // pinned state so the active confirmation reads at a glance.
+                  ...(isPinned ? { color: '#4ade80' } : null),
                   letterSpacing: '0.04em', whiteSpace: 'nowrap',
                   opacity: pinning ? 0.6 : 1,
                   height: 16, boxSizing: 'border-box',
