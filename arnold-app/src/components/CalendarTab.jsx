@@ -362,6 +362,7 @@ export function CalendarTab({ showToast }) {
             width: '100%',
           }}>
             <DayDrawer
+              isMobile={isMobile}
               dateStr={selectedDate}
               activities={activitiesByDate.get(selectedDate) || []}
               planned={plannerByDate.get(selectedDate) || null}
@@ -387,6 +388,7 @@ export function CalendarTab({ showToast }) {
       {isMobile && (
         <div style={{ marginTop: 0, paddingBottom: 112 }}>
           <DayDrawer
+            isMobile={isMobile}
             dateStr={selectedDate}
             activities={activitiesByDate.get(selectedDate) || []}
             planned={plannerByDate.get(selectedDate) || null}
@@ -1216,7 +1218,7 @@ function ThreeDomainCell({ label, value, color }) {
 
 // ── Day drawer ──────────────────────────────────────────────────────────────
 
-function DayDrawer({ dateStr, activities, planned, races, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose }) {
+function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose }) {
   const d = new Date(dateStr + 'T12:00:00');
   const dateLabel = d.toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
@@ -1350,9 +1352,9 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onAddPlan, 
       // outer panel border so the drawer reads as one unit. Stable
       // min-height so the panel doesn't jump as the user picks
       // different days with varying amounts of data.
-      padding: '10px 14px',
+      padding: isMobile ? '8px 12px' : '10px 14px',
       marginBottom: 8,
-      minHeight: 280,
+      minHeight: isMobile ? 180 : 280,
     }}>
       {/* Header: date label (left) + race pill OR +Add race (right) +
           optional close button. Phase 4r.calendar.29 — no border-bottom
@@ -1363,13 +1365,24 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onAddPlan, 
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{dateLabel}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-            {races.length > 0 && races[0].distanceMi
+          {(() => {
+            // Phase 4r.calendar.35 — on mobile, hide the "Planned: X" line
+            // when the Expected Today card is going to show it inside. The
+            // race info still renders, since the card doesn't carry races.
+            const hasPlan = planned?.type && planned.type !== 'rest';
+            const hasRace = races.length > 0 && races[0].distanceMi;
+            if (isMobile && hasPlan && !hasRace && !isPast) return null;
+            const text = hasRace
               ? `${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}`
-              : planned?.type && planned.type !== 'rest'
+              : hasPlan
                 ? `Planned: ${prettyFamily(planned.type)}`
-                : 'No plan'}
-          </div>
+                : 'No plan';
+            return (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                {text}
+              </div>
+            );
+          })()}
         </div>
         {/* Phase 4r.calendar.29 — top-right slot: race pill if scheduled,
             otherwise + Add race button (hidden on past dates per
@@ -1430,11 +1443,12 @@ function DayDrawer({ dateStr, activities, planned, races, onAddRace, onAddPlan, 
           Pulls weather forecast + fatigue + personal baselines via
           getPredictedBands(); shows nothing on past dates or rest days. */}
       {planned && planned.type && planned.type !== 'rest' && !isPast && (
-        <div style={{ marginBottom: 10 }}>
+        <div style={{ marginBottom: isMobile ? 6 : 10 }}>
           <PredictedBandsCard
             family={planned.type}
             dateStr={dateStr}
             maxHR={parseFloat((storage.get('profile') || {}).maxHR) || null}
+            planLabel={prettyFamily(planned.type)}
           />
         </div>
       )}

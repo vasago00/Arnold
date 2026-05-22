@@ -89,7 +89,7 @@ function bandText(band, defMeta, maxHR) {
   return `${fmt(band.min)}-${fmt(band.max)}`;
 }
 
-export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
+export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLabel }) {
   const [state, setState] = useState({ loading: true, bands: null, source: null });
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [pinning, setPinning] = useState(false);
@@ -195,17 +195,23 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
       border: '0.5px solid var(--border-default)',
       borderLeft: `2px solid ${color}`,
       borderRadius: 'var(--radius-md, 8px)',
-      padding: isMobile ? '6px 8px' : '8px 10px',
+      padding: isMobile ? '5px 8px' : '8px 10px',
     }}>
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
         marginBottom: isMobile ? 4 : 6,
       }}>
         <span style={{
+          display: 'inline-flex', alignItems: 'baseline', gap: 6,
           fontSize: 10, fontWeight: 700, color, letterSpacing: '0.08em',
           textTransform: 'uppercase',
         }}>
           Expected today
+          {planLabel && (
+            <span style={{
+              fontSize: 9, fontWeight: 600, opacity: 0.85,
+            }}>· {planLabel}</span>
+          )}
         </span>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexShrink: 0 }}>
           {condBits.length > 0 && (
@@ -260,13 +266,14 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
             title="Use my current location (6h cache)"
             style={{
               all: 'unset', cursor: pinning ? 'wait' : 'pointer',
-              fontSize: 9, fontWeight: 600, padding: '1px 6px',
+              fontSize: 9, fontWeight: 600, padding: '0px 6px',
               borderRadius: 4, color,
               background: `${color}14`,
               border: `0.5px solid ${color}44`,
               letterSpacing: '0.04em', whiteSpace: 'nowrap',
               opacity: pinning ? 0.6 : 1,
-              lineHeight: 1.2,
+              lineHeight: 1.4,
+              display: 'inline-flex', alignItems: 'center',
             }}
           >
             {pinning ? '···'
@@ -287,7 +294,7 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
         gridTemplateColumns: isMobile
           ? 'repeat(auto-fit, minmax(70px, 1fr))'
           : 'repeat(auto-fit, minmax(82px, 1fr))',
-        gap: isMobile ? '3px 8px' : '6px 10px',
+        gap: isMobile ? '2px 8px' : '6px 10px',
       }}>
         {cells.map(c => (
           <div key={c.id} style={{ minWidth: 0 }}>
