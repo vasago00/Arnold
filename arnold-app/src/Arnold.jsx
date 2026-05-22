@@ -543,6 +543,19 @@ const TABS=[
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App(){
   const [tab,setTab]=useState("training");
+  // Phase 4r.calendar.34 — scroll to top of viewport on tab change so users
+  // don't land mid-scroll from the previous tab. Calendar opts out (it
+  // scrolls to today instead — see CalendarTab.jsx).
+  useEffect(() => {
+    if (tab === 'races') return;
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      // Some layouts use the document element as the scroll root; cover both.
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      const panel = document.querySelector('.arnold-tab-panel');
+      if (panel) panel.scrollTop = 0;
+    } catch {}
+  }, [tab]);
   const [data,setData]=useState(DD);
   const [loading,setLoading]=useState(true);
   const [aiLoad,setAiLoad]=useState(false);
@@ -1045,7 +1058,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.intel.11c · drop-a-pin-travel-aware-2026-05-21','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.calendar.34 · today-highlight-scroll-top-2026-05-22','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true

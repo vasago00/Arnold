@@ -167,6 +167,30 @@ export function CalendarTab({ showToast }) {
 
   const [races, setRaces] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Phase 4r.calendar.34 — land on today every time CalendarTab mounts.
+  // Resets the month view to today's month and scrolls today into view.
+  // Doesn't fight subsequent user navigation: this runs once per mount,
+  // and the user can scroll/click freely after.
+  const todayCellRef = useRef(null);
+  useEffect(() => {
+    const d = new Date();
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+    setSelectedDate(localDate());
+    // Wait one frame for the grid to render with the new month, then scroll.
+    const id = requestAnimationFrame(() => {
+      try {
+        if (todayCellRef.current && todayCellRef.current.scrollIntoView) {
+          todayCellRef.current.scrollIntoView({ block: 'center', behavior: 'auto' });
+        } else {
+          window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        }
+      } catch {}
+    });
+    return () => cancelAnimationFrame(id);
+    // Empty deps — run once per mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [manualOpen, setManualOpen] = useState(false);
   const [icsOpen, setIcsOpen] = useState(false);
   const [planPickerOpen, setPlanPickerOpen] = useState(false);  // Phase 4r.calendar.33
@@ -314,7 +338,7 @@ export function CalendarTab({ showToast }) {
         // horizontal swipes get captured by the useSwipeNav handlers.
         touchAction: isMobile ? 'pan-y' : undefined,
       }}>
-        <MonthGrid
+        <MonthGrid todayCellRef={todayCellRef}
           cells={cells}
           todayStr={todayStr}
           selectedDate={selectedDate}
@@ -512,7 +536,7 @@ function CalendarHeader({ monthLabel, onPrev, onNext, onToday }) {
 
 // ── Month grid ──────────────────────────────────────────────────────────────
 
-function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByDate, racesByDate, sleepByDate, hrvByDate, goals, isMobile, onPickDate }) {
+function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByDate, racesByDate, sleepByDate, hrvByDate, goals, isMobile, onPickDate, todayCellRef }) {
   const TileComponent = isMobile ? MobileDayTile : DayTile;
   return (
     <div style={{
@@ -550,11 +574,13 @@ function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByD
         display: 'flex', flexWrap: 'wrap', gap: 2, width: '100%',
       }}>
         {cells.map(cell => (
-          <div key={cell.date} style={{
-            flex: '0 0 calc((100% - 12px) / 7)',
-            minWidth: 0,
-            boxSizing: 'border-box',
-          }}>
+          <div key={cell.date}
+            ref={cell.date === todayStr ? todayCellRef : null}
+            style={{
+              flex: '0 0 calc((100% - 12px) / 7)',
+              minWidth: 0,
+              boxSizing: 'border-box',
+            }}>
             <TileComponent cell={cell}
               isToday={cell.date === todayStr}
               isSelected={cell.date === selectedDate}
@@ -704,11 +730,18 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const sleepHrs   = _sleepMins != null ? (_sleepMins / 60).toFixed(1) : null;
   const bodyVal = sleepScore != null ? sleepScore : null;
 
-  const tileBg = (hasCompleted || hasRace) ? style.bg : 'transparent';
-  const tileBorder = isSelected ? 'var(--accent-border)'
+  // Phase 4r.calendar.34 — Today highlight on web matches mobile:
+  // blue tinted bg + blue border + filled day-pill. Subtler scale (0.14 vs
+  // 0.18 alpha) than mobile so the larger desktop tile doesn't shout.
+  const tileBg = isToday ? 'rgba(55,138,221,0.14)'
+               : (hasCompleted || hasRace) ? style.bg
+               : 'transparent';
+  const tileBorder = isToday ? '#378ADD'
+                   : isSelected ? 'var(--accent-border)'
                    : (hasCompleted || hasRace || isPlannedOnly) ? style.border
                    : 'var(--border-subtle)';
   const borderStyle = isPlannedOnly && !hasCompleted && !hasRace ? 'dashed' : 'solid';
+  const borderWidth = isToday ? '1.5px' : isSelected ? '1.5px' : '0.5px';
 
   // Phase 4r.calendar.5 — central session-signature image. Uses the
   // existing PNG signatures from /public/session-signatures/. Image
@@ -762,7 +795,8 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
         padding: '4px 5px',
         position: 'relative',
         borderRadius: 5,
-        border: `${isSelected ? '1.5px' : '0.5px'} ${borderStyle} ${tileBorder}`,
+        border: `${borderWidth} ${borderStyle} ${tileBorder}`,
+        boxShadow: isToday ? '0 0 0 1px rgba(55,138,221,0.30) inset' : 'none',
         background: cell.inMonth ? tileBg : 'transparent',
         opacity: cell.inMonth ? 1 : 0.30,
         display: 'flex', flexDirection: 'column',
@@ -775,9 +809,15 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
       {/* Header strip: day number + RACE badge or family label */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', lineHeight: 1, flexShrink: 0, gap: 4 }}>
         <span style={{
-          fontSize: isToday ? 14 : 12,
+          fontSize: isToday ? 13 : 12,
           fontWeight: isToday ? 700 : 600,
-          color: isToday ? 'var(--accent-border)' : (cell.inMonth ? 'var(--text-primary)' : 'var(--text-muted)'),
+          color: isToday ? '#fff' : (cell.inMonth ? 'var(--text-primary)' : 'var(--text-muted)'),
+          background: isToday ? '#378ADD' : 'transparent',
+          padding: isToday ? '1px 6px' : 0,
+          borderRadius: isToday ? 8 : 0,
+          minWidth: isToday ? 16 : 'auto',
+          textAlign: 'center',
+          lineHeight: 1,
         }}>{cell.day}</span>
         {hasRace ? (
           <span style={{
