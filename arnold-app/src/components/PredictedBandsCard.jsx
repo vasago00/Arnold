@@ -18,7 +18,30 @@
 
 import { useEffect, useState } from 'react';
 import { getPredictedBands, dropPin } from '../core/predictedBands.js';
-import { BatteryLow, MapPin, Drop as PhDrop } from '@phosphor-icons/react';
+import {
+  BatteryLow, MapPin,
+  Drop as PhDrop,
+  Sun as PhSun, Cloud as PhCloud, CloudRain as PhCloudRain,
+  CloudSnow as PhCloudSnow, CloudFog as PhCloudFog, Lightning as PhLightning,
+} from '@phosphor-icons/react';
+
+// Open-Meteo condition → Phosphor icon + family-neutral tint.
+// Matches the weather icon style in PlannedWorkoutTile so the two surfaces
+// read consistently.
+const WEATHER_ICON = {
+  Sunny:        { Cmp: PhSun,        color: '#fbbf24' },
+  Cloudy:       { Cmp: PhCloud,      color: '#94a3b8' },
+  Drizzle:      { Cmp: PhCloudRain,  color: '#60a5fa' },
+  Rainy:        { Cmp: PhCloudRain,  color: '#60a5fa' },
+  Snowy:        { Cmp: PhCloudSnow,  color: '#e0f2fe' },
+  Foggy:        { Cmp: PhCloudFog,   color: '#e8e6e0' },
+  Thunderstorm: { Cmp: PhLightning,  color: '#818cf8' },
+};
+function WeatherIcon({ condition, size = 12 }) {
+  const def = WEATHER_ICON[condition] || WEATHER_ICON.Sunny;
+  const Cmp = def.Cmp;
+  return <Cmp size={size} weight="fill" color={def.color}><title>{condition || 'Conditions'}</title></Cmp>;
+}
 
 const FAMILY_COLOR = {
   easy_run:  '#60a5fa',
@@ -143,6 +166,7 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
 
   const src = state.source || {};
   const condBits = [];
+  if (src.condition)                    condBits.push({ kind: 'weather', condition: src.condition });
   if (Number.isFinite(src.tempC))       condBits.push({ kind: 'text', text: `${Math.round(src.tempC)}°C` });
   if (Number.isFinite(src.humidityPct)) condBits.push({ kind: 'humidity', value: Math.round(src.humidityPct) });
   if (src.hasFatigue)                   condBits.push({ kind: 'fatigue' });
@@ -179,7 +203,9 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
               {condBits.map((b, i) => (
                 <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                   {i > 0 && <span aria-hidden style={{ opacity: 0.45 }}>·</span>}
-                  {b.kind === 'fatigue' ? (
+                  {b.kind === 'weather' ? (
+                    <WeatherIcon condition={b.condition}/>
+                  ) : b.kind === 'fatigue' ? (
                     <BatteryLow
                       size={12}
                       weight="bold"

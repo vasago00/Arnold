@@ -15,7 +15,7 @@
 
 const OPENMETEO_FORECAST = 'https://api.open-meteo.com/v1/forecast';
 const OPENMETEO_ARCHIVE  = 'https://archive-api.open-meteo.com/v1/archive';
-const HOURLY_FIELDS      = 'temperature_2m,relative_humidity_2m';
+const HOURLY_FIELDS      = 'temperature_2m,relative_humidity_2m,weather_code';
 const FORECAST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
 /**
@@ -67,7 +67,24 @@ export async function fetchWeatherForActivity({ lat, lon, startMs }) {
   const humidityPct = Number(hums[best]);
   if (!Number.isFinite(tempC) || !Number.isFinite(humidityPct)) return null;
 
-  return { tempC, humidityPct };
+  // Open-Meteo weather_code → simple condition word the icon mapper uses.
+  // https://open-meteo.com/en/docs#weathervariables
+  const codes = hourly.weather_code;
+  let condition = null;
+  if (Array.isArray(codes) && Number.isFinite(Number(codes[best]))) {
+    const wc = Number(codes[best]);
+    if (wc === 0)                  condition = 'Sunny';
+    else if (wc >= 1  && wc <= 3)  condition = 'Cloudy';
+    else if (wc === 45 || wc === 48) condition = 'Foggy';
+    else if (wc >= 51 && wc <= 57) condition = 'Drizzle';
+    else if (wc >= 61 && wc <= 67) condition = 'Rainy';
+    else if (wc >= 71 && wc <= 77) condition = 'Snowy';
+    else if (wc >= 80 && wc <= 82) condition = 'Rainy';
+    else if (wc >= 85 && wc <= 86) condition = 'Snowy';
+    else if (wc >= 95)             condition = 'Thunderstorm';
+  }
+
+  return { tempC, humidityPct, condition };
 }
 
 /**
