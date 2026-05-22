@@ -76,6 +76,7 @@ import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilit
 import { getTopCoachingPrompts, getPromptsByPillar } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
 import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget, getCurrentBodyComp, computeRMR } from "./core/energyBalance.js";
 import { resolveCalorieTarget } from "./core/calorieTarget.js";
+import { backfillFromActivities } from "./core/learnedBaselines.js";
 // Health system iconography — Gemini-generated line-art PNGs at 256×256 with
 // dark #0b0d12 background and the system's accent color baked in. Vite
 // resolves these to hashed asset URLs at build time.
@@ -647,6 +648,18 @@ export default function App(){
         // One-time purge of legacy localStorage backup keys (now in IDB).
         // Safe & idempotent — no-op if localStorage already clean.
         try { purgeLegacyLocalStorageBackups(); } catch (e) { console.warn('[boot] backup purge failed:', e); }
+        // Phase 4r.intel.10 — one-shot Layer 2 backfill. Walks every existing
+        // activity to seed the learnedBaselines store on first boot after this
+        // module ships. Sentinel-guarded inside backfillFromActivities so it
+        // doesn't re-run on subsequent boots.
+        try {
+          const _acts = storage.get('activities') || [];
+          const _prof = storage.get('profile')    || {};
+          const r = backfillFromActivities(_acts, _prof);
+          if (r && !r.skipped) {
+            console.log(`[baseline] backfill scanned ${r.scanned} activities, wrote ${r.written}`);
+          }
+        } catch (e) { console.warn('[boot] baseline backfill failed:', e); }
         return loadData();
       })
       .then(d=>{
@@ -1018,7 +1031,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.intel.9 · weather-on-sync-2026-05-21','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.intel.10 · layer2-personal-baselines-2026-05-21','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true

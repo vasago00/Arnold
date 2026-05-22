@@ -22,6 +22,7 @@ import { storage } from './storage.js';
 import { getGarminAuth, isGarminConfigured } from './garmin-client.js';
 import { parseFITFile } from './parsers/fitParser.js';
 import { fetchWeatherForActivity, extractActivityCoords } from './weather.js';
+import { recordActivityObservations } from './learnedBaselines.js';
 
 const CFG_ENDPOINT = 'arnold:cloud-sync:endpoint';
 const CFG_TOKEN    = 'arnold:cloud-sync:token';
@@ -620,6 +621,20 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
       const all = storage.get('activities') || [];
       all.push(parsed);
       storage.set('activities', all, { skipValidation: true });
+
+      // Phase 4r.intel.10 — Layer 2 personal baselines. Add this session's
+      // intel metrics to the rolling 60-day stats; expectedRanges.js will
+      // blend them with the population norm once n >= MIN_OBSERVATIONS.
+      try {
+        const profileNow = storage.get('profile') || {};
+        const maxHRForBaseline = parseFloat(profileNow?.maxHR)
+          || parseFloat(parsed?.maxHR)
+          || null;
+        recordActivityObservations(parsed, { maxHR: maxHRForBaseline });
+      } catch (e) {
+        console.warn(`[baseline] activity ${ga.activityId} record failed:`, e?.message || e);
+      }
+
       results.push({ activityId: ga.activityId, name: ga.activityName, ok: true, type: parsed.activityType });
       // Be polite to Garmin — small inter-request gap
       await new Promise(r => setTimeout(r, 400));

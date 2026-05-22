@@ -25,6 +25,7 @@
 import { paintMetric as paintMetricStatus } from './expectedRanges.js';
 import { parseLocalDate } from './dateUtils.js';
 import { isHIIT, isHardSession } from './activityClass.js';
+import { getBaseline } from './learnedBaselines.js';
 
 // ─── intel context builder ─────────────────────────────────────────────────
 
@@ -87,8 +88,20 @@ export function buildIntelContext(activity, opts) {
     durationSec,
     conditions,
     fatigue,
-    baseline: opts.baseline, // undefined until learnedBaselines.js wired
+    baseline: opts.baseline, // metric-specific; resolved lazily by getMetricBaseline
   };
+}
+
+// ─── learned-baseline lookup ───────────────────────────────────────────────
+
+/**
+ * Per-(family, metricId) baseline reader. Returns { mean, std, n } when the
+ * user has accumulated at least MIN_OBSERVATIONS for that bucket, else null.
+ * Centralized here so MobileHome / EdgeIQ / LogDay all go through the same
+ * cache + minimum-n gate.
+ */
+export function getMetricBaseline(family, metricId) {
+  try { return getBaseline(family, metricId); } catch { return null; }
 }
 
 // ─── paint helpers ─────────────────────────────────────────────────────────
@@ -115,7 +128,11 @@ const TINT_CONCERN  = 'rgba(248,113,113,0.10)'; // red
 export function makePaint(intelCtx) {
   const paintM = (metricId, value, categoryColor) => {
     try {
-      const result = paintMetricStatus(metricId, value, categoryColor, intelCtx);
+      // Layer 2 blend: look up the user's per-(family, metricId) baseline
+      // and stitch it onto ctx so expectedRanges blendWithBaseline kicks in.
+      const baseline = getMetricBaseline(intelCtx && intelCtx.family, metricId);
+      const ctxWithBaseline = baseline ? { ...intelCtx, baseline } : intelCtx;
+      const result = paintMetricStatus(metricId, value, categoryColor, ctxWithBaseline);
       if (typeof window !== 'undefined' && window.__INTEL_DEBUG__) {
         // eslint-disable-next-line no-console
         console.log(
@@ -142,7 +159,9 @@ export function makePaint(intelCtx) {
   };
   const paintT = (metricId, value, categoryTint) => {
     try {
-      const result = paintMetricStatus(metricId, value, '#000', intelCtx);
+      const baseline = getMetricBaseline(intelCtx && intelCtx.family, metricId);
+      const ctxWithBaseline = baseline ? { ...intelCtx, baseline } : intelCtx;
+      const result = paintMetricStatus(metricId, value, '#000', ctxWithBaseline);
       if (result.status === 'expected') return TINT_EXPECTED;
       if (result.status === 'mild')     return TINT_MILD;
       if (result.status === 'concern')  return TINT_CONCERN;
