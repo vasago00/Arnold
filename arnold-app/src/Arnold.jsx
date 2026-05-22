@@ -77,6 +77,7 @@ import { getTopCoachingPrompts, getPromptsByPillar } from "./core/coachingPrompt
 import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget, getCurrentBodyComp, computeRMR } from "./core/energyBalance.js";
 import { resolveCalorieTarget } from "./core/calorieTarget.js";
 import { backfillFromActivities } from "./core/learnedBaselines.js";
+import { InsightsPanel } from "./components/InsightsPanel.jsx";
 // Health system iconography — Gemini-generated line-art PNGs at 256×256 with
 // dark #0b0d12 background and the system's accent color baked in. Vite
 // resolves these to hashed asset URLs at build time.
@@ -1058,7 +1059,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.intel.11e · bands-in-planned-tile-2026-05-22','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.intel.12 · insights-engine-2026-05-22','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true
@@ -9369,6 +9370,12 @@ Structure:
           <button onClick={runTrainingAI} disabled={aiLoading} style={{fontSize:10,padding:'4px 10px',borderRadius:10,background:'rgba(167,139,250,0.15)',color:'#a78bfa',border:'0.5px solid rgba(167,139,250,0.35)',cursor:aiLoading?'wait':'pointer',fontWeight:500,letterSpacing:'0.03em'}}>{aiLoading?'✦ Analyzing…':(aiState?'✦ Refresh AI':'✦ Analyze training')}</button>
         </div>
       </div>
+
+      {/* Phase 4r.intel.12 — Insights panel. Surfaces statistically-gated
+          patterns from insights.js (weight-intake gap, drift trends, low
+          sleep response, etc). Renders an empty-state hint when nothing
+          significant yet — feeds engagement without false positives. */}
+      <InsightsPanel maxItems={4} />
 
       {/* ═══════ HERO LINE · EdgeIQ (Phase 4n.1.4) ═══════
           ONE consolidated hero line — answers "where are you + what to

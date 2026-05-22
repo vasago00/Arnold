@@ -51,6 +51,7 @@ import {
 } from "../core/derive/tileMetrics.js";
 import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
+import { InsightsPanel } from "./InsightsPanel.jsx";
 import { localDate, ymd } from "../core/time.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2666,6 +2667,11 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         if (ws.kind !== 'none') return null;
         return <CoachingHeroCard />;
       })()}
+
+      {/* Phase 4r.intel.12 — Insights strip on Play tab. Compact variant
+          (no section header) so the cockpit tiles below stay close. Hidden
+          when nothing significant — empty state stays out of the way. */}
+      <InsightsPanel compact maxItems={3} />
 
       {/* ── RUN ── */}
       <CategoryLabel label="Run" color={C.blue} />
