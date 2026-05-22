@@ -47,6 +47,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Phase 4r.calendar.36 — Geolocation for the Drop a pin button in
+         PredictedBandsCard. Capacitor's BridgeWebChromeClient forwards
+         navigator.geolocation calls to the OS, but only when these manifest
+         permissions are declared. FINE for precise, COARSE as fallback. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <!-- Health Connect permissions — Arnold is a one-way reader (see
          src/core/hc-sync.js header policy). The set below matches exactly the
          streams syncAll() consumes: sleep, weight, heart rate, and the daily
@@ -59,13 +66,4 @@
          WRITE_* permissions never declared — Arnold never writes to HC. -->
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
     <uses-permission android:name="android.permission.health.READ_WEIGHT" />
-    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
-    <uses-permission android:name="android.permission.health.READ_STEPS" />
-    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
-    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
-
-    <!-- Declare Health Connect data types used -->
-    <queries>
-        <package android:name="com.google.android.apps.healthdata" />
-    </queries>
-</manifest>
+    <uses-permission android:name="android.p
