@@ -161,4 +161,4 @@ export function BioactiveStack({ items }) {
   );
 }
 
-expo
+export default BioactiveStack;

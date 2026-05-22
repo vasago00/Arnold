@@ -223,4 +223,4 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
   );
 }
 
-export default EnergyT
+export default EnergyTimingChart;

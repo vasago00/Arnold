@@ -1990,4 +1990,141 @@ function ManualRaceModal({ dateStr, onClose, onAdd }) {
   );
 }
 
-// ── ICS import modal ──────────────────
+// ── ICS import modal ────────────────────────────────────────────────────────
+
+function IcsImportModal({ existingRaces, onClose, onImported }) {
+  const [url, setUrl] = useState(() => localStorage.getItem('arnold:calendar-url') || '');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const submit = async () => {
+    if (!url.trim()) return;
+    setBusy(true); setResult(null);
+    try {
+      const events = await fetchAndParseICS(url.trim());
+      localStorage.setItem('arnold:calendar-url', url.trim());
+      const byKey = new Map(existingRaces.map(r => [`${r.name}|${r.date}`, r]));
+      let added = 0;
+      for (const e of events) {
+        const key = `${e.name}|${e.date}`;
+        if (!byKey.has(key)) { byKey.set(key, e); added++; }
+        else byKey.set(key, { ...byKey.get(key), ...e, source: 'garmin-ics' });
+      }
+      const merged = [...byKey.values()].sort((a,b) => (a.date||'').localeCompare(b.date||''));
+      setResult({ ok: true, msg: `Parsed ${events.length} events · ${added} new` });
+      onImported(merged);
+    } catch (e) {
+      setResult({ ok: false, msg: `Could not reach calendar (${e.message}).` });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="Import races from calendar">
+      <Field label="Calendar URL (.ics)">
+        <input value={url} onChange={e => setUrl(e.target.value)}
+          placeholder="https://connect.garmin.com/modern/calendar/export/…"
+          style={inputStyle}/>
+      </Field>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+        Paste any .ics URL — Garmin race calendar, Google Calendar export, RaceRoster feed.
+        Arnold parses race-like events and merges them into your races list.
+      </div>
+      {result && (
+        <div style={{
+          marginTop: 8, padding: '6px 10px', borderRadius: 4,
+          fontSize: 11,
+          background: result.ok ? 'rgba(74,222,128,0.10)' : 'rgba(248,113,113,0.10)',
+          color: result.ok ? '#4ade80' : '#f87171',
+        }}>{result.msg}</div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 10 }}>
+        <button onClick={onClose} style={chipBtn}>Cancel</button>
+        <button onClick={submit} style={primaryBtn} disabled={busy || !url.trim()}>
+          {busy ? 'Syncing…' : 'Sync now'}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ── Modal shell ─────────────────────────────────────────────────────────────
+
+function ModalShell({ title, onClose, children }) {
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, zIndex: 100,
+      background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 16,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: 'var(--bg-surface)',
+        border: '0.5px solid var(--border-default)',
+        borderRadius: 'var(--radius-md)',
+        padding: '14px 16px',
+        width: '100%', maxWidth: 520,
+        maxHeight: '90vh', overflowY: 'auto',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{title}</span>
+          <button onClick={onClose} style={{
+            all: 'unset', cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)',
+          }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+// ── Styles ──────────────────────────────────────────────────────────────────
+
+const iconBtn = {
+  all: 'unset', cursor: 'pointer',
+  fontSize: 16, padding: '2px 10px',
+  color: 'var(--text-primary)',
+  background: 'transparent',
+  border: '0.5px solid var(--border-default)',
+  borderRadius: 4,
+};
+
+const chipBtn = {
+  all: 'unset', cursor: 'pointer',
+  fontSize: 11, padding: '4px 10px',
+  color: 'var(--text-primary)',
+  background: 'transparent',
+  border: '0.5px solid var(--border-default)',
+  borderRadius: 4,
+};
+
+const primaryBtn = {
+  all: 'unset', cursor: 'pointer',
+  fontSize: 11, fontWeight: 500,
+  padding: '4px 10px',
+  color: '#60a5fa',
+  background: 'rgba(96,165,250,0.10)',
+  border: '0.5px solid rgba(96,165,250,0.30)',
+  borderRadius: 4,
+};
+
+const inputStyle = {
+  fontSize: 11, padding: '4px 8px',
+  background: 'var(--bg-input)', color: 'var(--text-primary)',
+  border: '0.5px solid var(--border-default)', borderRadius: 4,
+  outline: 'none',
+};
+
+const selectStyle = {
+  fontSize: 11, padding: '4px 8px',
+  background: 'var(--bg-input)', color: 'var(--text-primary)',
+  border: '0.5px solid var(--border-default)', borderRadius: 4,
+};
