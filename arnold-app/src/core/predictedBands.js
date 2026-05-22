@@ -92,6 +92,31 @@ async function fetchForecastConditions(dateStr) {
   } catch { return null; }
 }
 
+/**
+ * Crude last-resort proxy: when no coords are available to forecast against,
+ * take the median tempC + humidityPct from the user's last 5 weathered
+ * activities. Better than no conditions — at least the band gets seasonally
+ * adjusted. Returns null when the user has no weather-tagged history yet.
+ */
+function recentWeatherProxy() {
+  try {
+    const acts = storage.get('activities') || [];
+    const recent = acts
+      .filter(a => Number.isFinite(Number(a?.avgTemperature)) || Number.isFinite(Number(a?.avgHumidity)))
+      .slice(-10);
+    if (!recent.length) return null;
+    const temps = recent.map(a => Number(a.avgTemperature)).filter(Number.isFinite).sort((a, b) => a - b);
+    const hums  = recent.map(a => Number(a.avgHumidity)).filter(Number.isFinite).sort((a, b) => a - b);
+    const median = arr => arr.length ? arr[Math.floor(arr.length / 2)] : null;
+    const tempC = median(temps);
+    const humidityPct = median(hums);
+    if (tempC == null && humidityPct == null) return null;
+    return { tempC, humidityPct, source: 'recent-median' };
+  } catch { return null; }
+}
+
+export { recentWeatherProxy };
+
 // ─── public API ────────────────────────────────────────────────────────────
 
 /**
@@ -132,6 +157,7 @@ export function buildPredictionContext({ family, dateStr, conditions }) {
 export async function getPredictedBands({ family, dateStr, conditions }) {
   let cond = conditions || null;
   if (!cond) cond = await fetchForecastConditions(dateStr);
+  if (!cond) cond = recentWeatherProxy();
   const ctx = buildPredictionContext({ family, dateStr, conditions: cond });
 
   // Resolve per-metric baselines and inject into the band call so each

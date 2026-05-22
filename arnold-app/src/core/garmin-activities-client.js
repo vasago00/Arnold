@@ -596,10 +596,16 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
       // Phase 4r.intel.9 — Weather lookup at sync time.
       // Best-effort: skip outdoor-but-no-GPS, indoor sports, or Open-Meteo
       // outages. Attaches tempC + avgHumidity so expectedRanges.js can widen
-      // the intel bands on hot/humid days.
+      // the intel bands on hot/humid days. ALSO persists startLatitude /
+      // startLongitude on the activity so Layer 3 predictedBands can find a
+      // location to forecast against (added in 4r.intel.11-fix).
       try {
+        const coords = extractActivityCoords(ga, null);
+        if (coords) {
+          if (parsed.startLatitude  == null) parsed.startLatitude  = coords.lat;
+          if (parsed.startLongitude == null) parsed.startLongitude = coords.lon;
+        }
         if (parsed.avgTemperature == null || parsed.avgHumidity == null) {
-          const coords = extractActivityCoords(ga, null);
           const startMs = parseGarminLocalTime(ga.startTimeLocal);
           if (coords && Number.isFinite(startMs)) {
             const wx = await fetchWeatherForActivity({
@@ -660,6 +666,55 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
     failed:     results.filter(r => !r.ok).length,
     results,
   };
+}
+
+// ── Coords backfill (Phase 4r.intel.11-fix) ────────────────────────────────
+// Walks the recent Garmin activity listing and stamps startLatitude /
+// startLongitude onto any local activity that doesn't already have them.
+// Sentinel-guarded so it runs at most once per backfill cycle.
+//
+// Returns { ok, scanned, updated } or { ok:false, error }.
+
+const COORDS_BACKFILL_KEY = 'arnold:garmin-coords-backfilledAt';
+
+export async function backfillActivityCoords({ limit = 50, force = false } = {}) {
+  if (!isGarminConfigured()) return { ok: false, error: 'not_configured' };
+  if (!force) {
+    const last = storage.get(COORDS_BACKFILL_KEY);
+    // Re-run at most once a day.
+    if (last && (Date.now() - last) < 24 * 60 * 60 * 1000) {
+      return { ok: true, scanned: 0, updated: 0, skipped: true };
+    }
+  }
+  const listRes = await listRecentActivities({ limit });
+  if (!listRes.ok) return { ok: false, error: listRes.error, detail: listRes.detail };
+
+  // Index by activityId so we can match against locally stored
+  // activities (which carry source.activityId for worker-imported rows).
+  const byId = new Map();
+  for (const ga of listRes.activities) {
+    if (ga && ga.activityId != null) byId.set(String(ga.activityId), ga);
+  }
+  const acts = storage.get('activities') || [];
+  let updated = 0;
+  for (const a of acts) {
+    if (!a) continue;
+    if (a.startLatitude != null && a.startLongitude != null) continue;
+    const aid = a.source && a.source.activityId;
+    if (aid == null) continue;
+    const ga = byId.get(String(aid));
+    if (!ga) continue;
+    const coords = extractActivityCoords(ga, null);
+    if (!coords) continue;
+    a.startLatitude  = coords.lat;
+    a.startLongitude = coords.lon;
+    updated += 1;
+  }
+  if (updated > 0) {
+    storage.set('activities', acts, { skipValidation: true });
+  }
+  storage.set(COORDS_BACKFILL_KEY, Date.now(), { skipValidation: true });
+  return { ok: true, scanned: listRes.activities.length, updated, skipped: false };
 }
 
 // ── One-shot test (call from DevTools) ──────────────────────────────────────

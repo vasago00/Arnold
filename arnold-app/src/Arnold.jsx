@@ -660,6 +660,20 @@ export default function App(){
             console.log(`[baseline] backfill scanned ${r.scanned} activities, wrote ${r.written}`);
           }
         } catch (e) { console.warn('[boot] baseline backfill failed:', e); }
+        // Phase 4r.intel.11-fix — Garmin coords backfill. Stamps
+        // startLatitude / startLongitude onto existing activities by re-
+        // listing the recent Garmin payload, so Layer 3 predicted bands
+        // can find a location to forecast weather against. Sentinel-
+        // guarded inside backfillActivityCoords (24h TTL).
+        (async () => {
+          try {
+            const { backfillActivityCoords } = await import('./core/garmin-activities-client.js');
+            const r = await backfillActivityCoords({ limit: 50 });
+            if (r && r.ok && !r.skipped) {
+              console.log(`[garmin-coords] backfill scanned ${r.scanned} activities, updated ${r.updated}`);
+            }
+          } catch (e) { console.warn('[boot] coords backfill failed:', e?.message || e); }
+        })();
         return loadData();
       })
       .then(d=>{
@@ -1031,7 +1045,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.intel.11 · predicted-bands-layer3-2026-05-21','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.intel.11b · predicted-bands-coords-fix-2026-05-21','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true

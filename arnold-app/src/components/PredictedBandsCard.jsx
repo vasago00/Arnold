@@ -116,6 +116,10 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
   if (Number.isFinite(src.humidityPct)) condBits.push(`${Math.round(src.humidityPct)}% RH`);
   if (src.hasFatigue)                   condBits.push('fatigue-adj');
   if (src.baselineN >= 5)               condBits.push(`n=${src.baselineN}`);
+  // Surface the empty-state explicitly when there's literally no weather
+  // (no home coords + no recent weathered activities). Helps the user
+  // understand why the bands aren't conditions-adjusted.
+  const noWeather = !Number.isFinite(src.tempC) && !Number.isFinite(src.humidityPct);
 
   return (
     <div style={{
@@ -172,6 +176,14 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions }) {
           </div>
         ))}
       </div>
+      {noWeather && (
+        <div style={{
+          marginTop: 6, fontSize: 9, color: 'var(--text-muted)',
+          lineHeight: 1.3,
+        }}>
+          No weather yet · sync Garmin or set home location in Goals → Profile.
+        </div>
+      )}
     </div>
   );
 }
