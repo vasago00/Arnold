@@ -9,6 +9,8 @@ import { Sparkline } from "./Sparkline.jsx";
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
 import { computeDailyScore, computeRolling7d, computeRolling30d, computeHrTSS } from "../core/trainingStress.js";
+import { getEffectiveMaxHR } from "../core/trainingStress.js";
+import { buildIntelContext, makePaint } from "../core/intelContext.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isMobility, isHIIT, activityKind, iconTypeFor } from "../core/activityClass.js";
 import { dcy as dcyToday, dcyWeekly, formatDcy, glyphFor, stateFor } from "../core/dcy.js";
@@ -2242,6 +2244,60 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageVersion, tileCtx]);
 
+  // ── Phase 4r.intel.8 — Mobile intel layer port ──
+  // Build an intelCtx around today's primary activity (longest by duration).
+  // Tiles whose metric ID maps to an intel-aware metric (avgHR_pctMax, decoupling,
+  // hrRecovery1m, aerobicTE, anaerobicTE, z2Pct, z45Pct) get repainted via paintM
+  // so the cockpit stripe + label reflect actual performance vs the expected
+  // band for the family, not just the static category color.
+  const intel = useMemo(() => {
+    try {
+      const today = localDate();
+      const acts = getUnifiedActivities().filter(a => (a.date || '').startsWith(today));
+      if (!acts.length) return null;
+      // Pick today's primary session — longest duration wins.
+      const primary = acts.reduce((best, a) => {
+        const d = Number(a.durationSecs ?? a.durationSec ?? 0);
+        const bd = Number(best?.durationSecs ?? best?.durationSec ?? 0);
+        return d > bd ? a : best;
+      }, acts[0]);
+      if (!primary) return null;
+      const profile = { ...(storage.get('profile') || {}), ...G };
+      const allActs = getUnifiedActivities();
+      const sleepArr = cleanSleepForAveraging(storage.get('sleep') || []);
+      const maxHR = getEffectiveMaxHR(profile, allActs);
+      const ctx = buildIntelContext(primary, {
+        activities: allActs,
+        sleep: sleepArr,
+        profile,
+      });
+      const { paintM, paintT } = makePaint(ctx);
+      // Pre-compute the HR-derived intel values for the primary session so
+      // tile painters can swap them in without re-deriving.
+      const avgHRPctMax = (Number.isFinite(primary.avgHR) && maxHR)
+        ? (primary.avgHR / maxHR) * 100 : null;
+      const maxHRPctMax = (Number.isFinite(primary.maxHR) && maxHR)
+        ? (primary.maxHR / maxHR) * 100 : null;
+      return { ctx, paintM, paintT, primary, maxHR, avgHRPctMax, maxHRPctMax };
+    } catch { return null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageVersion]);
+
+  // Map tile IDs (tileMetrics registry) → intel metric IDs (expectedRanges).
+  // For tiles whose value is a percent or pure-form match (decoupling, TE,
+  // HR recovery), the value passes straight through. For HR tiles we
+  // substitute the precomputed %maxHR so the same band logic applies.
+  const INTEL_TILE_MAP = {
+    avgRunHR:           { metricId: 'avgHR_pctMax',  useValue: 'avgHRPctMax' },
+    maxRunHR:           { metricId: 'avgHR_pctMax',  useValue: 'maxHRPctMax' },
+    avgStrengthHR:      { metricId: 'avgHR_pctMax',  useValue: 'avgHRPctMax' },
+    peakStrengthHR:     { metricId: 'avgHR_pctMax',  useValue: 'maxHRPctMax' },
+    aerobicTE:          { metricId: 'aerobicTE',     useValue: null },
+    anaerobicTE:        { metricId: 'anaerobicTE',   useValue: null },
+    heartRateRecovery:  { metricId: 'hrRecovery1m',  useValue: null },
+    aerobicDecoupling:  { metricId: 'decoupling',    useValue: null },
+  };
+
   // Resolve manual pins → manual + auto-promoted ordered lists per category.
   // Memoized on storageVersion + today so we re-run only when storage actually
   // changes, not on every parent render. Each entry has { id, source, score?, reasons? }.
@@ -2301,6 +2357,20 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
       // don't see a misleading duplicate of the headline value.
       const avg30Display = result.avg30 != null ? result.avg30 : '—';
       const avg30LabelDisplay = result.avg30 != null ? '30d avg' : '';
+      // Phase 4r.intel.8 — for intel-aware metrics with today's primary
+      // activity present, repaint tile color via paintM. For all others,
+      // keep the category color (stripe + label).
+      let intelTileColor = color;
+      const intelMap = INTEL_TILE_MAP[id];
+      if (intelMap && intel && intel.paintM) {
+        const intelValue = intelMap.useValue != null
+          ? intel[intelMap.useValue]
+          : Number(result.value);
+        if (Number.isFinite(intelValue)) {
+          const painted = intel.paintM(intelMap.metricId, intelValue, color);
+          if (painted) intelTileColor = painted;
+        }
+      }
       return {
         label: m.label,
         todayVal: result.value,
@@ -2310,10 +2380,10 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         avg30: avg30Display,
         avg30Label: avg30LabelDisplay,
         gaugePct: typeof result.pct === 'number' ? Math.min(Math.max(result.pct, 0), 1) : 0.5,
-        // tileColor: ALWAYS the category color (stripe + label) — never status.
+        // tileColor: category color by default; intel-aware metrics repaint
+        // when today's primary activity provides the conditions (Phase 4r.intel.8).
         // statusIcon / statusIconColor: drive the small glyph next to trend text.
-        // Headline value stays white; status is communicated via the icon only.
-        tileColor: color,
+        tileColor: intelTileColor,
         statusIcon,
         statusIconColor,
         tapTab,

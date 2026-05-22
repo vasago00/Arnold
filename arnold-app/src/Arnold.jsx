@@ -1018,7 +1018,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.fuel.12 · nutrition-2col-bio-hives-energy-balance-2026-05-20','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.intel.8 · mobile-intel-port-2026-05-21','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true
