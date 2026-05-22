@@ -98,7 +98,19 @@ export function dropPin() {
         try { storage.set(PIN_CACHE_KEY, { lat, lon, at: Date.now() }, { skipValidation: true }); } catch {}
         resolve({ ok: true, lat, lon });
       },
-      err => resolve({ ok: false, error: err?.message || 'denied' }),
+      err => {
+        // Phase 4r.calendar.36 — map PositionError codes to readable labels
+        // so the card surfaces what went wrong (was just 'failed' before).
+        // 1 = PERMISSION_DENIED, 2 = POSITION_UNAVAILABLE, 3 = TIMEOUT.
+        const code = err && err.code;
+        const label = code === 1 ? 'denied'
+                    : code === 2 ? 'no signal'
+                    : code === 3 ? 'timed out'
+                    : (err && err.message) || 'failed';
+        // eslint-disable-next-line no-console
+        console.warn('[dropPin] geolocation error:', code, err && err.message);
+        resolve({ ok: false, error: label });
+      },
       { timeout: 8000, maximumAge: 5 * 60 * 1000, enableHighAccuracy: false },
     );
   });
