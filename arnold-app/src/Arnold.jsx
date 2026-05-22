@@ -4690,6 +4690,10 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
   // Tiles with null values are dropped at render time so missing data
   // doesn't show "—" — the row just gets shorter.
   const _buildActivityProfile = (planType, fd) => {
+    // Phase 4r.intel.12-fix2 — `activities` was referenced inside this fn
+    // (intelMaxHR + intelCtx) but LogDay never declared one at this scope.
+    // Resolve via the same getUnifiedActivities helper Dashboard uses.
+    const activities = getUnifiedActivities();
     // Derive zone percentages from the activity's hrZones array (seconds
     // per zone). The activity object stores hrZones (an array from the
     // FIT parser); this builds the {z1..z5} percentage object that the
@@ -4835,7 +4839,12 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       race:      { row1: ['distance','pace','avgHR','maxHRHero','elevation'],
                    row2: ['r2_avgPace','r2_tss','r2_aeroTE','r2_calories'] },
     };
-    const profile = PROFILES[planType] || PROFILES.easy_run;
+    // Phase 4r.intel.12-fix — renamed from `profile` to `tileProfile` to
+    // avoid TDZ collision with the outer LogDay `profile` (user profile from
+    // storage + goals). The earlier shadowing caused 'Cannot access profile
+    // before initialization' in _buildActivityProfile when intelMaxHR (added
+    // in 4r.intel.7) tried to use the outer profile at line ~4740.
+    const tileProfile = PROFILES[planType] || PROFILES.easy_run;
     // Map row1 ids → tile objects, drop nulls, cap at 5 so longer
     // fallback chains (HIIT has 8 ids to weather missing zone/recovery
     // data) don't push past one row.
@@ -4859,14 +4868,14 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
       elevation:      'r2_elevation',
     };
     const row1Pairs = [];
-    for (const k of profile.row1) {
+    for (const k of tileProfile.row1) {
       if (row1Pairs.length >= 5) break;
       const t = TILE[k] && TILE[k]();
       if (t) row1Pairs.push({ id: k, tile: t });
     }
     const row1 = row1Pairs.map(p => p.tile);
     const usedR2Ids = new Set(row1Pairs.map(p => R1_TO_R2[p.id]).filter(Boolean));
-    const row2 = profile.row2
+    const row2 = tileProfile.row2
       .filter(k => !usedR2Ids.has(k))                 // skip any metric already in row1
       .map(k => TILE[k] && TILE[k]())
       .filter(Boolean);
