@@ -38,7 +38,7 @@ import { buildTileContext, TILE_METRICS, deriveStatus } from "./core/derive/tile
 // "color this tile red because it's an intensity metric" with status
 // computed against published norms adjusted for temp/humidity. See
 // core/expectedRanges.js for the bands + adjustment math.
-import { paintMetric as paintMetricStatus } from "./core/expectedRanges.js";
+import { buildIntelContext, makePaint, resolveIntelMaxHR } from "./core/intelContext.js";
 import { resolveAllStartTiles } from "./core/derive/autoPromote.js";
 import { KRITile, InlineKRIStat } from "./components/KRITile.jsx";
 import { normalizeTilePrefs } from "./core/derive/tileMetrics.js";
@@ -4697,131 +4697,19 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     //   1. profile.maxHR via getEffectiveMaxHR (preferred — uses user-set or recent training peak)
     //   2. highest recorded maxHR across all activities (uses what your body has actually shown)
     //   3. null — let avgHR_pctMax compute to null and tiles fall to neutral
-    const intelMaxHR = (() => {
-      try {
-        const fromFn = getEffectiveMaxHR?.(profile, activities);
-        if (fromFn && Number.isFinite(fromFn) && fromFn > 100) return fromFn;
-        // Fallback: max(activities[].maxHR) across recorded activities. Filter
-        // out missing/zero values. Robust to one bad reading via the >100 sanity gate.
-        const maxes = (activities || [])
-          .map(a => Number(a && a.maxHR))
-          .filter(n => Number.isFinite(n) && n > 100);
-        if (maxes.length) return Math.max(...maxes);
-        return null;
-      } catch { return null; }
-    })();
-    // Compounding fatigue inputs (Phase 4r.intel.4). The intel layer reads
-    // these to widen/shift expected bands when the body was tired going IN.
-    //   - sleepScorePrev: Garmin Sleep Score for the night BEFORE this
-    //     activity. We look up the sleep entry matching activity date.
-    //   - rollingTSS7 / rollingTSS28: TSS sums across recent windows.
-    //   - consecutiveHardDays: hard sessions in the 2 days before this.
-    const _intelFatigue = (() => {
-      try {
-        const actDate = (fd.date && typeof fd.date === 'string') ? fd.date : null;
-        if (!actDate) return null;
-        // Prior-night sleep score — sleep entry for the activity date.
-        // (Garmin records sleep that ENDS on the activity date; that IS the
-        // prior night for a morning workout. For PM workouts, this is still
-        // the most-recent overnight sleep, which is what we want.)
-        const sleepArr = (() => {
-          try { return storage.get('sleep') || []; } catch { return []; }
-        })();
-        const sleepEntry = sleepArr.find(s => s?.date === actDate);
-        const sleepScorePrev = (sleepEntry?.sleepScore && sleepEntry.sleepScore > 0)
-          ? sleepEntry.sleepScore : null;
-        // Rolling TSS — sum activities' tss in the 7d / 28d trailing windows
-        // ending the day BEFORE this activity (we don't include the current
-        // session's load in its own context).
-        const cur = parseLocalDate(actDate);
-        if (!cur) return { sleepScorePrev, rollingTSS7: null, rollingTSS28: null, consecutiveHardDays: 0 };
-        const d7 = new Date(cur); d7.setDate(d7.getDate() - 7);
-        const d28 = new Date(cur); d28.setDate(d28.getDate() - 28);
-        const d2 = new Date(cur); d2.setDate(d2.getDate() - 2);
-        let tss7 = 0, tss28 = 0, hardInPrior2 = 0;
-        for (const a of (activities || [])) {
-          const ad = a?.date && parseLocalDate(a.date);
-          if (!ad || ad >= cur) continue;
-          const tss = Number(a.trainingStressScore || a.tss || 0);
-          if (ad >= d28) tss28 += tss;
-          if (ad >= d7)  tss7  += tss;
-          if (ad >= d2) {
-            if (isHIITAct(a) || isHardSession(a)) hardInPrior2 += 1;
-          }
-        }
-        return {
-          sleepScorePrev,
-          rollingTSS7: tss7 || null,
-          rollingTSS28: tss28 || null,
-          consecutiveHardDays: hardInPrior2,
-        };
-      } catch { return null; }
-    })();
-    const intelCtx = {
-      family: planType,
-      // Duration gate — sessions under 15min are excluded from band lookup
-      // (warmup mobility, sub-15-min "incidental" records). expectedRanges
-      // returns neutral status for these.
-      durationSec: fd.durationSecs ?? null,
-      conditions: {
-        tempC: fd.avgTemperature ?? fd.tempC ?? null,
-        humidityPct: fd.avgHumidity ?? null,
-      },
-      fatigue: _intelFatigue,
-      // baseline: undefined — Session 3 will populate from learnedBaselines.
-    };
-    // Helper: paint a metric value against its expected range. Returns the
-    // color to use for the value. Pass the metric's "category color" as
-    // fallback (used when no published norm exists or status is neutral).
-    const _paintM = (metricId, value, categoryColor) => {
-      try {
-        const result = paintMetricStatus(metricId, value, categoryColor, intelCtx);
-        // DIAGNOSTIC — Phase 4r.intel.4. Toggle via window.__INTEL_DEBUG__=true
-        // in the browser console to log every metric decision once per render.
-        // Output: [intel] metricId value=N status='expected'|'mild'|'concern'|'neutral'
-        //         band=[lo,hi] family=hiit temp=null hum=null fat=null
-        if (typeof window !== 'undefined' && window.__INTEL_DEBUG__) {
-          // eslint-disable-next-line no-console
-          console.log(
-            '[intel]', metricId,
-            'value=', value,
-            'status=', result.status,
-            'band=', result.expected,
-            'family=', intelCtx.family,
-            'temp=', intelCtx?.conditions?.tempC,
-            'hum=', intelCtx?.conditions?.humidityPct,
-            'fat=', intelCtx?.fatigue,
-            'dur=', intelCtx?.durationSec,
-          );
-        }
-        // 'expected' should look neutral so the eye is only drawn to
-        // outliers — preserving the family color on every metric defeats
-        // the purpose. 'neutral' (no published norm) falls back to
-        // category color so we don't regress unhandled metrics.
-        if (result.status === 'expected') return 'var(--text-primary)';
-        return result.color;
-      } catch (e) {
-        if (typeof window !== 'undefined' && window.__INTEL_DEBUG__) {
-          // eslint-disable-next-line no-console
-          console.error('[intel] EXCEPTION', metricId, e && e.message);
-        }
-        return categoryColor;
-      }
-    };
-    // Tint companion to _paintM (Phase 4r.intel.6). Same logic; returns the
-    // background-wash color. When status is 'expected' we replace the
-    // category tint (e.g. soft pink for HR) with a soft teal — the active
-    // "in band" affirmation. 'mild' uses amber wash; 'concern' uses red wash.
-    // 'neutral' (insufficient data) keeps the category tint as the fallback.
-    const _paintT = (metricId, value, categoryTint) => {
-      try {
-        const result = paintMetricStatus(metricId, value, '#000', intelCtx);
-        if (result.status === 'expected') return 'rgba(94,234,212,0.08)'; // teal — in band
-        if (result.status === 'mild')     return 'rgba(251,191,36,0.10)'; // amber
-        if (result.status === 'concern')  return 'rgba(248,113,113,0.10)'; // red
-        return categoryTint;
-      } catch { return categoryTint; }
-    };
+    const intelMaxHR = resolveIntelMaxHR(getEffectiveMaxHR, profile, activities);
+    // Phase 4r.intel.7 — intelCtx built via shared module (core/intelContext.js)
+    // so MobileHome and EdgeIQ can produce the same status colors as LogDay.
+    const intelCtx = buildIntelContext({
+      ...fd,
+      planType,
+    }, {
+      activities,
+      profile,
+      sleep: (() => { try { return storage.get('sleep') || []; } catch { return []; } })(),
+    });
+    // Phase 4r.intel.7 — paint helpers from shared intel module.
+    const { paintM: _paintM, paintT: _paintT } = makePaint(intelCtx);
     // For avgHR/maxHR we need %maxHR to look up the band. Compute once.
     const avgHRPctMax = (intelMaxHR && avgHR) ? (avgHR / intelMaxHR) * 100 : null;
     const maxHRPctMax = (intelMaxHR && maxHR) ? (maxHR / intelMaxHR) * 100 : null;
