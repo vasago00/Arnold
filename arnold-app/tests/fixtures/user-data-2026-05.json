@@ -1,0 +1,83 @@
+{
+  "_meta": {
+    "purpose": "Frozen activity samples for the HYROX classifier regression test. Each row reflects a real shape observed in storage('activities') or dailyLogs.fitActivities — including manually-entered sessions where Garmin doesn't fully support the modality (SkiErg, Rowing) and the user types the name themselves.",
+    "captured": "2026-05-25",
+    "howToRefresh": "Run window.coachActivitiesDebug() in the app console, copy the resulting summary, and replace the activities array below. Keep at least one each of: running, ski-erg, rowing, strength, metcon, and an 'other'. The assertion script will exit non-zero if any required bucket is missing."
+  },
+  "activities": [
+    {
+      "_comment": "Standard Garmin-synced run — activityType populated by FIT.",
+      "date": "2026-05-24",
+      "activityType": "running",
+      "name": "Morning Run",
+      "durationSecs": 2400,
+      "distanceMi": 4.2,
+      "source": "garmin"
+    },
+    {
+      "_comment": "Manually-entered ski-erg session. Garmin doesn't have a ski-erg category — user typed the name. Pre-fix this returned 'other' because the regex only checked activityType.",
+      "date": "2026-05-22",
+      "name": "SkiErg intervals",
+      "title": "SkiErg intervals",
+      "durationSecs": 1500,
+      "kcal": 220,
+      "source": "manual"
+    },
+    {
+      "_comment": "Manually-entered rowing session — user typed it as Concept2 row.",
+      "date": "2026-05-20",
+      "name": "Concept2 row 5k",
+      "durationSecs": 1320,
+      "kcal": 280,
+      "source": "manual"
+    },
+    {
+      "_comment": "Manually-entered ski-erg with the variant spelling 'ski erg' (with space).",
+      "date": "2026-05-18",
+      "title": "Ski erg easy",
+      "durationSecs": 900,
+      "source": "manual"
+    },
+    {
+      "_comment": "Manually-entered row using only the notes field.",
+      "date": "2026-05-15",
+      "name": "Indoor cardio",
+      "notes": "Rowing session, 4x500m intervals",
+      "durationSecs": 1200,
+      "source": "manual"
+    },
+    {
+      "_comment": "Strength session — activityType set by Garmin Connect.",
+      "date": "2026-05-23",
+      "activityType": "strength_training",
+      "name": "Strength upper body",
+      "durationSecs": 3000,
+      "calories": 280,
+      "totalWorkSecs": 1800,
+      "totalRestSecs": 1200,
+      "source": "garmin"
+    },
+    {
+      "_comment": "HYROX-style metcon — typed by the user with the keyword 'wall balls'.",
+      "date": "2026-05-19",
+      "name": "Wall balls + burpees AMRAP",
+      "durationSecs": 1800,
+      "source": "manual"
+    },
+    {
+      "_comment": "A non-HYROX-relevant activity that should classify as 'other' (yoga).",
+      "date": "2026-05-21",
+      "activityType": "yoga",
+      "name": "Yoga flow",
+      "durationSecs": 2700,
+      "source": "manual"
+    }
+  ],
+  "expectations": {
+    "running": ["2026-05-24"],
+    "erg": ["2026-05-22", "2026-05-20", "2026-05-18", "2026-05-15"],
+    "strength": ["2026-05-23"],
+    "metcon": ["2026-05-19"],
+    "other": ["2026-05-21"]
+  }
+}

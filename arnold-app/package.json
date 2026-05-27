@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:mobile": "cross-env CAPACITOR_BUILD=true vite build && npx cap sync android",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node tests/classifyActivityForHyrox.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",

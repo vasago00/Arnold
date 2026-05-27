@@ -21,7 +21,8 @@ import { fetchAndParseICS } from "./core/parsers/icsParser.js";
 import { parseFITFile } from "./core/parsers/fitParser.js";
 import { pushFit as pushFitToRelay, startFitPolling, pullFitsNow } from "./core/fit-relay.js";
 import { parseCronometerCSV, parseTodayNutrition } from "./core/parsers/cronometerParser.js";
-import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption } from "./core/storage.js";
+import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption, getStorageWriteCount } from "./core/storage.js";
+import { migrateGoalsV1ToV2 } from "./core/migrateGoalsV1ToV2.js";
 import { primeVitalsCache, dcy as dcyToday } from "./core/dcy.js";
 import { allActivities as _allActs } from "./core/dcyMath.js";
 import { parseLocalDate, startOfDay as _startOfDay, startOfWeekMonday as _startOfWeekMonday } from "./core/dateUtils.js";
@@ -44,6 +45,14 @@ import { KRITile, InlineKRIStat } from "./components/KRITile.jsx";
 import { normalizeTilePrefs } from "./core/derive/tileMetrics.js";
 import { SupplementsTab } from "./components/SupplementsTab.jsx";
 import { CalendarTab } from "./components/CalendarTab.jsx";
+// Phase 4r.hygiene.1 — ErrorBoundary wraps each tab so a component-level
+// crash (e.g. the 4r.dataspine.5 `dyn is not defined` regression) shows
+// a graceful retry UI instead of blanking the whole tab.
+import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
+// Phase 4r.coach.v2.surface — Coach BETA tab.
+import { CoachBeta } from "./components/CoachBeta.jsx";
+import { CoachLine } from "./components/CoachLine.jsx";
+import { CoachSigil } from "./components/CoachSigil.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
 import { summarizeRecentSignatures } from "./core/derive/recoverySignature.js";
@@ -73,11 +82,19 @@ import { createEntry as createNutEntry, saveEntry as saveNutEntry, getEntriesFor
 import { getSystemsReport, getSystemDetail, getSystemWeekly } from "./core/healthSystems.js";
 import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
 import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
-import { getTopCoachingPrompts, getPromptsByPillar } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
-import { getDynamicMacroTarget, assessCalibration, recommendCalorieTarget, getCurrentBodyComp, computeRMR } from "./core/energyBalance.js";
-import { resolveCalorieTarget } from "./core/calorieTarget.js";
+import { getTopCoachingPrompts, getPromptsByPillar, runCoachingPromptsHealthProbe } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
+import { runCoachBriefsHealthProbe } from "./core/coachBriefs.js";
+// Phase 4r.dataspine.4 — getDynamicMacroTarget + resolveCalorieTarget
+// imports removed. All consumers in Arnold.jsx now read goalModel's
+// getEffectiveTargets (imported below as getDerivedTargets).
+import { assessCalibration, recommendCalorieTarget, getCurrentBodyComp, computeRMR, safeCutHeadroom } from "./core/energyBalance.js";
 import { backfillFromActivities } from "./core/learnedBaselines.js";
 import { InsightsPanel } from "./components/InsightsPanel.jsx";
+import { generateInsights } from "./core/insights.js";
+import { computeUserState, synthesizeRecommendations } from "./core/intelligence.js";
+import { composeNarrative } from "./core/narrativeComposer.js";
+import { safeCompute } from "./core/safeCompute.js";
+import { getEffectiveTargets as getDerivedTargets, getOverrides as getDerivedOverrides } from "./core/goalModel.js";
 // Health system iconography — Gemini-generated line-art PNGs at 256×256 with
 // dark #0b0d12 background and the system's accent color baked in. Vite
 // resolves these to hashed asset URLs at build time.
@@ -108,6 +125,7 @@ import {
   computeRTSS, computeHrTSS, computeAcuteChronicRatio, computeTonnage, computeDensity,
   computeHyroxDensity, matchTemplate, computeDailyScore,
   computeRolling7d, computeRolling30d, getEffectiveMaxHR,
+  RTSS_BANDS, rtssBand,
 } from "./core/trainingStress.js";
 
 // ─── Unified Activities: merge CSV imports + daily FIT uploads ───────────────
@@ -529,6 +547,12 @@ function raceTypeBadge(distKm){
 
 const TABS=[
   {id:"training", label:"EdgeIQ",icon:"◈"},
+  // Phase 4r.coach.v2.surface — Coach BETA tab sits between EdgeIQ and
+  // Daily for the 2-3 week evaluation window. `beta:true` makes the
+  // nav render a small BETA chip next to the label so it's obviously
+  // experimental. Mobile bar deliberately doesn't include this tab
+  // until the voice is calibrated; web only for now.
+  {id:"coach_beta", label:"Coach", icon:"◎", beta:true},
   {id:"daily",    label:"Daily",  icon:"⊕"},
   {id:"weekly",   label:"Trend",  icon:"◈"},
   {id:"races",    label:"Calendar", icon:"▦"},
@@ -578,6 +602,72 @@ export default function App(){
   const [mobileInitView,setMobileInitView]=useState('start');
   const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
 
+  // ── Phase 4r.intel.29 + 4r.narrative.5.fix.13 — Always land on Start ───
+  // Capacitor keeps the WebView alive when the user switches to another
+  // app (Slack, camera, etc.) and returns. React state is preserved, so
+  // by default the user lands back on whatever tab they were on. The
+  // user asked for the app to ALWAYS open to Start, both on cold-start
+  // (already correct — useState defaults to 'training' which renders
+  // MobileHome with mobileInitView='start') and on resume (this hook).
+  //
+  // fix.13 (2026-05-27): user reported the resume-to-Start behavior
+  // had regressed. Root cause: `document.visibilitychange` alone is
+  // unreliable on Android Capacitor WebViews — it can skip firing
+  // after quick app switches or when the user returns from the home
+  // screen via the recents button. Fix: listen to THREE events so we
+  // catch every resume path:
+  //   • visibilitychange — primary trigger, works ~80% of the time
+  //   • pageshow         — fires on bfcache restore (back-button, swipe)
+  //   • focus            — fires when the WebView regains focus
+  // We debounce via a `lastResetAt` guard so a single resume doesn't
+  // fire the reset 2-3 times (which would also close any open sheet
+  // the user JUST opened).
+  //
+  // Gated on isMobileApp so desktop users keep their current tab when
+  // they Cmd-Tab to another window (desktop users actively work
+  // across tabs; resetting would be intrusive).
+  useEffect(() => {
+    if (!isMobileApp) return;
+    let lastResetAt = Date.now(); // prevent the initial-mount false-positive
+    const RESET_DEBOUNCE_MS = 500;
+
+    const resetToStart = (source) => {
+      const now = Date.now();
+      if (now - lastResetAt < RESET_DEBOUNCE_MS) return;
+      lastResetAt = now;
+      // Diagnostic log — visible in DevTools / chrome://inspect so we can
+      // verify which event source actually fired the reset on a given
+      // device. If the user reports "didn't reset," check console for
+      // this line; if it's missing, the WebView isn't dispatching any
+      // of the three events on resume on that device.
+      // eslint-disable-next-line no-console
+      console.log(`%c[arnold-lifecycle] resume → reset to Start (via ${source})`, 'color:#5eead4');
+      setTab('training');
+      setMobileInitView('start');
+      setMobileMoreOpen(false);
+    };
+
+    const onVis = () => {
+      if (document.visibilityState === 'visible') resetToStart('visibilitychange');
+    };
+    const onPageShow = (e) => {
+      // pageshow fires on every navigation INTO the page, including from
+      // bfcache. The `persisted` flag is true only for bfcache restores
+      // (back-forward navigation). For our purposes both count as "resume."
+      resetToStart(e?.persisted ? 'pageshow:bfcache' : 'pageshow');
+    };
+    const onFocus = () => resetToStart('focus');
+
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [isMobileApp]);
+
   // ── Mobile nav handler (for drill-down tabs — when MobileHome is NOT active) ──
   const handleMobileNav=(item)=>{
     // Phase 4r.nav.2 — Calendar promoted to primary nav. 'calendar' id
@@ -625,6 +715,20 @@ export default function App(){
   // EdgeIQ, leaving those screens with no working swipe — and MobileHome.jsx
   // had its own duplicate handler which double-fired on Start. Now there's
   // only one handler in the whole tree, attached to <main>.
+  // Phase 4r.calendar.38 — Rebalanced swipe ownership. Yesterday's blanket
+  // early-return on Calendar tab killed tab-swipe navigation entirely
+  // (can't swipe away from Calendar to Fuel or Core). The correct split:
+  //   • Swipe on the calendar GRID → calendar's local handler fires
+  //     goNext/goPrev (month change). Its swipeHandlers wrapper calls
+  //     stopPropagation, so this page-level handler never sees those
+  //     touches.
+  //   • Swipe on the calendar HEADER or DRAWER (outside the grid wrapper)
+  //     → falls through to this page-level handler → changes tabs.
+  // The "stopPropagation is racy in WebView" hypothesis from POSTMORTEMS
+  // entry 2026-05-23 turned out to be wrong; the real cause of "calendar
+  // swipe doesn't work" was the position-cascade bug eating ALL touches
+  // before any handler saw them. With that fixed, stopPropagation works
+  // reliably and the early-return is no longer needed.
   const mobileSwipe=useSwipeNav({
     onSwipeLeft:()=>{
       if(!isMobileApp)return;
@@ -649,6 +753,24 @@ export default function App(){
     // Phase 1: one-shot migration from legacy arnold-memory:* keys to unified arnold:* store
     migrateLegacyStorage();
     migrateSupplementKeys();
+    // Phase B Turn 4 (Phase 4r.dataspine.7) — idempotent goals v1→v2
+    // migration. Builds nested outcome-only structures (goals.body,
+    // goals.recovery, goals.performance, goals.races) from flat v1
+    // fields if a user is still on the old schema. Existing v1 fields
+    // preserved during compat window; manual calorie/protein targets
+    // converted to overrides so user intent isn't lost.
+    try {
+      const r = migrateGoalsV1ToV2();
+      if (r.migrated) {
+        // eslint-disable-next-line no-console
+        console.log('%c[arnold-migrate] goals v1→v2 applied' +
+          (r.overridesCreated?.length ? ` · overrides: ${r.overridesCreated.join(',')}` : ''),
+          'background:#1f2a3a;color:#c8d9e6;padding:2px 6px;border-radius:4px;font-weight:600');
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[arnold-migrate] migrateGoalsV1ToV2 threw:', e?.message || e);
+    }
     // Encryption at rest: decrypt sensitive keys into memory cache, re-encrypt with session key
     initEncryption().catch(e=>console.warn('Encryption init failed, using plaintext fallback',e));
     // Phase 7: hydrate IndexedDB engine, attach, THEN run loadData so the
@@ -1059,7 +1181,131 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.intel.12 · insights-engine-2026-05-22','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.narrative.5.fix.21 · REAL FIX: bash mount had a stale-cache view of coachSignals.js + narrativeComposer.js (saw 2178 / 769 lines when actual file had 2360 / 882). My "restore" appends from fix.20 piled duplicate content on top of intact originals. Removed all duplicated trailing content. Files now end at their proper original close. 2026-05-27','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      // Phase 4r.narrative.2 + 2.1 — eager-import the composer + scenario
+      // fixtures so window.narrativeDebug() and window.narrativeScenarios()
+      // are registered at boot, even before the user opens the Coach tab.
+      try { import('./core/narrativeComposer.js'); } catch {}
+      try { import('./core/narrativeScenarios.js'); } catch {}
+      // Phase 4r.process.5 — expose storage on window so debug helpers can
+      // read through the IndexedDB-aware abstraction instead of bypassing
+      // it via localStorage (which the Phase 7 engine no longer mirrors
+      // for every collection). The previous proteinTileDebug reported
+      // 0 nutritionLog rows because it read localStorage directly while
+      // the actual data lived in IndexedDB.
+      try { window.__arnoldStorage = storage; } catch {}
+
+      // ── Phase 4r.process.1 — Boot-time state fingerprint ──
+      // Single block of logs printing the canonical "state of the system"
+      // at boot. When the user reports a bug, asking for a console
+      // screenshot now surfaces the entire context (build, viewport,
+      // storage counts, intelligence verdict, derived targets, active
+      // overrides) in one shot — no more guessing whether the build is
+      // current, whether data is present, or what state the model
+      // computed. See arnold-app/SMOKE_TESTS.md.
+      try {
+        const _vp = `${window.innerWidth}×${window.innerHeight}`;
+        const _isMobile = window.innerWidth <= 600;
+        const _activities = (storage.get('activities') || []).length;
+        const _sleep      = (storage.get('sleep')      || []).length;
+        const _hrv        = (storage.get('hrv')        || []).length;
+        const _weight     = (storage.get('weight')     || []).length;
+        const _nutLog     = (storage.get('nutritionLog') || []).length;
+        // Intelligence + goalModel (best-effort — these may not be
+        // populated yet on first boot if storage hydration is in flight)
+        let _intel = null, _targets = null, _overrides = null;
+        try {
+          _intel = computeUserState({
+            activities: storage.get('activities') || [],
+            sleep:      storage.get('sleep')      || [],
+            hrv:        storage.get('hrv')        || [],
+            weight:     storage.get('weight')     || [],
+            cronometer: storage.get('cronometer') || [],
+            profile:    storage.get('profile')    || {},
+          });
+        } catch {}
+        try { _targets   = getDerivedTargets(); }  catch {}
+        try { _overrides = getDerivedOverrides(); } catch {}
+        const _fmtBurdens = _intel?.burdens?.join(', ') || 'none';
+        const _calCheck = _targets?.dailyCalories;
+        const _proCheck = _targets?.dailyProtein;
+        const _ovCount  = _overrides ? Object.keys(_overrides).length : 0;
+        const _lblStyle = 'color:#a0e0d0;font-weight:600';
+        const _valStyle = 'color:#c0c0c0;font-weight:400';
+        console.log('%c[arnold-state] %cviewport: ' + _vp + ' · isMobile: ' + _isMobile, _lblStyle, _valStyle);
+        console.log('%c[arnold-state] %cstorage: ' + _activities + ' activities · ' + _sleep + ' sleep · ' + _hrv + ' hrv · ' + _weight + ' weight · ' + _nutLog + ' nutritionLog entries', _lblStyle, _valStyle);
+        // Phase 4r.signals.10 — storage-write counter. Verifies the change-
+        // listener machinery is alive. Increments on every storage.set (Garmin
+        // sync, Cronometer entry, weight, manual log). At boot this is the
+        // count accumulated by any sync writes that have already fired.
+        console.log('%c[arnold-state] %cstorage write count (since boot): ' + getStorageWriteCount(), _lblStyle, _valStyle);
+        if (_intel) {
+          const _n = _intel.numbers || {};
+          console.log('%c[arnold-state] %cintelligence: phase=' + _intel.phase + ' · trajectory=' + _intel.trajectory + ' · recoveryDebt=' + _intel.recoveryDebt + '/3', _lblStyle, _valStyle);
+          console.log('%c[arnold-state] %cburdens: ' + _fmtBurdens, _lblStyle, _valStyle);
+          console.log('%c[arnold-state] %ctrust: garminBurn=' + _intel.trust?.garminBurn + ' · intakeLog=' + _intel.trust?.intakeLog + ' · rmrModel=' + _intel.trust?.rmrModel, _lblStyle, _valStyle);
+          // Phase 4r.intel.20 — surface the new Layer 1 aggregates so we
+          // can verify burdens are firing on the expected inputs.
+          console.log('%c[arnold-state] %csleep: 7d=' + (_n.sleepAvg7d ?? '—') + 'h · 14d=' + (_n.sleepAvg14d ?? '—') + 'h · 21d=' + (_n.sleepAvg21d ?? '—') + 'h · goal=' + (_n.sleepGoalHrs ?? '—') + 'h', _lblStyle, _valStyle);
+          console.log('%c[arnold-state] %chrv: latest=' + (_n.hrvLatest ?? '—') + 'ms · baseline14d=' + (_n.hrvBaseline14d ?? '—') + 'ms · suppressedDays=' + (_n.hrvSuppressedDays ?? 0), _lblStyle, _valStyle);
+          console.log('%c[arnold-state] %crhr: latest=' + (_n.rhrLatest ?? '—') + 'bpm · baseline14d=' + (_n.rhrBaseline14d ?? '—') + 'bpm · elevatedDays=' + (_n.rhrElevatedDays ?? 0), _lblStyle, _valStyle);
+          console.log('%c[arnold-state] %cprotein7d=' + (_n.proteinAvg7d ?? '—') + 'g · daysSinceLastActivity=' + (_n.daysSinceLastActivity ?? '—'), _lblStyle, _valStyle);
+          // Phase 4r.intel.21 — surface active goal-conflicts so the
+          // user can verify which cross-domain incompatibilities the
+          // detector found (or didn't).
+          const _conflicts = Array.isArray(_intel.goalConflicts) ? _intel.goalConflicts : [];
+          if (_conflicts.length) {
+            const _cflist = _conflicts.map(c => `${c.id}(${c.severity})`).join(' · ');
+            console.log('%c[arnold-state] %cconflicts: ' + _cflist, _lblStyle, _valStyle);
+          } else {
+            console.log('%c[arnold-state] %cconflicts: none', _lblStyle, _valStyle);
+          }
+          const _ak = _intel.activeGoalKinds || {};
+          const _activeStr = Object.keys(_ak).filter(k => _ak[k]).join(', ') || 'none';
+          console.log('%c[arnold-state] %cactive goal kinds: ' + _activeStr, _lblStyle, _valStyle);
+        }
+        if (_targets) {
+          console.log('%c[arnold-state] %cderived targets: ' + (_calCheck?.effective ?? '—') + ' kcal (' + (_calCheck?.source || '—') + ') · ' + (_proCheck?.effective ?? '—') + 'g protein (' + (_proCheck?.source || '—') + ')', _lblStyle, _valStyle);
+        }
+        console.log('%c[arnold-state] %coverrides active: ' + (_ovCount > 0 ? _ovCount + ' (' + Object.keys(_overrides).join(', ') + ')' : 'none'), _lblStyle, _valStyle);
+        // Phase 4r.process.2 — coach health probe. Surfaces silent rule
+        // errors (ReferenceErrors swallowed by try/catch in the rule loop)
+        // as a count in the boot fingerprint. Smoke test becomes: "is the
+        // error count zero?" — would have caught the `dyn is not defined`
+        // regression on first reload instead of waiting for a screenshot.
+        try {
+          const _pHealth = runCoachingPromptsHealthProbe();
+          const _pErrStr = _pHealth.errors.length
+            ? _pHealth.errors.map(e => `${e.name}:${e.message}`).join(' · ')
+            : 'none';
+          const _pStyle = _pHealth.errors.length
+            ? 'color:#ff8c8c;font-weight:600'
+            : _valStyle;
+          console.log(
+            '%c[arnold-state] %ccoach prompts: ' + _pHealth.totalRules + ' rules · ' + _pHealth.fires + ' fired · ' + _pHealth.errors.length + ' errors (' + _pErrStr + ')',
+            _lblStyle, _pStyle
+          );
+          if (_intel) {
+            const _bHealth = runCoachBriefsHealthProbe(_intel);
+            const _bErrStr = _bHealth.errors.length
+              ? _bHealth.errors.map(e => `${e.name}:${e.message}`).join(' · ')
+              : 'none';
+            const _bStyle = _bHealth.errors.length
+              ? 'color:#ff8c8c;font-weight:600'
+              : _valStyle;
+            console.log(
+              '%c[arnold-state] %ccoach briefs: ' + _bHealth.totalPatterns + ' patterns · ' + _bHealth.fires + ' fired · ' + _bHealth.errors.length + ' errors (' + _bErrStr + ')',
+              _lblStyle, _bStyle
+            );
+          }
+        } catch (e) {
+          console.warn('[arnold-state] coach health probe failed:', e?.message || e);
+        }
+        console.log('%c[arnold-state] %cdocs: window.narrativeDebug() · window.narrativeScenarios() · window.intelligenceDebug() · window.coachSignalsDebug() · window.coachBriefsDebug() · window.coachActivitiesDebug() · window.goalModelDebug() · window.energyBalanceDebug() · window.proteinTileDebug() · window.racePredictorDebug() · window.mealTimingDebug() · window.backfillCronometerMeals() · window.shortRaceNameDebug()', _lblStyle, _valStyle);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[arnold-state] fingerprint failed:', e?.message || e);
+      }
       // Phase 4r.intel.5 — to debug why a tile is painting a color, run this in
       // the browser console then re-click an activity:
       //   window.__INTEL_DEBUG__ = true
@@ -1130,6 +1376,26 @@ export default function App(){
           });
         }
       } catch (e) { console.warn('[garmin-activities] init failed:', e); }
+
+      // ── Cronometer meal-rows backfill (Phase 4r.signals.1) ───────────────
+      // The Worker has been caching daily row arrays under cronometerLive for
+      // ~14 days; until this phase those rows were only used for diagnostics
+      // — never written to nutritionLog. Now that Pre-Training Carbs +
+      // Post-Training Protein + meal-timing signals need per-meal timestamps,
+      // backfill from the cache so historical days fill in without re-pulling
+      // the Worker. Idempotent + cheap (in-memory dedupe by id prefix).
+      try {
+        const mFlag = `arnold:crono-meal-backfill:1`; // once-ever, not per-day — cache covers 14d window
+        if (!localStorage.getItem(mFlag)) {
+          import('./core/cronometer-client.js').then(({ backfillCronometerMealsFromCache }) => {
+            const r = backfillCronometerMealsFromCache();
+            if (r.totalRowsAdded > 0) {
+              console.log(`[cronometer-meals] backfill: ${r.daysProcessed} days · ${r.totalRowsAdded} meal rows`);
+            }
+            localStorage.setItem(mFlag, '1');
+          }).catch(e => console.warn('[cronometer-meals] backfill failed:', e));
+        }
+      } catch (e) { console.warn('[cronometer-meals] init failed:', e); }
 
       // ── Garmin weight direct sync (Phase 4r.energy.4) ────────────────────
       // Pull body-composition readings (weight, BF%, muscle mass, bone mass,
@@ -1483,7 +1749,7 @@ export default function App(){
         <div style={S.hr} className="arnold-hdr-right">{(()=>{let n=data.profile?.name;try{const lp=storage.get('profile')||{};n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
       </header>
       <nav style={S.nav} className="arnold-nav">
-        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}</span></button>)}
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}{t.beta&&<span style={{marginLeft:6,fontSize:8,fontWeight:800,letterSpacing:'0.14em',color:'#5eead4',background:'rgba(94,234,212,0.14)',padding:'2px 5px',borderRadius:3,verticalAlign:'1px'}}>BETA</span>}</span></button>)}
       </nav>
       <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{}),...(isMobileApp?{touchAction:'pan-y'}:{})}} className="arnold-main" {...(isMobileApp?mobileSwipe:{})}>
         {/* ── Phase 4q.header.2 — Unified mobile page header ──
@@ -1497,7 +1763,13 @@ export default function App(){
             purple on EdgeIQ, etc.) so each page reads thematically.
             Padding is uniform across every tab. Date chip on the right
             only on day-anchored tabs (Play / Fuel / Daily). */}
-        {isMobileApp&&!mobileHomeActive&&(()=>{
+        {/* Phase 4r.narrative.5.fix.2 — mobile per-tab header gate. Previously
+            this also excluded `weekly` (EdgeIQ/Trend) via mobileHomeActive,
+            but the user reported the EdgeIQ page felt disorienting without
+            a label. Start (`training`) keeps its custom cockpit treatment
+            and skips the standard header; every other mobile tab including
+            `weekly` now gets the consistent header bar. */}
+        {isMobileApp&&tab!=='training'&&(()=>{
           const label = TAB_LABEL[tab] || tab;
           const accentColor = TAB_ACCENT_COLOR[tab] || TAB_ACTIVE_COLOR;
           // Date persists on every drill-down tab (Phase 4q.header.5) so
@@ -1542,7 +1814,19 @@ export default function App(){
             </div>
           );
         })()}
-        {tab==="weekly"&&<div className="arnold-tab-panel"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} mobileInitView={mobileInitView} onAiSum={async()=>{
+        {/* Phase 4r.narrative.5b — Ambient Coach line. Mobile only.
+            On web the slim banner appears between the tab nav and the
+            tab's own header, which created a visual hierarchy issue
+            (Coach above the tab name). Web gets integrated Coach panels
+            per tab instead (e.g. EdgeIQ Coach Focus card). Mobile keeps
+            the ambient line because it sits BELOW the mobile per-tab
+            header in the rendered order. Phase 4r.narrative.5.fix.4. */}
+        {isMobileApp && <ErrorBoundary tabName="CoachLine"><CoachLine tabId={tab} setTab={setTab}/></ErrorBoundary>}
+        {/* Phase 4r.hygiene.1 — Each tab wrapped in ErrorBoundary so a
+            render error inside the tab content shows a retry UI instead
+            of blanking the tab. tabName drives the boundary's headline
+            and the DevTools console label `[ErrorBoundary:<name>]`. */}
+        {tab==="weekly"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="EdgeIQ"><Dashboard data={data} setTab={setTab} showToast={showToast} aiSummLoad={aiSummLoad} aiSummStream={aiSummStream} mobileInitView={mobileInitView} onAiSum={async()=>{
           if(aiSummLoad)return;
           setAiSummLoad(true);setAiSummStream("");
           try{
@@ -1550,17 +1834,28 @@ export default function App(){
             await persist({...data,aiInsights:[{date:td(),text:ins},...data.aiInsights.slice(0,4)]});
           }catch(e){setAiSummStream(`Error: ${e.message}`);}
           finally{setAiSummLoad(false);}
-        }}/></div>}
-        {tab==="labs"&&<div className="arnold-tab-panel"><LabsModule data={data} persist={persist} showToast={showToast}/></div>}
-        {tab==="clinical"&&<div className="arnold-tab-panel"><ClinicalModule data={data} persist={persist} showToast={showToast}/></div>}
-        {tab==="training"&&<div className="arnold-tab-panel"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('start')}/></div>}
-        {tab==="daily"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} setTab={setTab}/></div>}
-        {tab==="activity"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></div>}
-        {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></div>}
-        {tab==="races"&&<div className="arnold-tab-panel"><CalendarTab showToast={showToast}/></div>}
-        {tab==="goals"&&<div className="arnold-tab-panel"><div style={S.sec}>{!isMobileApp && <div style={S.st}>Plan</div>}<WeeklyPlanner showToast={showToast}/><Workbench showToast={showToast}/><GoalsHub showToast={showToast}/></div></div>}
-        {tab==="supplements"&&<div className="arnold-tab-panel"><SupplementsTab showToast={showToast}/></div>}
-        {tab==="settings"&&<div className="arnold-tab-panel"><ProfileSettings data={data} persist={persist} showToast={showToast}/></div>}
+        }}/></ErrorBoundary></div>}
+        {tab==="labs"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Labs"><LabsModule data={data} persist={persist} showToast={showToast}/></ErrorBoundary></div>}
+        {tab==="clinical"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Core"><ClinicalModule data={data} persist={persist} showToast={showToast}/></ErrorBoundary></div>}
+        {tab==="training"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Start"><TrainingTab setTab={setTab} data={data} mobileInitView={mobileInitView} onMobileInitViewUsed={()=>setMobileInitView('start')}/></ErrorBoundary></div>}
+        {/* Phase 4r.coach.v2.surface — Coach BETA tab, web-only.
+            Phase 4r.narrative.4c — setTab is plumbed in so the embedded
+            narrative tiles can navigate to their source tab on tap. */}
+        {tab==="coach_beta"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Coach"><CoachBeta setTab={setTab}/></ErrorBoundary></div>}
+        {tab==="daily"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Daily"><LogDay data={data} persist={persist} showToast={showToast} setTab={setTab}/></ErrorBoundary></div>}
+        {tab==="activity"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Play"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></ErrorBoundary></div>}
+        {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Fuel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></ErrorBoundary></div>}
+        {tab==="races"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Calendar"><CalendarTab showToast={showToast}/></ErrorBoundary></div>}
+        {/* Phase 4r.dataspine.6 — Plan tab cleanup:
+            - Weekly Planner removed: Calendar's "+Plan" chip is the
+              single workout-assignment surface now.
+            - Order: GoalsHub first (outcomes you're optimizing for),
+              Workbench below (where you do the work).
+            WeeklyPlanner component kept in src/components/ for now in
+            case it's needed elsewhere; just unmounted here. */}
+        {tab==="goals"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Plan"><div style={S.sec}><GoalsHub showToast={showToast}/><Workbench showToast={showToast}/></div></ErrorBoundary></div>}
+        {tab==="supplements"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Supplements"><SupplementsTab showToast={showToast}/></ErrorBoundary></div>}
+        {tab==="settings"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Settings"><ProfileSettings data={data} persist={persist} showToast={showToast}/></ErrorBoundary></div>}
       </main>
       {/* ── Persistent mobile bottom nav (when drill-down tabs are active) ── */}
       {isMobileApp&&(
@@ -1783,13 +2078,12 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
     setPdfPreview(null);
   }
 
-  // Phase 4q.frame.3 — hide the "Body & Fitness" subhead on mobile so
-  // the unified page header (Core) is the only top label and the tab
-  // bar (Overview/DEXA/VO2 Max/RMR) sits closer to the page top.
-  const _isMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
+  // Phase 4r.narrative.5.fix.5 — page-title header removed on both web
+  // and mobile. Web: top nav already says "Core". Mobile: unified
+  // per-tab header in Arnold.jsx already says "Core". The sub-nav
+  // (Overview/DEXA/VO2/RMR) sits directly below the page nav now.
   return(
     <div style={S.sec}>
-      {!_isMobile && <div style={S.st}>◉ Body & Fitness</div>}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}}>
         <div style={S.labNav}>
           {[["overview","Overview"],["dexa","DEXA"],["vo2","VO₂ Max"],["rmr","RMR"]].map(([id,lbl])=>(
@@ -2339,13 +2633,11 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
   // Build sparkline data with dates for tooltips
   const sparkData=(name,n=7)=>snaps.slice(0,n).reverse().map(s=>({val:parseFloat(s.markers[name]),date:s.date,raw:s.markers[name]})).filter(p=>!isNaN(p.val));
 
-  // Phase 4q.frame.3 — hide "Blood Panel" subhead on mobile so the
-  // Labs page header is the only top label and the Overview/Upload tabs
-  // sit closer to the page top (matches how Core/Play/Fuel render).
-  const _isMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
+  // Phase 4r.narrative.5.fix.5 — page-title header removed on both web
+  // and mobile. Top nav (web) / mobile per-tab header already say "Labs".
+  // Overview/Upload sub-nav now sits directly below.
   return(
     <div style={S.sec}>
-      {!_isMobile && <div style={S.st}>⬡ Blood Panel</div>}
       <div style={S.labNav}>
         {[["overview","Overview"],["upload","Upload"]].map(([id,lbl])=>(
           <button key={id} onClick={()=>setView(id)} style={{...S.lnb,...(view===id?S.lnba:{})}}>{lbl}</button>
@@ -3180,7 +3472,10 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const avgConsumed=thisWeekNut.length?Math.round(avg2(thisWeekNut,'calories')):null;
   const avgBurned=weekCals>0&&thisWeekActs.length?Math.round(weekCals/thisWeekActs.length+1880):1880;
   const netCalories=avgConsumed?Math.round(avgConsumed-avgBurned):null;
-  const consumedPct=avgConsumed?Math.min(avgConsumed/resolveCalorieTarget(td(),profile),1):0;
+  // Phase 4r.dataspine.1 — canonical calorie target via goalModel
+  // Phase 4r.dataspine.4 — legacy resolveCalorieTarget fallback removed.
+  const _calTargetForConsumedPct = (()=>{ try { return getDerivedTargets({date:td()}).dailyCalories.effective; } catch { return 0; } })();
+  const consumedPct=avgConsumed?Math.min(avgConsumed/_calTargetForConsumedPct,1):0;
   const burnedPct=Math.min(avgBurned/2500,1);
   const avgProtein=thisWeekNut.length?avg2(thisWeekNut,'protein'):null;
   const avgCarbs=thisWeekNut.length?avg2(thisWeekNut,'carbs'):null;
@@ -3292,8 +3587,11 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // 30-day average daily burn for the Nutrition donut: RMR floor + activity calories ÷ 30
   const last30Acts=activities.filter(a=>a.date>=td(d30));
   const last30ActKcal=last30Acts.reduce((s,a)=>s+(parseFloat(a.calories)||0),0);
-  const avg30Burned=Math.round((resolveCalorieTarget(td(),profile)+(last30ActKcal/30)));
-  const calT=resolveCalorieTarget(td(),profile);
+  // Phase 4r.dataspine.1 — canonical calorie target via goalModel
+  // Phase 4r.dataspine.4 — legacy resolveCalorieTarget fallback removed.
+  const _calToday = (()=>{ try { return getDerivedTargets({date:td()}).dailyCalories.effective; } catch { return 0; } })();
+  const avg30Burned=Math.round(_calToday+(last30ActKcal/30));
+  const calT=_calToday;
 
   // ── Training analysis variables (Phase 4l moves from EdgeIQ) ──
   // Suffixed with Ytd / Trend where Dashboard already has same-name
@@ -3579,6 +3877,11 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
 
   return(
     <div style={S.sec}>
+      {/* Phase 4r.narrative.5.fix.5 — page-title headers removed across
+          web tabs. The top nav already highlights the active tab, so a
+          duplicate "◈ Trend" label inside the content was visual noise.
+          Same cleanup applied to Plan / Labs / Core / Coach / Calendar /
+          EdgeIQ / Daily / Profile / Supplements (user feedback 2026-05-27). */}
 
       {/* ── Cockpit · WoW values + 8-week sparkline trend ──
           Headline = THIS WEEK (Mon-Sun current). Sparkline = 8-week trend.
@@ -5223,8 +5526,8 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
     return out.sort((a,b)=>rank(a._groupKey)-rank(b._groupKey));
   })();
   const nutData=(todayNutrition&&(!todayNutrition.date||todayNutrition.date===todayStr))?todayNutrition:null;
-  // Phase 4r.fuel.1 — dynamic daily target (RMR + activity + NEAT + TEF per day)
-  const calT=resolveCalorieTarget(todayStr, profile);
+  // Phase 4r.dataspine.4 — canonical Layer 3; legacy fallback removed.
+  const calT=(()=>{ try { return getDerivedTargets({date:todayStr}).dailyCalories.effective; } catch { return 0; } })();
 
   // Pace helpers
   const paceToSecs=p=>{if(!p)return 0;const[m,s]=p.split(':').map(Number);return(isNaN(m)||isNaN(s))?0:m*60+s;};
@@ -5459,14 +5762,11 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
   return(
     <div style={S.sec}>
-      {/* Inner sub-header dropped on mobile (Phase 4o.mobile.6) \u2014 the
-          mobile compact page header above already shows the tab name
-          (Play/Fuel/Daily Log) plus today's date in the top-right.
-          Desktop still renders it because the desktop tab strip doesn't
-          carry a per-page title. */}
-      {!mobileView && (
-        <div style={S.st}>{'\u2295 Daily Log'} {'\u00b7'} {ts}</div>
-      )}
+      {/* Phase 4r.narrative.5.fix.5 \u2014 web page-title header removed; the
+          top nav already highlights "Daily". Mobile was already gated
+          out via `!mobileView` so this only affects web. (Earlier
+          Phase 4o.mobile.6 had removed it from mobile for the same
+          reason: redundant with the unified mobile per-tab header.) */}
 
       {false&&todayLoaded&&!mobileView&&(
         <div style={{fontSize:10,color:'var(--text-accent)',display:'flex',alignItems:'center',gap:4,marginBottom:8}}>
@@ -5735,15 +6035,19 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           const fuel = (() => {
             try {
               const totals = nutDailyTotals(td()) || { calories: 0, protein: 0 };
-              const dyn = getDynamicMacroTarget();
-              const calT = dyn?.dynamicTarget ?? resolveCalorieTarget(todayStr, profile);
-              const proT = dyn?.proteinG       ?? (parseFloat(profile?.dailyProteinTarget) || 150);
+              // Phase 4r.dataspine.4 — canonical Layer 3 only. eatBack +
+              // isTrainingDay derived from goalModel's explain.components
+              // instead of the legacy getDynamicMacroTarget shape.
+              const eff = (()=>{ try { return getDerivedTargets({date:todayStr}); } catch { return null; } })();
+              const calT = eff?.dailyCalories?.effective || 0;
+              const proT = eff?.dailyProtein?.effective  || 0;
+              const eatBack = eff?.dailyCalories?.explain?.components?.eatBack || 0;
               return {
                 calLeft: Math.max(0, Math.round(calT - (totals.calories || 0))),
                 proLeft: Math.max(0, Math.round(proT - (totals.protein  || 0))),
                 calT, proT,
-                earned: dyn?.isTrainingDay ? Math.round(dyn.eatBackKcal || 0) : 0,
-                isTrainingDay: !!dyn?.isTrainingDay,
+                earned: eatBack > 0 ? Math.round(eatBack) : 0,
+                isTrainingDay: eatBack > 0,
               };
             } catch { return null; }
           })();
@@ -8615,7 +8919,27 @@ function StartTilePickerSection({ data }) {
 
 // ─── Today's energy target line (web EdgeIQ panel) ─────────────────────────
 function TodaysTargetLine() {
-  const dyn = useMemo(() => getDynamicMacroTarget(), []);
+  // Phase 4r.dataspine.4 — all fields from getDerivedTargets (goalModel).
+  // Macros now live on getEffectiveTargets.dailyCarbs/dailyFat/dailyFiber;
+  // baseline + eatBack derived from explain.components. Legacy fallback
+  // to getDynamicMacroTarget removed.
+  const dyn = useMemo(() => {
+    try {
+      const eff = getDerivedTargets();
+      if (!eff?.dailyCalories?.effective) return { dynamicTarget: null };
+      const eatBack = eff.dailyCalories.explain?.components?.eatBack || 0;
+      return {
+        dynamicTarget: eff.dailyCalories.effective,
+        baseline:      eff.dailyCalories.effective - eatBack,
+        eatBackKcal:   eatBack,
+        isTrainingDay: eatBack > 0,
+        proteinG:      eff.dailyProtein?.effective || 0,
+        carbsG:        eff.dailyCarbs?.effective   || 0,
+        fatG:          eff.dailyFat?.effective     || 0,
+        fiberG:        eff.dailyFiber?.effective   || 0,
+      };
+    } catch { return { dynamicTarget: null }; }
+  }, []);
   if (!dyn.dynamicTarget) return null;
   return (
     <div style={{
@@ -8955,6 +9279,9 @@ function HealthSystemsGrid({ dateStr, data }) {
 // TRAINING TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
+  // Phase 4r.intel.13-fix1 — useStorageVersion lets the insightsForHero
+  // memo invalidate on Cloud Sync / manual edits the same way Dashboard does.
+  const storageVersion = useStorageVersion();
   const profile={...(storage.get('profile')||{}),...getGoals()};
   const activities=getUnifiedActivities();
   const cronometer=storage.get('cronometer')||[];
@@ -8962,6 +9289,58 @@ function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
   const hrvData=storage.get('hrv')||[];
   const sleepData=cleanSleepForAveraging(storage.get('sleep')||[]);
   const dailyLogs=storage.get('dailyLogs')||[];
+
+  // Phase 4r.intel.17 — Intelligence pipeline (Layer 3 + 4).
+  // computeUserState builds the canonical model-of-the-user (trust, phase,
+  // trajectory, recoveryDebt, burdens, numbers). synthesizeRecommendations
+  // takes that state and the raw insight evidence, returns the ordered
+  // list of cards the action grid renders. Every card is a facet of one
+  // coherent plan — contradictions impossible by construction.
+  //
+  // Insights still fire as evidence (we pass them through so the
+  // synthesizer can surface n + p chips on stat-gated rows), but their
+  // recommendation text is owned by Layer 4 now.
+  const intelligence = useMemo(() => {
+    let rawInsights = [];
+    try {
+      rawInsights = generateInsights({
+        activities,
+        sleep: sleepData,
+        hrv: hrvData,
+        weight: weightData,
+        cronometer,
+        profile,
+      }) || [];
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[TrainingTab] generateInsights threw:', e?.message || e);
+    }
+    let userState = null;
+    try {
+      userState = computeUserState({
+        activities,
+        sleep: sleepData,
+        hrv: hrvData,
+        weight: weightData,
+        cronometer,
+        profile,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[TrainingTab] computeUserState threw:', e?.message || e);
+    }
+    let cards = [];
+    if (userState) {
+      try {
+        cards = synthesizeRecommendations(userState, { rawInsights, rawPrompts: [] }) || [];
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[TrainingTab] synthesizeRecommendations threw:', e?.message || e);
+      }
+    }
+    return { userState, cards, rawInsights };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageVersion]);
 
   // ── Tab-owned AI analysis (persisted) ──
   const AI_KEY='arnold:ai:training';
@@ -9050,7 +9429,8 @@ Structure:
     }
     return(
       <div style={S.sec}>
-        <div style={S.st}>◈ EdgeIQ</div>
+        {/* Phase 4r.narrative.5.fix.5 — empty-state title dropped to match
+            the loaded view; top nav is the page identifier. */}
         <div style={{...S.empty,display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
           <div style={{fontSize:"clamp(13px,0.8vw + 9px,16px)",color:C.t}}>No training data yet.</div>
           <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m}}>Import your CSVs in the Daily tab to unlock EdgeIQ.</div>
@@ -9156,7 +9536,8 @@ Structure:
   const avgCarbs=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.carbs||0),0)/recentNut.length):null;
   const avgFat=recentNut.length?Math.round(recentNut.reduce((s,n)=>s+(n.fat||0),0)/recentNut.length):null;
   const avgBurned=(avgCalories||0)+341;
-  const calT=resolveCalorieTarget(td(),profile);
+  // Phase 4r.dataspine.4 — canonical Layer 3; legacy fallback removed.
+  const calT=(()=>{ try { return getDerivedTargets({date:td()}).dailyCalories.effective; } catch { return 0; } })();
 
   // 7-day recovery — HRV merge same pattern as the upper card.
   // Worker writes overnightHRV onto sleep rows (Phase 4c); legacy `hrv`
@@ -9358,11 +9739,13 @@ Structure:
 
   return(
     <div style={S.sec}>
-      {/* Section 1: Page header */}
+      {/* Section 1: Page meta — Phase 4r.narrative.5.fix.5 dropped the
+          "◈ EdgeIQ" label (top nav already highlights EdgeIQ). The
+          yearLabel/yearStr subtitle + YTD/days-in/AI badges stay since
+          they carry real information, not just a tab name. */}
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
         <div>
-          <div style={{fontSize:14,fontWeight:500,color:'var(--text-primary)',letterSpacing:'0.02em'}}>◈ EdgeIQ</div>
-          <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{yearLabel} · {yearStr}</div>
+          <div style={{fontSize:10,color:'var(--text-muted)'}}>{yearLabel} · {yearStr}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
           <span style={{fontSize:9,padding:'3px 8px',borderRadius:10,background:'rgba(96,165,250,0.12)',color:'#60a5fa'}}>YTD</span>
@@ -9371,11 +9754,11 @@ Structure:
         </div>
       </div>
 
-      {/* Phase 4r.intel.12 — Insights panel. Surfaces statistically-gated
-          patterns from insights.js (weight-intake gap, drift trends, low
-          sleep response, etc). Renders an empty-state hint when nothing
-          significant yet — feeds engagement without false positives. */}
-      <InsightsPanel maxItems={4} />
+      {/* Phase 4r.intel.12-fix7 — Insights panel relocated. It used to
+          live above the hero; user preferred it as a right-side column
+          next to the Activity/Nutrition/Body domain rail. See the wrapping
+          grid added a few lines down. Component is rendered alongside the
+          hero so they read as a single intelligence band. */}
 
       {/* ═══════ HERO LINE · EdgeIQ (Phase 4n.1.4) ═══════
           ONE consolidated hero line — answers "where are you + what to
@@ -9432,22 +9815,16 @@ Structure:
         })();
 
         // Fuel gap — calories + protein still to consume today.
-        // Phase 4o.edgeiq.2 — uses the DYNAMIC target so training-day
-        // eat-back kcal is honoured. The static profile target was wrong
-        // on lift/run days: once intake crossed the static value, the
-        // remaining clamped to 0 even though the dynamic target still
-        // had room. Same getDynamicMacroTarget() the Daily tab uses, so
-        // the two views agree.
+        // Phase 4r.dataspine.4 — canonical Layer 3 only. getEffectiveTargets
+        // already honours training-day eat-back (via the calorie target
+        // derivation in goalModel), so the same path drives every fuel
+        // surface in the app. Legacy fallback chain removed.
         const todayNutTotals = (() => {
           try { return nutDailyTotals(today); } catch { return { calories: 0, protein: 0 }; }
         })();
-        const dynTarget = (() => {
-          try { return getDynamicMacroTarget(); } catch { return null; }
-        })();
-        const calTarget = dynTarget?.dynamicTarget
-                        ?? resolveCalorieTarget(td(), profile);
-        const proTarget = dynTarget?.proteinG
-                        ?? (parseFloat(profile?.dailyProteinTarget) || 150);
+        const eff = (() => { try { return getDerivedTargets({date:td()}); } catch { return null; } })();
+        const calTarget = eff?.dailyCalories?.effective || 0;
+        const proTarget = eff?.dailyProtein?.effective  || 0;
         const calRemaining = Math.max(0, Math.round(calTarget - (todayNutTotals.calories || 0)));
         const proRemaining = Math.max(0, Math.round(proTarget - (todayNutTotals.protein || 0)));
 
@@ -9506,6 +9883,12 @@ Structure:
           if (type === 'hrv')    { if (val >= 40) return '#4ade80'; if (val >= 30) return '#fbbf24'; return '#f87171'; }
           if (type === 'fuel')   return val > 0 ? '#fbbf24' : '#4ade80';  // remaining > 0 = needs action
           if (type === 'race')   return val != null ? '#a78bfa' : 'var(--text-muted)';
+          // Phase 4r.narrative.5.fix.11 — rTSS uses the canonical RTSS_BANDS
+          // table so the EdgeIQ MiniStat color matches the Daily gauge color
+          // for the same value. Without this, the generic "high = good" rule
+          // below painted rTSS=39 RED (because <50) while Daily painted it
+          // GREEN (because ≤50 = easy). User feedback 2026-05-27.
+          if (type === 'rtss')   return rtssBand(val).color;
           if (val >= 70) return '#4ade80';
           if (val >= 50) return '#fbbf24';
           return '#f87171';
@@ -9737,8 +10120,8 @@ Structure:
                       <MiniStat label="ACWR" value={acwrToday?.ratio} type="acwr"
                         fmt={v => v.toFixed(2)}
                         sub={acwrToday?.ratio != null ? (acwrToday.ratio > 1.5 ? 'high risk' : acwrToday.ratio > 1.3 ? 'over-reach' : acwrToday.ratio < 0.8 ? 'under-load' : 'in zone') : 'no data'}/>
-                      <MiniStat label="rTSS today" value={todayRTSS}
-                        sub={todayRTSS == null ? 'no session' : todayRTSS > 80 ? 'big effort' : todayRTSS > 40 ? 'moderate' : 'easy'}/>
+                      <MiniStat label="rTSS today" value={todayRTSS} type="rtss"
+                        sub={rtssBand(todayRTSS).label}/>
                     </RailColumn>
 
                     {/* ── Nutrition drivers (bracket: Nutrition / green) ── */}
@@ -9804,129 +10187,192 @@ Structure:
               })()}
             </div>
 
-            {/* ─── Phase 4n.3 — Coaching prompts integrated ───
-                Top 3 active coaching prompts, rendered as compact one-line
-                strips. Sits between the rail body and the calibration footer
-                so the user reads "score → drivers → what to actually do".
-                Calibration-pillar prompts are filtered OUT here because the
-                calibration footer below already covers that signal — we'd
-                duplicate it otherwise. Severity colors match the rail's:
-                  critical → red, warning → amber, info → blue, positive → green.
-                Tap any row to jump to the relevant tab. Empty state is
-                omitted (no "all clear" placeholder — it'd just waste height
-                when the calibration footer below is already saying that). */}
+            {/* ─── Phase 4r.narrative.5.fix.8 — Coach gets its own voice ────
+                User feedback 2026-05-27: tinted backgrounds + colored edges
+                + severity chips are the vocabulary EdgeIQ already uses for
+                Goal Tensions, Health Systems, Today's Status, etc. The
+                Coach was blending in with that vocabulary.
+
+                The Coach IS different — it's the human voice over the
+                cockpit instruments. Numbers and gauges are the machine;
+                Coach is the strategist who interprets them. New treatment
+                reflects that:
+
+                  • TEAL is Coach's signature color, always — regardless of
+                    severity. State is communicated via a small dot + tag,
+                    not a colored fill or border.
+                  • SERIF ITALIC body text — visually distinct from the
+                    sans-serif data everywhere else in Arnold. Reads as
+                    "voice" rather than "metric."
+                  • A "Coach" wordmark + sigil ("A°") at the top — a
+                    consistent signature that will appear on every Coach
+                    surface (EdgeIQ summary here, CoachBeta header, mobile
+                    CoachLine). Trains the user's eye to recognize the
+                    Coach's voice across the app.
+                  • HUD-style frame: slightly darker panel than the page,
+                    teal hairline outline, no left-border accent. Reads as
+                    an overlay, not a status band.
+                  • Tap affordance ("open ↗") in italic, lower-case,
+                    smaller — feels like a "read more" link in editorial
+                    copy, not a button. */}
             {(() => {
-              let prompts = [];
-              try {
-                prompts = (getTopCoachingPrompts(5) || [])
-                  .filter(p => p.pillar !== 'calibration')
-                  .slice(0, 3);
-              } catch {}
-              if (!prompts.length) return null;
-              const sevColor = (sev) =>
-                sev === 'critical' ? '#f87171' :
-                sev === 'warning'  ? '#fbbf24' :
-                sev === 'positive' ? '#4ade80' :
-                                     '#60a5fa';
-              const pillarTab = (pillar) =>
-                pillar === 'nutrition' ? 'daily' :
-                pillar === 'recovery'  ? 'trend' :
-                pillar === 'run'       ? 'training' :
-                pillar === 'body'      ? 'trend' :
-                                          'goals';
-              const pillarLabel = (pillar) =>
-                pillar === 'nutrition' ? 'Fuel' :
-                pillar === 'recovery'  ? 'Recover' :
-                pillar === 'run'       ? 'Train' :
-                pillar === 'body'      ? 'Body' :
-                                          (pillar || 'Coach').toString().toUpperCase();
+              const narrative = safeCompute('EdgeIQ:coachSummary', () => {
+                const cs_data = {
+                  activities:   storage.get('activities')   || [],
+                  sleep:        storage.get('sleep')        || [],
+                  hrv:          storage.get('hrv')          || [],
+                  weight:       storage.get('weight')       || [],
+                  cronometer:   storage.get('cronometer')   || [],
+                  nutritionLog: storage.get('nutritionLog') || [],
+                  wellness:     storage.get('wellness')     || [],
+                  planner:      storage.get('planner')      || null,
+                  profile:      { ...(storage.get('profile') || {}), ...getGoals() },
+                };
+                const us = computeUserState(cs_data);
+                return composeNarrative(us);
+              }, null);
+              if (!narrative) return null;
+              const { leveragePoint, story, alignedFallback } = narrative;
+              const isAligned = alignedFallback || !leveragePoint;
+              const sev = leveragePoint?.state || '';
+
+              // Severity now communicated via a tiny dot — the Coach's color
+              // stays teal regardless. The dot color is the only place state
+              // shows on this surface.
+              let stateDot, stateTag;
+              if (sev === 'severe' || sev === 'concerning' || sev === 'critical') {
+                stateDot = '#f87171'; stateTag = 'severe';
+              } else if (
+                sev === 'moderate' || sev === 'slowing' || sev === 'adapting' ||
+                sev === 'depleted' || sev === 'rising' || sev === 'grey-zone' ||
+                sev === 'hot' || sev === 'impaired' || sev === 'mixed' || sev === 'low'
+              ) {
+                stateDot = '#fbbf24'; stateTag = 'watch';
+              } else if (sev === 'mild' || sev === 'sparse-easy') {
+                stateDot = '#fbbf24'; stateTag = 'mild';
+              } else {
+                stateDot = '#5eead4'; stateTag = 'aligned';
+              }
+
+              const summaryText = isAligned
+                ? 'System aligned — no leverage signal today.'
+                : (story?.action?.text || story?.opening || `${leveragePoint.label} is the leverage point.`);
+
+              // Coach signature color — teal stays constant; the panel never
+              // turns red/amber. Severity lives only in the dot.
+              const COACH = '#5eead4';
+
               return (
-                <div style={{
-                  display: 'flex', flexDirection: 'column', gap: 6,
-                  paddingTop: 8, borderTop: '0.5px solid var(--border-subtle)',
-                }}>
-                  {prompts.map(p => {
-                    const c = sevColor(p.severity);
-                    return (
-                      <div
-                        key={p.id}
-                        onClick={() => setTab?.(pillarTab(p.pillar))}
-                        title={p.detail || ''}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10,
-                          minHeight: 22,
-                          cursor: setTab ? 'pointer' : 'default',
-                          userSelect: 'none',
-                        }}
-                      >
-                        {/* severity dot */}
+                <div
+                  onClick={() => setTab('coach_beta')}
+                  style={{
+                    marginTop: 12,
+                    // Phase 4r.narrative.5.fix.19 — tightened padding.
+                    // Previous serif-italic version was burning ~80 px of
+                    // vertical space on the EdgeIQ dashboard for what is
+                    // ultimately a one-line summary + leverage tag.
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    background: 'rgba(8, 11, 16, 0.55)',
+                    border: `0.5px solid rgba(94, 234, 212, 0.22)`,
+                    cursor: 'pointer',
+                    position: 'relative',
+                    transition: 'border-color 200ms ease, background 200ms ease',
+                    display: 'flex', alignItems: 'flex-start', gap: 12,
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.borderColor = 'rgba(94, 234, 212, 0.45)';
+                    e.currentTarget.style.background = 'rgba(8, 11, 16, 0.75)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.borderColor = 'rgba(94, 234, 212, 0.22)';
+                    e.currentTarget.style.background = 'rgba(8, 11, 16, 0.55)';
+                  }}
+                  title="Open Coach for the full read">
+
+                  {/* Sigil sits on the left, vertically centered with the
+                      header row. The mark IS the signature — no "Coach"
+                      wordmark needed. */}
+                  <CoachSigil size={26} style={{ flexShrink: 0, marginTop: 1 }} />
+
+                  {/* Body column: leverage tag (prominent) on top, summary
+                      sentence below. Both sans-serif now — the italic +
+                      Georgia register from fix.8-10 was fighting the eye
+                      on a data-dense screen (user feedback fix.19). The
+                      identity comes from the sigil + teal border + tag
+                      typography, not from the body font. */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {/* Leverage tag — state-colored, uppercase, bold. THIS is
+                        what was barely visible in the muted-italic version;
+                        making it state-colored at 12px/700/uppercase pulls
+                        it forward as a proper headline. */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      marginBottom: 4,
+                    }}>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        fontSize: 11, fontWeight: 700,
+                        color: stateDot,
+                        letterSpacing: '0.12em',
+                        textTransform: 'uppercase',
+                      }}>
                         <span aria-hidden style={{
-                          width: 6, height: 6, borderRadius: '50%',
-                          background: c, flexShrink: 0,
+                          width: 7, height: 7, borderRadius: '50%',
+                          background: stateDot,
+                          boxShadow: `0 0 6px ${stateDot}66`,
                         }}/>
-                        {/* pillar tag — uppercase, severity-tinted */}
-                        <span style={{
-                          fontSize: 9, fontWeight: 700, letterSpacing: '0.10em',
-                          color: c, textTransform: 'uppercase',
-                          minWidth: 48, flexShrink: 0,
-                        }}>{pillarLabel(p.pillar)}</span>
-                        {/* title — truncates if long, full text on hover */}
-                        <span style={{
-                          fontSize: 11, fontWeight: 500,
-                          color: 'var(--text-primary)',
-                          flex: 1, minWidth: 0,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        }}>{p.title}</span>
-                        {/* action arrow */}
-                        {p.action?.label ? (
-                          <span style={{
-                            fontSize: 10, fontWeight: 600,
-                            color: c, opacity: 0.85,
-                            whiteSpace: 'nowrap', flexShrink: 0,
-                          }}>→ {p.action.label}</span>
-                        ) : setTab ? (
-                          <span style={{
-                            fontSize: 10, fontWeight: 600,
-                            color: 'var(--text-muted)',
-                            whiteSpace: 'nowrap', flexShrink: 0,
-                          }}>→</span>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                        {isAligned
+                          ? stateTag
+                          : `${leveragePoint.label} · ${stateTag}`}
+                      </span>
+                      <span style={{
+                        marginLeft: 'auto',
+                        fontSize: 10, color: COACH, fontWeight: 600,
+                        letterSpacing: '0.04em',
+                        flexShrink: 0,
+                      }}>
+                        open ↗
+                      </span>
+                    </div>
+
+                    {/* Summary body — clean sans-serif at body size.
+                        2-line clamp so the action stays whole. */}
+                    <div style={{
+                      fontSize: 13, lineHeight: 1.5,
+                      color: 'var(--text-primary)',
+                      fontWeight: 400,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}>
+                      {summaryText}
+                    </div>
+                  </div>
                 </div>
               );
             })()}
 
-            {/* ── Inline calibration footer (no separate container) ── */}
-            {cal && cal.status !== 'no-data' && (
-              <div
-                onClick={() => setTab?.('goals')}
-                style={{
-                  display:'flex', alignItems:'center', gap:10,
-                  paddingTop:8, borderTop:'0.5px solid var(--border-subtle)',
-                  cursor: setTab ? 'pointer' : 'default',
-                  userSelect:'none',
-                }}
-                title={setTab ? 'Open full calibration in Goals' : ''}
-              >
-                <span style={{ fontSize:10, fontWeight:700, color: calStatusColor, letterSpacing:'0.08em', flexShrink:0,
-                  padding:'2px 8px', borderRadius:10, background:`${calStatusColor}1a` }}>
-                  {calStatusLabel}
-                </span>
-                <span style={{ fontSize:11, color:'var(--text-secondary)', fontFamily:'var(--font-mono)', flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                  {driftStr}{etaPart}{goalPart}
-                </span>
-                {setTab && (
-                  <span style={{ fontSize:10, fontWeight:600, color:'var(--text-muted)', whiteSpace:'nowrap' }}>
-                    see Goals →
-                  </span>
-                )}
-              </div>
-            )}
+            {/* Phase 4r.narrative.5.fix.6 — Goal Tensions block and Today's
+                Status strip both moved to the Coach tab (Model B). EdgeIQ
+                stays the status/numbers surface; the Coach summary line
+                above is the bridge to the synthesis layer (full read on
+                Coach). intelligence.userState + intelligence.cards still
+                computed here in case future numbers-side widgets need
+                them, but they no longer render as their own panels. */}
+
+            {/* Phase 4r.intel.15 — Inline calibration footer removed.
+                The BEHIND / ETA / goal-pace story is now a first-class
+                card inside the unified action grid above (Goal card),
+                with its own concrete recommendation. */}
           </section>
         );
       })()}
+
+      {/* Phase 4r.intel.12-fix9 — InsightsPanel moved INSIDE the hero
+          section (between the metric rail and coaching prompts), so the
+          full-width row that used to live here has been removed. */}
 
       {/* Standalone Coach line + Focus tiles removed — embedded in or
           consolidated by the Hero Line above (Phase 4n.1.3). */}
@@ -10111,9 +10557,12 @@ function RacesTab({showToast}){
 
   if(loading)return<div style={S.sec}><div style={S.empty}>Loading races…</div></div>;
 
+  // Phase 4r.narrative.5.fix.5 — web inline page header removed; the top
+  // nav already says "Calendar". Mobile keeps the inline header.
+  const _calIsMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
   return(
     <div style={S.sec}>
-      <div style={S.st}>⚑ Race Calendar</div>
+      {_calIsMobile && <div style={S.st}>⚑ Race Calendar</div>}
 
       {/* ── Calendar Feed ── */}
       <div style={{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"}}>
@@ -10459,9 +10908,13 @@ function ProfileSettings({data,persist,showToast}){
     </div>
   );
 
+  // Phase 4r.narrative.5.fix.5 — web page-title header removed (top nav
+  // already says "Profile"). Mobile keeps the inline header for now;
+  // the user explicitly scoped this cleanup to web only.
+  const _setIsMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
   return(
     <div style={S.sec}>
-      <div style={S.st}>Profile</div>
+      {_setIsMobile && <div style={S.st}>Profile</div>}
 
       {/* Personal info — compact */}
       <div style={{...S.lg,marginTop:4}}>
@@ -10879,14 +11332,4 @@ const S={
   ic:{background:C.surf,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.b,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
   uz:{border:`0.5px dashed ${C.b}`,borderRadius:"var(--radius-md)",padding:20,display:"flex",flexDirection:"column",alignItems:"center",gap:6,cursor:"pointer",background:"transparent"},
   is:{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"clamp(12px,1vw,18px)",background:C.ad,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-md)",textAlign:"center"},
-  aib:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderLeft:`3px solid ${C.acc}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,letterSpacing:"0.03em",cursor:"pointer",display:"flex",alignItems:"center",gap:8,justifyContent:"center",width:"100%",boxSizing:"border-box",transition:`background var(--transition),border-color var(--transition)`},
-  qb:{background:C.surf,border:`0.5px solid ${C.b}`,color:C.s,padding:"9px 12px",borderRadius:"var(--radius-sm)",cursor:"pointer",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",textAlign:"left",transition:`all var(--transition)`},
-  ab:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-sm)",padding:"0 14px",fontFamily:"var(--font-ui)",fontWeight:500,fontSize:"clamp(12px,0.5vw + 10px,14px)",cursor:"pointer",whiteSpace:"nowrap",transition:`all var(--transition)`},
-  air:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
-  aih:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,color:C.ta,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:8},
-  ait:{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.s,lineHeight:1.75,whiteSpace:"pre-wrap"},
-  aisp:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
-  aish:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,color:C.ta,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:10,display:"flex",alignItems:"center",gap:6},
-  aist:{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.s,lineHeight:1.85,whiteSpace:"pre-wrap"},
-  toast:{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:"var(--status-ok-bg)",color:"var(--text-accent)",border:"0.5px solid var(--accent-border)",padding:"10px 20px",borderRadius:"var(--radius-sm)",fontWeight:500,fontSize:13,zIndex:100,backdropFilter:"blur(8px)"},
-};
+  aib:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderLeft:`3px solid ${C.acc}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--f

@@ -24,6 +24,15 @@ const RUN_RE      = /\b(run|jog|hiit|interval|tempo|trail|fartlek|sprint|track|j
 // strength. Anyone using Arnold's Workbench HYROX preset exports sport=hiit;
 // the name-based regex catches imported activities + manually-named ones.
 const HIIT_RE     = /\b(hiit|interval|fartlek|cardio[_ ]training|hyrox)\b/i;
+// Phase 4r.calendar.fix.3 — hybrid / multi-modal workout markers. Used to
+// distinguish HYROX-style sessions (running + stations) from pure-running
+// intervals (Fartlek, track repeats). Both pass isHIIT() AND isRun() but
+// they're shaped differently and the user's mental model treats them as
+// distinct visuals:
+//   • Fartlek / intervals: structured running → 'intervals' family → speed.png
+//   • HYROX / CrossFit / AMRAP / circuit: hybrid → 'hiit' family → hiit.png
+// Matches both Garmin activityType strings and free-form workout names.
+const HYBRID_RE   = /\b(hyrox|crossfit|cross[_ ]fit|metcon|amrap|emom|wod|circuit|f45|orangetheory|otf|bootcamp|hybrid|stations?|functional[_ ]training|cardio[_ ]training|hiit[_ ]training|cross[_ ]training)\b/i;
 const STRENGTH_RE = /\b(strength|weight|lifting|gym|crossfit|circuit|resistance)\b/i;
 const MOBILITY_RE = /\b(mobility|stretch|stretching|yoga|pilates|flexibility|breathwork|meditation)\b/i;
 const CYCLING_RE  = /\b(cycle|cycling|bike|biking|spin)\b/i;
@@ -48,6 +57,20 @@ export function isHIIT(a) {
   // Name-based: "Fartlek 100", "HIIT run", "interval session" — any of these
   // count as HIIT even if the parser stamped activityType as Run.
   return HIIT_RE.test(_both(a));
+}
+
+/**
+ * True if the activity is a HYBRID / MULTI-MODAL workout — HYROX, CrossFit,
+ * AMRAP/EMOM, circuits, F45, Orangetheory, etc. These differ from pure
+ * interval running (Fartlek, track repeats) in that they combine running
+ * with non-running components (sled push, wall balls, dumbbells, rowing,
+ * stations). The user's mental model: HIIT = "running + something else",
+ * Intervals = "running structured as bursts." Phase 4r.calendar.fix.3.
+ */
+export function isHybridWorkout(a) {
+  if (!a) return false;
+  if (isMobility(a)) return false;
+  return HYBRID_RE.test(_both(a));
 }
 
 /**
@@ -91,13 +114,38 @@ export function isSwim(a) {
  * Single-kind classification — returns one of:
  *   'mobility' | 'hiit' | 'run' | 'strength' | 'cycling' | 'swim' | 'other'
  *
- * Use for grouping (e.g. "0 runs · 2 strength · 1 other"). HIIT returns
- * 'hiit' here — but isRun() still returns true for it, so screens that
- * count run miles get the right total.
+ * Used for grouping (e.g. "0 runs · 2 strength · 1 other"), icons, labels,
+ * and Calendar tile visuals (via iconTypeFor / activityLabel).
+ *
+ * Phase 4r.calendar.fix.1 — when an activity has actual running distance,
+ * 'run' takes precedence over 'hiit' even if both isRun() and isHIIT()
+ * are true. A 3.7-mile Fartlek is a RUN with intervals; calling it HIIT
+ * elides the dominant fact (distance + sustained cardio nature). The
+ * 'hiit' kind is now reserved for zero-distance HIIT — bodyweight
+ * intervals, HYROX stations, HIIT classes — where there isn't a more
+ * specific identity to fall back on.
+ *
+ * isHardSession() still uses isHIIT() directly, so quality-session
+ * detection for cards/coaching rules continues to work for distance-
+ * bearing HIIT runs.
+ *
+ * User feedback 2026-05-26: Fartlek 100 was rendering as the orange HIIT
+ * figure on web + mobile Calendar but as the blue run figure on mobile
+ * Start. Same activity, two visual identities. Run-first ordering
+ * resolves the inconsistency in favor of Start's framing.
  */
 export function activityKind(a) {
   if (isMobility(a)) return 'mobility';
+  // Phase 4r.calendar.fix.3 — hybrid multi-modal workouts (HYROX, CrossFit,
+  // AMRAP/EMOM, circuits) classify as 'hiit' even if they include running
+  // distance. The running is one COMPONENT, not the whole workout.
+  if (isHybridWorkout(a)) return 'hiit';
+  // Pure-running with distance (incl. Fartlek/intervals/sprints) → 'run'.
+  // Mileage counts toward run totals; visual identity is run-flavored.
+  if (isRun(a) && (Number(a?.distanceMi) || 0) > 0) return 'run';
   if (isHIIT(a))     return 'hiit';
+  // No-distance runs (rare — treadmill incidents with no distance recorded)
+  // still classify as run rather than HIIT.
   if (isRun(a))      return 'run';
   if (isStrength(a)) return 'strength';
   if (isCycling(a))  return 'cycling';

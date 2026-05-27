@@ -24,7 +24,8 @@
 import { linearRegression, correlation, tTestUnequal, mean, std } from './stats.js';
 import { parseLocalDate } from './dateUtils.js';
 import { isRun, isHIIT, isStrength, isMobility } from './activityClass.js';
-import { computeTDEE } from './energyBalance.js';
+import { computeTDEE, safeCutHeadroom } from './energyBalance.js';
+import { dailyTotals as nutDailyTotals } from './nutrition.js';
 
 const FAMILY_LABEL = {
   easy_run: 'easy runs',
@@ -112,12 +113,19 @@ function insightWeightIntakeGap({ activities, weight, cronometer, profile }) {
   // Logged calorie balance over the same window.
   // For each date with both nutrition + weight, sum logged intake and
   // subtract that day's TDEE. Average across days.
+  //
+  // Phase 4r.intel.12-fix5 — use nutDailyTotals() which merges
+  // nutritionLog (manual entries + Cronometer worker writes) + legacy
+  // cronometer CSV imports. Raw `cronometer` storage key alone misses
+  // the live-pull data that's actually populating most users' days.
   const dailyBalances = [];
   for (const ds of wDates) {
-    // Logged intake for the date: cronometer daily total OR nutritionLog.
-    const cronoRow = (cronometer || []).find(c => c && c.date === ds && Number(c.calories) > 0);
-    if (!cronoRow) continue;
-    const intake = Number(cronoRow.calories);
+    let intake = 0;
+    try {
+      const totals = nutDailyTotals(ds);
+      intake = Number(totals?.calories || 0);
+    } catch {}
+    if (!Number.isFinite(intake) || intake <= 0) continue;
     let tdee = null;
     try { const t = computeTDEE(ds); tdee = t && Number(t.tdee); } catch {}
     if (!Number.isFinite(tdee) || tdee <= 0) continue;
@@ -130,18 +138,75 @@ function insightWeightIntakeGap({ activities, weight, cronometer, profile }) {
   // A meaningful gap is > 200 kcal/day persistent.
   if (Math.abs(gap) < 200) return null;
 
-  // Direction: positive gap = you're actually eating MORE than logged
-  // (because the scale shows less loss than the math predicts). Negative
-  // gap = you're eating less than logged OR your TDEE is higher than
-  // computed (rare).
-  const direction = gap > 0 ? 'over' : 'under';
-  const headline = direction === 'over'
-    ? `Logged intake undercounts by ~${Math.round(Math.abs(gap))} kcal/day`
-    : `TDEE may be ~${Math.round(Math.abs(gap))} kcal/day higher than modeled`;
+  // Phase 4r.intel.12-fix6 — present multiple hypotheses, don't presume
+  // unlogged food. A persistent gap can come from:
+  //   (a) Garmin activity-calorie overestimate (often 10-20% high)
+  //   (b) RMR / NEAT drift below the Mifflin / Katch-McArdle formula
+  //   (c) Water-weight swings during the 28-day window (sodium, glycogen,
+  //       hydration) — the regression slope is sensitive to this
+  //   (d) Logged-intake undercounts (oils, drinks, restaurant portions)
+  // For large gaps (>= 700 kcal/day), the math is most likely wrong on
+  // the BURN side — sustained 700+ kcal under-eating would be obvious in
+  // energy/mood. Lead with the metabolic-model interpretation. For
+  // smaller gaps (200-700), either side could plausibly be off.
+  const absGap = Math.abs(gap);
+  const direction = gap > 0 ? 'positive' : 'negative';
+  // positive gap = scale loses LESS than math predicts. Could be:
+  //   - burn estimate inflated (most likely if you log carefully)
+  //   - actual intake higher than logged
+  //   - hydration / water-weight noise inside the window
+  // negative gap = scale loses MORE than math predicts. Could be:
+  //   - TDEE actually higher (rare)
+  //   - water-weight loss / sodium drop inside the window
+  //   - measurement noise
+  const headline = direction === 'positive'
+    ? `Weight loss ~${Math.round(absGap)} kcal/day slower than your log math predicts`
+    : `Weight loss ~${Math.round(absGap)} kcal/day faster than your log math predicts`;
 
-  const detail = direction === 'over'
-    ? `${DAYS}-day weight trend (${lbsPerDay >= 0 ? '+' : ''}${lbsPerDay.toFixed(2)} lb/day) implies a ${Math.round(impliedKcalPerDay)} kcal/day balance; your log + TDEE math shows ${Math.round(calculatedKcalPerDay)} kcal/day. The gap usually points to unlogged snacks, oils, drinks, or restaurant portions.`
-    : `${DAYS}-day weight trend (${lbsPerDay >= 0 ? '+' : ''}${lbsPerDay.toFixed(2)} lb/day) implies ${Math.round(impliedKcalPerDay)} kcal/day; your log + TDEE math shows ${Math.round(calculatedKcalPerDay)} kcal/day. Your TDEE may be running higher than the formula estimates.`;
+  // Detail with multiple hypotheses, ordered by likelihood for the
+  // observed magnitude.
+  const trendStr = `${lbsPerDay >= 0 ? '+' : ''}${lbsPerDay.toFixed(2)} lb/day`;
+  let detail;
+  if (direction === 'positive' && absGap >= 700) {
+    detail = `${DAYS}-day weight trend (${trendStr}) implies ${Math.round(impliedKcalPerDay)} kcal/day; your log + TDEE math shows ${Math.round(calculatedKcalPerDay)} kcal/day. A gap this large usually means the BURN side is overstated — the activity-calorie estimate (Garmin's kcal/min model for each sport type) is often 15-25% high regardless of HR source, and RMR/NEAT can adapt several percent below the Mifflin/Katch-McArdle formula. Less likely the intake side if you log carefully.`;
+  } else if (direction === 'positive') {
+    detail = `${DAYS}-day weight trend (${trendStr}) implies ${Math.round(impliedKcalPerDay)} kcal/day; your log + TDEE math shows ${Math.round(calculatedKcalPerDay)} kcal/day. Possible causes: activity calorie estimate too high (Garmin's per-sport kcal/min model), metabolic adaptation lowering RMR/NEAT, water-weight swings inside the window, or some intake slipping unlogged.`;
+  } else {
+    detail = `${DAYS}-day weight trend (${trendStr}) implies ${Math.round(impliedKcalPerDay)} kcal/day; your log + TDEE math shows ${Math.round(calculatedKcalPerDay)} kcal/day. Either your TDEE is genuinely higher than the formula estimates, or short-term water/glycogen loss is exaggerating the slope inside this window.`;
+  }
+
+  // Concrete next-step — RMR-aware. The naive answer "drop X kcal/day"
+  // is unsafe if the user's goal target is already at/near RMR (which is
+  // typical for athletes mid-cut). Branching by safeCutHeadroom().phase:
+  //   • burnLikelyOverstated → the gap IS the diagnosis. Lower the target,
+  //     don't tighten further; the math was inflated.
+  //   • at-floor → recommend training-side (zone-2) or extending date,
+  //     NOT a cut. We've already cut as low as it's safe to go.
+  //   • thin    → small experiment OK, but suggest activity-side too.
+  //   • plenty  → normal test-cut is safe.
+  let recommendation;
+  let headroom = null;
+  try { headroom = safeCutHeadroom(); } catch {}
+  if (direction === 'positive' && headroom?.burnLikelyOverstated) {
+    // The empirical math already proves Garmin/model over-credits burn.
+    // The real fix is to RECALIBRATE the target, not eat less.
+    const empiricalTarget = Math.max(headroom.rmr, headroom.tdeeCurrent - 500);
+    recommendation = `Don't cut intake — lower the goal calorie target to ~${Math.round(empiricalTarget / 10) * 10} kcal/day. Your scale is the truth; your activity-cal estimate is inflated, so the deficit you thought you had wasn't real. Recalibrating closes the gap honestly.`;
+  } else if (direction === 'positive' && headroom?.phase === 'at-floor') {
+    recommendation = `Goal target ${headroom.goalTarget} is already at RMR (${headroom.rmr}). Don't cut further. Add 20-30min zone-2 walks 3-4x/wk to widen the deficit through movement, OR extend goal date 4-6 weeks to a sustainable pace.`;
+  } else if (direction === 'positive' && headroom?.phase === 'thin') {
+    const small = Math.min(150, headroom.safeCutKcal);
+    recommendation = `Target ${headroom.goalTarget} is only ${headroom.headroomKcal} kcal above RMR. Safer to add zone-2 cardio (~200 kcal/day) than cut intake. If you must cut, max ${small} kcal/day for 7 days only.`;
+  } else if (direction === 'positive' && headroom?.phase === 'plenty') {
+    const testDrop = Math.min(headroom.safeCutKcal, Math.round(absGap / 4 / 10) * 10);
+    recommendation = `Run a 7-day test: drop intake by ${testDrop} kcal/day (still ${headroom.headroomKcal - testDrop}+ kcal above RMR). If the scale tracks, your activity-cal is inflated — lower the goal target permanently by that amount.`;
+  } else if (direction === 'positive') {
+    // Headroom unavailable — fall back to conservative experiment phrasing.
+    const testDrop = Math.min(200, Math.round(absGap / 4 / 10) * 10);
+    recommendation = `Tighten 7 days: weigh & scan everything, then drop intake by ${testDrop} kcal/day to isolate whether the gap is log accuracy or burn overestimate. Stop if intake drops below your RMR.`;
+  } else {
+    recommendation = `Hold intake steady another 7 days before adjusting — short-term loss this fast is usually glycogen/water, not fat. Re-measure next Saturday.`;
+  }
 
   return {
     id: 'weight-intake-gap',
@@ -149,6 +214,7 @@ function insightWeightIntakeGap({ activities, weight, cronometer, profile }) {
     severity: Math.abs(gap) > 400 ? 'concern' : 'attention',
     headline,
     detail,
+    recommendation,
     evidence: {
       n: dailyBalances.length,
       period: `${spanDays.toFixed(0)} days`,
@@ -195,6 +261,7 @@ function insightDriftTrend({ activities }) {
         severity: totalDelta > 5 ? 'concern' : 'attention',
         headline: `Cardiac drift trending up on ${FAMILY_LABEL[f] || f}`,
         detail: `Over the last 5 ${FAMILY_LABEL[f] || f}, drift has risen ~${totalDelta.toFixed(1)}pp (slope +${reg.slope.toFixed(1)}pp/session). Heat, fatigue, or dehydration accumulating between sessions.`,
+        recommendation: `Pre-hydrate 500ml + electrolytes 60min before next ${FAMILY_LABEL[f] || f} session. If drift stays high after 2 sessions, add a recovery day before the next hard one.`,
         evidence: { n: 5, period: 'last 5 sessions', pValue: reg.pValue, r2: reg.r2 },
         data: { family: f, slopePerSession: reg.slope, totalDeltaPp: totalDelta },
         _slope: reg.slope,
@@ -248,6 +315,7 @@ function insightLowSleepResponse({ activities, sleep, profile }) {
     severity: delta > 5 ? 'concern' : 'attention',
     headline: `On <6.5h sleep, your avg HR runs +${delta.toFixed(1)}pp higher`,
     detail: `Across the last 30 days (${lowSleep.length} low-sleep sessions, ${adequate.length} adequate), avg %maxHR climbed from ${tt.meanB.toFixed(1)}% to ${tt.meanA.toFixed(1)}%. Same effort costs more cardiovascular work when underslept.`,
+    recommendation: `After a <6.5h night, swap the hard session for zone 2 or mobility, or hold avg HR ${Math.round(delta)}bpm lower. Move the planned intensity to the next recovered day.`,
     evidence: { n: lowSleep.length + adequate.length, period: 'last 30 days', pValue: tt.pValue },
     data: { lowSleepMean: tt.meanA, adequateMean: tt.meanB, deltaPp: delta },
   };

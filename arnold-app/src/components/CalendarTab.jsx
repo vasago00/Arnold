@@ -23,12 +23,15 @@ import { useSwipeNav } from "./MobileHome.jsx";
 import { storage } from "../core/storage.js";
 import { getRaces, saveRaces } from "../core/memory.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
-import { isRun, isStrength, isHIIT, isMobility, isCycling, isSwim } from "../core/activityClass.js";
+import { isRun, isStrength, isHIIT, isHybridWorkout, isMobility, isCycling, isSwim } from "../core/activityClass.js";
 import { getPlannerWeek, savePlannerWeek, weekKey } from "../core/planner.js";
 import { fetchAndParseICS } from "../core/parsers/icsParser.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
 import { PredictedBandsCard } from "./PredictedBandsCard.jsx";
-import { resolveCalorieTarget } from "../core/calorieTarget.js";
+// Phase 4r.dataspine.4 — calorie/macro target reads route through
+// goalModel.js (the canonical Layer 3 surface). resolveCalorieTarget
+// import removed; all consumers in this file migrated.
+import { getEffectiveTargets } from "../core/goalModel.js";
 import { getGoals } from "../core/goals.js";
 import {
   RACE_CATALOG, REGION_OPTIONS, DISTANCE_FILTERS,
@@ -61,14 +64,44 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 const WEEKDAY_SHORT = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 // Decide an activity's display family from its parsed flags.
+//
+// Phase 4r.calendar.fix.3 — three running visual identities, each routing
+// to a different image AND label, in priority order:
+//
+//   1. Hybrid / multi-modal (HYROX, CrossFit, AMRAP, EMOM, circuit, F45,
+//      Orangetheory): even if there's running distance, the OTHER components
+//      (stations, weights, gymnastics) define the workout's shape. Family
+//      'hiit' → hiit.png. Why: "HIIT" in the user mental model = "running +
+//      something else."
+//   2. Pure-running with HIIT structure (Fartlek, track repeats, sprint
+//      intervals, 400s): distance + interval structure but ONLY running.
+//      Family 'intervals' → speed.png. The leaning-to-explode figure.
+//   3. Pure-running steady-state (easy run, long run, tempo, Z2):
+//      Family 'run' / 'long_run' → easy-run.png.
+//
+// User feedback 2026-05-26: HYROX sessions were being misclassified as
+// Intervals after the first fix because they also pass isRun() (running
+// distance present) AND isHIIT() (the 'hyrox' keyword is in HIIT_RE).
+// The hybrid check at the top resolves the ambiguity in favor of HIIT.
 function activityFamily(a) {
   if (!a) return 'rest';
-  if (isHIIT(a))     return 'hiit';
   if (isMobility(a)) return 'mobility';
-  if (isStrength(a)) return 'strength';
-  if (isRun(a)) {
+  // Hybrid multi-modal workouts (HYROX, CrossFit, etc.) → 'hiit' even with
+  // running distance. The hybrid check goes BEFORE the run-with-distance
+  // check so HYROX sessions don't accidentally route to 'intervals'.
+  if (isHybridWorkout(a)) return 'hiit';
+  // Pure-running with distance: intervals get speed.png, regular runs
+  // get easy-run.png. Long runs split off.
+  if (isRun(a) && (Number(a.distanceMi) || 0) > 0) {
     const mi = Number(a.distanceMi) || 0;
     if (mi >= 13) return 'long_run';
+    if (isHIIT(a)) return 'intervals';
+    return 'run';
+  }
+  if (isHIIT(a))     return 'hiit';
+  if (isStrength(a)) return 'strength';
+  if (isRun(a)) {
+    // Run flag set but no distance — treadmill incidents, very-short laps.
     return 'run';
   }
   if (isCycling(a) || isSwim(a)) return 'cross';
@@ -384,9 +417,14 @@ export function CalendarTab({ showToast }) {
       {/* Phase 4r.calendar.25 — mobile drawer is always-open and
           inline below the grid. No modal, no backdrop, no animation.
           Tapping a different day just updates drawer content.
-          Default selection is today (set in CalendarTab init). */}
+          Default selection is today (set in CalendarTab init).
+          Phase 4r.calendar.36 — explicit 10px marginTop between grid
+          and drawer so the +Plan / +Add race chips' hit areas can't
+          physically reach the grid's bottom-row tiles. Was 0 before;
+          combined with the old -8px hit-area extension on the chips,
+          taps on May 30/31 were landing on +Add race instead. */}
       {isMobile && (
-        <div style={{ marginTop: 0, paddingBottom: 112 }}>
+        <div style={{ marginTop: 10, paddingBottom: 112 }}>
           <DayDrawer
             isMobile={isMobile}
             dateStr={selectedDate}
@@ -718,8 +756,14 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const nut = (() => {
     try { return nutDailyTotals(cell.date); } catch { return null; }
   })();
-  // Phase 4r.fuel.1 — dynamic per-day target (RMR + activity + NEAT + TEF)
-  const calTarget = resolveCalorieTarget(cell.date, goals);
+  // Phase 4r.dataspine.4 — legacy resolveCalorieTarget fallback removed.
+  // getEffectiveTargets has been the only source of truth in practice for
+  // weeks; the fallback never fired and is being deleted alongside the
+  // legacy exports.
+  const calTarget = (() => {
+    try { return getEffectiveTargets({ date: cell.date }).dailyCalories.effective; }
+    catch { return null; }
+  })();
   const calLogged = nut?.calories || 0;
   const fuelPct = calLogged > 0 ? Math.min(Math.round((calLogged / calTarget) * 100), 200) : null;
 
@@ -1072,9 +1116,14 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
 
   return (
     <button onClick={onPick}
-      className="arnold-compact-btn arnold-cal-cell"
+      className="arnold-cal-cell"
       style={{
         all: 'unset', cursor: 'pointer',
+        // Phase 4r.calendar.36 — removed arnold-compact-btn. Day tiles
+        // are already large (~55×46px on a Samsung S25U) so the invisible
+        // hit-area extension was unnecessary and was causing neighboring
+        // tiles' extended areas to overlap, making tap targets fuzzy at
+        // the row boundaries. Tile is its own touch target now.
         // Phase 4r.calendar.28 — shrink to 6:5 (wider than tall) so
         // the full 6-row grid + drawer fits on a Samsung S25U
         // screen without forcing the user to scroll to see the
@@ -1333,15 +1382,18 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
     return null;
   });
 
-  // Phase 4r.calendar.30 — fueling targets. Calories from goals; macro
-  // targets either from goals (if set) or derived from total calories
-  // using a balanced default split: 30% protein, 45% carbs, 25% fat.
+  // Phase 4r.dataspine.4 — canonical Layer 3 targets from goalModel.
+  // All four macros (calories + protein + carbs + fat) now come from
+  // getEffectiveTargets — the macro fields landed in dataspine.4 so
+  // the legacy parseFloat(goals.X) fallbacks are no longer needed.
   const goals = getGoals?.() || {};
-  // Phase 4r.fuel.1 — dynamic per-day target (RMR + activity + NEAT + TEF)
-  const calTarget = resolveCalorieTarget(dateStr, goals);
-  const proTarget = parseFloat(goals.dailyProteinTarget) || Math.round(calTarget * 0.30 / 4);
-  const carbTarget = parseFloat(goals.dailyCarbTarget)    || Math.round(calTarget * 0.45 / 4);
-  const fatTarget  = parseFloat(goals.dailyFatTarget)     || Math.round(calTarget * 0.25 / 9);
+  const _effTargets = (() => {
+    try { return getEffectiveTargets({ date: dateStr }); } catch { return null; }
+  })();
+  const calTarget  = _effTargets?.dailyCalories?.effective || 0;
+  const proTarget  = _effTargets?.dailyProtein?.effective  || 0;
+  const carbTarget = _effTargets?.dailyCarbs?.effective    || 0;
+  const fatTarget  = _effTargets?.dailyFat?.effective      || 0;
 
   return (
     <div style={{
@@ -1408,7 +1460,8 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
             {/* Phase 4r.calendar.33 — +Plan opens the workout picker. */}
             {onAddPlan && (
               <button onClick={onAddPlan} className="arnold-compact-btn" style={{
-                all: 'unset', cursor: 'pointer',
+                // position: 'relative' required — see POSTMORTEMS.md 2026-05-23
+                all: 'unset', cursor: 'pointer', position: 'relative',
                 fontSize: 11, fontWeight: 500,
                 padding: '3px 10px', borderRadius: 999,
                 color: '#a78bfa',
@@ -1418,7 +1471,8 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
             )}
             {onAddRace && (
               <button onClick={onAddRace} className="arnold-compact-btn" style={{
-                all: 'unset', cursor: 'pointer',
+                // position: 'relative' required — see POSTMORTEMS.md 2026-05-23
+                all: 'unset', cursor: 'pointer', position: 'relative',
                 fontSize: 11, fontWeight: 500,
                 padding: '3px 10px', borderRadius: 999,
                 color: '#60a5fa',
@@ -1439,10 +1493,12 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
       </div>
 
       {/* Phase 4r.intel.11 — Predicted bands for the planned workout.
-          Renders only when today (or a future date) has a non-rest plan.
-          Pulls weather forecast + fatigue + personal baselines via
-          getPredictedBands(); shows nothing on past dates or rest days. */}
-      {planned && planned.type && planned.type !== 'rest' && !isPast && (
+          Renders only when today (or a future date) has a non-rest plan
+          AND no activity is logged for the day yet. Once an activity is
+          logged, the Activity section below carries the actual numbers and
+          the expected-bands card disappears — no more stale "expected" once
+          you've actually done the workout (Phase 4r.intel.12-fix4). */}
+      {planned && planned.type && planned.type !== 'rest' && !isPast && activities.length === 0 && (
         <div style={{ marginBottom: isMobile ? 6 : 10 }}>
           <PredictedBandsCard
             family={planned.type}
@@ -2157,8 +2213,16 @@ function Field({ label, children }) {
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 
+// Phase 4r.calendar.37 — position: 'relative' is REQUIRED on every button
+// that also carries the .arnold-compact-btn className. The class's ::before
+// pseudo-element is position: absolute with inset: -3px -8px; without an
+// explicit positioned ancestor it walks up the DOM to the viewport and
+// becomes a full-screen click absorber. See POSTMORTEMS.md entry
+// 2026-05-23 for the full bug chain. The CSS now has `!important` as
+// belt-and-suspenders, but we keep position: 'relative' inline here too
+// so the intent is visible at the call site.
 const iconBtn = {
-  all: 'unset', cursor: 'pointer',
+  all: 'unset', cursor: 'pointer', position: 'relative',
   fontSize: 16, padding: '2px 10px',
   color: 'var(--text-primary)',
   background: 'transparent',
@@ -2167,7 +2231,7 @@ const iconBtn = {
 };
 
 const chipBtn = {
-  all: 'unset', cursor: 'pointer',
+  all: 'unset', cursor: 'pointer', position: 'relative',
   fontSize: 11, padding: '4px 10px',
   color: 'var(--text-primary)',
   background: 'transparent',

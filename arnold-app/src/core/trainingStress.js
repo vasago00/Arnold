@@ -65,6 +65,45 @@ function parseReps(repStr) {
 // 1. RUNNING: rTSS (Running Training Stress Score)
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ─── Canonical rTSS band table — Phase 4r.narrative.5.fix.4 ────────────────
+// Single source of truth for translating a rTSS number into a human label +
+// color. Used by both the Daily gauge and the EdgeIQ MiniStat so a single
+// session can't be "EASY/green" in one panel and "moderate/blue" in another.
+//
+// Bands follow the TrainingPeaks-style thresholds:
+//   • ≤ 50   → easy        (recovery / Z2 / short)
+//   • ≤ 100  → moderate    (typical aerobic session)
+//   • ≤ 150  → hard        (tempo / threshold / quality)
+//   • > 150  → overreaching (race-day / unusually long-hard session)
+//
+// User feedback 2026-05-26: a 46-rTSS session was labeled "EASY" on Daily
+// (≤50 → easy) but "moderate" on EdgeIQ (>40 → moderate). Inline thresholds
+// at each call site drifted apart. Routing both through rtssBand() locks
+// them to the same table.
+export const RTSS_BANDS = [
+  { max: 50,        label: 'easy',         color: '#4ade80' },
+  { max: 100,       label: 'moderate',     color: '#60a5fa' },
+  { max: 150,       label: 'hard',         color: '#fbbf24' },
+  { max: Infinity,  label: 'overreaching', color: '#f87171' },
+];
+
+/**
+ * Translate a rTSS number into { label, color }. Returns "no session" /
+ * neutral gray when the input is null, NaN, or zero.
+ * @param {number|null|undefined} value
+ * @returns {{ label: string, color: string }}
+ */
+export function rtssBand(value) {
+  if (value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) {
+    return { label: 'no session', color: '#6b7280' };
+  }
+  const v = Number(value);
+  for (const b of RTSS_BANDS) {
+    if (v <= b.max) return { label: b.label, color: b.color };
+  }
+  return RTSS_BANDS[RTSS_BANDS.length - 1];
+}
+
 /**
  * Compute rTSS for a single run.
  * Formula: rTSS = (T × NGP_speed × IF) / (FTP_speed × 3600) × 100

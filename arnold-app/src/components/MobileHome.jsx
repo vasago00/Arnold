@@ -22,7 +22,24 @@ import { cleanSleepForAveraging } from "../core/parsers/sleepParser.js";
 import useCronometerToday from "../hooks/useCronometerToday.js";
 import { useStorageVersion } from "../hooks/useStorageVersion.js";
 import { getTopCoachingPrompts, getPillarSummary, getPromptsByPillar } from "../core/coachingPrompts.js";
-import { getDynamicCalorieTarget, getDynamicMacroTarget, assessCalibration, recommendCalorieTarget } from "../core/energyBalance.js";
+// Phase 4r.hygiene.1 — energyBalance imports removed entirely. MobileHome
+// has no consumers left (MobileCalibrationStrip's last call was deleted
+// in this same phase, getDynamicMacroTarget consumers migrated to
+// goalModel in dataspine.4). The functions still exist in
+// energyBalance.js and are used by web EdgeIQ + Calendar.
+// Phase 4r.dataspine.1 — calorie + protein targets route through goalModel
+import { getEffectiveTargets } from "../core/goalModel.js";
+// Phase 4r.intel.23 — mobile parity for the intelligence layer.
+// MobileEdgeIQ now renders synthesizer cards (multi-hypothesis) and
+// MobileHome's HeroRail shows the top hypothesis headline alongside
+// the DCY status word when a high-severity conflict fires.
+import { computeUserState, synthesizeRecommendations } from "../core/intelligence.js";
+// Phase 4r.hygiene.1 — safeCompute wraps the common try/catch→null
+// pattern with a console.warn so silent failures (e.g. the
+// intelHeadline shape-mismatch bug, POSTMORTEMS.md 2026-05-24)
+// surface in DevTools instead of looking identical to "no data fired."
+import { safeCompute } from "../core/safeCompute.js";
+import { generateInsights } from "../core/insights.js";
 import {
   PersonSimpleRun,
   Barbell,
@@ -51,7 +68,11 @@ import {
 } from "../core/derive/tileMetrics.js";
 import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
-import { InsightsPanel } from "./InsightsPanel.jsx";
+// Phase 4r.hygiene.1 — InsightsPanel import removed. Its last consumer in
+// this file (MobileEdgeIQ) was removed in 4r.intel.24 when the legacy
+// stat-gated insight tile was retired in favour of the multi-hypothesis
+// synthesizer cards. The InsightsPanel component itself still exists in
+// ./InsightsPanel.jsx and is used by web TrainingTab.
 import { localDate, ymd } from "../core/time.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -804,16 +825,164 @@ function PullToRefreshIndicator({ pullY, refreshing, threshold }) {
 // Shorten race names: strip parentheticals, known suffixes, and cap length
 // "RBC Brooklyn Half (Popular® Brooklyn Half)" → "RBC Brooklyn Half"
 // "Run as One JP Morgan" → "Run as One"
-function shortRaceName(name, max = 22) {
+// ─── Race-name abbreviation table — Phase 4r.narrative.5.fix.14 ────────────
+// Maps full city / region names to short forms used in race chips. The
+// table is applied ALWAYS (not just when over the max length) so the
+// badge reads consistently across surfaces — e.g. "HYROX New York"
+// renders as "HYROX NY" on the hero rail AND on the EdgeIQ race tile
+// AND in any future surface that uses this helper.
+//
+// Longer phrases must be tried first so "new york city" → "NYC" wins
+// over "new york" → "NY". The sort at the bottom guarantees that
+// without the caller having to hand-order the object.
+const _RACE_CITY_ABBREVS_RAW = {
+  // Multi-word entries first (lookup is case-insensitive)
+  'new york city': 'NYC',
+  'rio de janeiro': 'Rio',
+  'san francisco': 'SF',
+  'washington dc': 'DC',
+  'los angeles':   'LA',
+  'cape town':     'CPT',
+  'hong kong':     'HK',
+  'las vegas':     'LV',
+  'san diego':     'SD',
+  'new york':      'NY',
+  // Common US cities
+  'washington':    'DC',
+  'philadelphia':  'PHL',
+  'boston':        'BOS',
+  'chicago':       'CHI',
+  'seattle':       'SEA',
+  'portland':      'PDX',
+  'detroit':       'DET',
+  'phoenix':       'PHX',
+  'denver':        'DEN',
+  'houston':       'HOU',
+  'dallas':        'DAL',
+  'atlanta':       'ATL',
+  'miami':         'MIA',
+  'austin':        'AUS',
+  // International majors
+  'london':        'LDN',
+  'paris':         'PAR',
+  'berlin':        'BER',
+  'tokyo':         'TYO',
+  'amsterdam':     'AMS',
+  'barcelona':     'BCN',
+  'madrid':        'MAD',
+  'munich':        'MUC',
+  'frankfurt':     'FRA',
+  'rome':          'ROM',
+  'dubai':         'DXB',
+  'singapore':     'SGP',
+  'sydney':        'SYD',
+  'toronto':       'TOR',
+  'montreal':      'MTL',
+  'vancouver':     'YVR',
+};
+const RACE_CITY_ABBREVS = Object.entries(_RACE_CITY_ABBREVS_RAW)
+  .sort((a, b) => b[0].length - a[0].length);
+
+// Adaptive race-name shortener.
+//   1. Strip parenthetical suffixes  ("HYROX Berlin (2026)" → "HYROX Berlin")
+//   2. Strip common sponsor suffixes (JP Morgan, Chase, Corporate Challenge,
+//      "presented by ...")
+//   3. ALWAYS apply city abbreviations from the table above. Longer phrases
+//      win because the lookup table is sorted by phrase length desc.
+//   4. If still over `max`, truncate with ellipsis as a last resort.
+//
+// `max` is the target length for the FINAL string. Callers tune it per
+// surface: hero rail badge passes ~18 (very tight); web race tile passes
+// 28; debug surfaces can pass higher.
+export function shortRaceName(name, max = 22) {
   if (!name) return 'Race';
-  let s = name.replace(/\s*\(.*\)\s*$/, '').trim();
-  // Remove common sponsor/org suffixes
-  s = s.replace(/\s+(JP\s*Morgan|Chase|Corporate\s*Challenge)\s*$/i, '').trim();
+  let s = String(name).replace(/\s*\(.*\)\s*$/, '').trim();
+  // Sponsor suffix strip
+  s = s.replace(/\s+(JP\s*Morgan|Chase|Corporate\s*Challenge|presented\s*by.*)$/i, '').trim();
+  // City abbreviation — always applied so the badge is consistent across
+  // surfaces (not "HYROX New York" on web + "HYROX NY" on mobile).
+  for (const [phrase, abbr] of RACE_CITY_ABBREVS) {
+    const re = new RegExp(`\\b${phrase}\\b`, 'gi');
+    s = s.replace(re, abbr);
+  }
+  // Collapse any double spaces introduced by the regexes
+  s = s.replace(/\s+/g, ' ').trim();
+  // Last-resort ellipsis if still over budget
   if (s.length > max) s = s.slice(0, max - 1).trim() + '…';
   return s;
 }
 
-function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, scoreSuffix, statusWord, statusColor, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance }) {
+// ─── Debug — Phase 4r.narrative.5.fix.15 ──────────────────────────────────
+// Expose shortRaceName + the abbreviation table to the console so you can
+// verify the algorithm without seeding a race in storage. Usage:
+//
+//   window.shortRaceNameDebug('HYROX New York')
+//     → { input: 'HYROX New York', output: 'HYROX NY',
+//         steps: [{stage: 'strip-parens', after: 'HYROX New York'},
+//                 {stage: 'strip-sponsor', after: 'HYROX New York'},
+//                 {stage: 'abbrev:new york→NY', after: 'HYROX NY'},
+//                 {stage: 'within max', after: 'HYROX NY'}],
+//         max: 16, abbrevCount: 30 }
+//
+//   window.shortRaceNameDebug()
+//     → runs the test suite below against a set of canonical race names
+//       and prints a table — useful for spot-checking the table after
+//       editing _RACE_CITY_ABBREVS_RAW.
+if (typeof window !== 'undefined') {
+  window.shortRaceNameDebug = function shortRaceNameDebug(name, max = 16) {
+    if (name == null) {
+      const samples = [
+        'HYROX New York',
+        'TCS New York City Marathon',
+        'Berlin Marathon',
+        'London Marathon',
+        'HYROX San Francisco',
+        'HYROX Los Angeles',
+        'HYROX Washington DC',
+        'Tokyo Marathon',
+        'HYROX Salt Lake City',  // unknown — should ellipsis
+        'HYROX Boston (2026)',   // parenthetical stripped
+        'NYC Marathon presented by TCS', // sponsor suffix stripped
+        'Stockholm Marathon',     // single-word unknown city
+      ];
+      // eslint-disable-next-line no-console
+      console.table(samples.map(s => ({
+        input: s, output: shortRaceName(s, max), max,
+      })));
+      return samples.map(s => ({ input: s, output: shortRaceName(s, max) }));
+    }
+    // Detailed single-name trace
+    const steps = [];
+    let s = String(name);
+    steps.push({ stage: 'input', after: s });
+    s = s.replace(/\s*\(.*\)\s*$/, '').trim();
+    steps.push({ stage: 'strip-parens', after: s });
+    s = s.replace(/\s+(JP\s*Morgan|Chase|Corporate\s*Challenge|presented\s*by.*)$/i, '').trim();
+    steps.push({ stage: 'strip-sponsor', after: s });
+    for (const [phrase, abbr] of RACE_CITY_ABBREVS) {
+      const re = new RegExp(`\\b${phrase}\\b`, 'gi');
+      const before = s;
+      s = s.replace(re, abbr);
+      if (before !== s) steps.push({ stage: `abbrev:${phrase}→${abbr}`, after: s });
+    }
+    s = s.replace(/\s+/g, ' ').trim();
+    if (s.length > max) {
+      s = s.slice(0, max - 1).trim() + '…';
+      steps.push({ stage: `truncate@${max}`, after: s });
+    } else {
+      steps.push({ stage: 'within max', after: s });
+    }
+    return {
+      input: String(name),
+      output: s,
+      max,
+      steps,
+      abbrevCount: RACE_CITY_ABBREVS.length,
+    };
+  };
+}
+
+function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, scoreSuffix, statusWord, statusColor, intelHeadline, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance }) {
   // `score` / `moonScore` are 0-100 projections of the signed DCY value, used
   // only for the ring geometry. `scoreLabel` / `moonScoreLabel` hold the
   // signed text ("+7", "−4") shown inside the ring.
@@ -835,7 +1004,12 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
   // race details still live on EdgeIQ / Play.
   const hasRace = raceDaysLeft != null && raceDaysLeft >= 0 && raceDaysLeft <= 7;
   const raceDateStr = raceDate ? new Date(raceDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-  const shortName = shortRaceName(raceName);
+  // Phase 4r.narrative.5.fix.14 — tighter budget for the hero rail badge.
+  // Default max=22 is right for surfaces with more room (web race tile);
+  // the hero badge is the most space-constrained, so we ask for 16 chars
+  // max. The abbreviation lookup catches most known cities first, so
+  // "HYROX New York" → "HYROX NY" (8 chars) regardless of max anyway.
+  const shortName = shortRaceName(raceName, 16);
 
   return (
     <div style={{
@@ -849,6 +1023,15 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
         position: 'absolute', top: 0, left: 0, right: 0, height: 1,
         background: `linear-gradient(90deg, transparent, ${statusColor}33, transparent)`,
       }} />
+
+      {/* Phase 4r.narrative.5.fix.14 — Race badge BACK in the flex row.
+          fix.12 had moved it above as its own row; user feedback was that
+          it was the wrong call — the badge belongs in the top-right
+          corner of the score card as a glanceable taper indicator. The
+          REAL fix is making the badge tight enough that it doesn't
+          squeeze the narrative column: shortRaceName() now ALWAYS
+          abbreviates known cities ("HYROX New York" → "HYROX NY"), and
+          the badge typography is tightened slightly. */}
 
       {/* Rings + Info + Race */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
@@ -883,27 +1066,31 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
           </div>
         </div>
 
-        {/* Status + Pills */}
+        {/* Status — Phase 4r.narrative.5.fix.16: narrative + factor chips
+            promoted OUT of this column to a full-width row below (see
+            below the closing </div> of the rings row). The middle column
+            now carries only the "Daily Score" label + status word, so
+            it sizes naturally to the ring height. */}
         <div style={{ flex: 1, alignSelf: 'center' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>Daily Score{scoreSuffix || ''}</div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: statusColor }}>{statusWord}</div>
-          <div style={{ display: 'flex', gap: 3, marginTop: 5, flexWrap: 'wrap' }}>
-            {factors.map((f, i) => (
-              <span key={i} style={{
-                fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6,
-                display: 'inline-flex', alignItems: 'center', gap: 3,
-                background: f.type === 'warn' ? 'rgba(207,107,107,0.1)' :
-                            f.type === 'ok'   ? 'rgba(91,191,138,0.08)' : 'rgba(255,255,255,0.04)',
-                color:      f.type === 'warn' ? C.red :
-                            f.type === 'ok'   ? C.green : T3,
-              }}>
-                {f.type === 'warn' ? '✗' : f.type === 'ok' ? '✓' : '—'} {f.label}
-              </span>
-            ))}
-          </div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Daily Score{scoreSuffix || ''}</div>
+          {/* Phase 4r.narrative.5.fix.17 — status word bumped from 14 → 18.
+              It's the headline of the hero rail (the user's at-a-glance read
+              for "where am I today?") and was undersized relative to its
+              importance, especially with the narrative+chips now sitting
+              full-width below it. 18 is on par with the +22 inside the
+              score ring and the bottom-stat values, so it reads as a
+              proper focal point. */}
+          <div style={{ fontSize: 18, fontWeight: 700, color: statusColor, lineHeight: 1.1 }}>{statusWord}</div>
         </div>
 
-        {/* Race countdown — compact pill, top-aligned */}
+        {/* Race countdown — compact pill, top-aligned.
+            Phase 4r.narrative.5.fix.14 — back in this row (where it
+            belongs), tightened up. shortRaceName(raceName, 14) now
+            abbreviates known cities aggressively so "HYROX New York"
+            renders as "HYROX NY" (8 chars) rather than the full name
+            (14 chars). That alone reclaims enough horizontal space for
+            the narrative beside it to wrap cleanly to 2 lines without
+            mid-sentence clipping. */}
         {hasRace && (
           <div style={{
             flexShrink: 0, padding: '5px 9px', borderRadius: 10,
@@ -921,6 +1108,56 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
           </div>
         )}
       </div>
+
+      {/* Phase 4r.narrative.5.fix.16 — Narrative + factor chips promoted to
+          full-width rows below the rings/badge row. Previously these
+          lived inside the middle status column, which the race badge
+          squeezed: the narrative wrapped short and the 4 factor chips
+          spilled onto 2 rows. Giving them the FULL card width fixes
+          both: 2-line narrative gets ~2× the horizontal budget, and 4
+          chips fit comfortably on a single row at ~75 px each. */}
+      {intelHeadline && (
+        <div style={{
+          fontSize: 11, fontWeight: 500, color: T3,
+          fontStyle: 'italic',
+          marginTop: -2, marginBottom: 7,
+          lineHeight: 1.4,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          overflowWrap: 'anywhere',
+        }}>
+          <span aria-hidden style={{
+            color: C.blue, fontStyle: 'normal',
+            fontWeight: 700, marginRight: 4,
+          }}>→</span>{intelHeadline}
+        </div>
+      )}
+      {factors?.length > 0 && (
+        <div style={{
+          display: 'flex', gap: 4, marginBottom: 8,
+          // flexWrap: 'wrap' as a safety net for ultra-narrow viewports,
+          // but with full card width and 4 chips this should always sit
+          // on one line. If you see them wrap, the card padding ballooned
+          // or chip widths grew.
+          flexWrap: 'wrap',
+        }}>
+          {factors.map((f, i) => (
+            <span key={i} style={{
+              fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 6,
+              display: 'inline-flex', alignItems: 'center', gap: 3,
+              whiteSpace: 'nowrap',
+              background: f.type === 'warn' ? 'rgba(207,107,107,0.1)' :
+                          f.type === 'ok'   ? 'rgba(91,191,138,0.08)' : 'rgba(255,255,255,0.04)',
+              color:      f.type === 'warn' ? C.red :
+                          f.type === 'ok'   ? C.green : T3,
+            }}>
+              {f.type === 'warn' ? '✗' : f.type === 'ok' ? '✓' : '—'} {f.label}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Bottom stat row */}
       <div style={{ display: 'flex', borderTop: `1px solid ${BORDER}`, paddingTop: 8 }}>
@@ -1739,64 +1976,44 @@ function hexToRgb(hex) {
   return r ? [parseInt(r[1],16), parseInt(r[2],16), parseInt(r[3],16)] : [91,155,213];
 }
 
-// ─── Mobile EdgeIQ Calibration Strip ───────────────────────────────────────
-// Sits at the top of the EdgeIQ tab on mobile. Mirrors the desktop
-// calibration summary: today's target + drift tiles + path-to-target +
-// body-pillar prompts only (on-pace / off-pace / weigh-ins).
-// Calibration-pillar prompts are intentionally excluded so the Start menu
-// remains the single home for the day's coaching headline.
-function MobileCalibrationStrip({ onOpenTab }) {
-  const storageVersion = useStorageVersion();
-  const cal  = useMemo(() => { try { return assessCalibration({ weeks: 4 }); } catch { return null; } }, [storageVersion]);
-  const rec  = useMemo(() => { try { return recommendCalorieTarget(); }       catch { return null; } }, [storageVersion]);
-
-  if (!cal || cal.status === 'no-data') return null;
-
-  const statusColor =
-    cal.status === 'aligned'    ? '#4ade80' :
-    cal.status === 'under-loss' ? '#fbbf24' :
-    cal.status === 'over-loss'  ? '#60a5fa' :
-                                  T3;
-  const statusLabel =
-    cal.status === 'aligned'    ? 'ON PACE' :
-    cal.status === 'under-loss' ? 'BEHIND'  :
-    cal.status === 'over-loss'  ? 'AHEAD'   :
-                                  cal.status.toUpperCase();
-
-  // Compact one-line summary
-  const driftStr = `${cal.driftLbs > 0 ? '+' : ''}${cal.driftLbs.toFixed(1)} lb drift`;
-  const etaPart  = rec?.projectedDate ? ` · ETA ${rec.projectedDate}` : '';
-  const goalPart = rec?.userTargetDate
-    ? ` vs ${rec.userTargetDate}${rec?.requiredLossRate != null && rec.requiredLossRate > 1.0 ? ' — agg' : ''}`
-    : '';
-
-  // Static ticker — Goals tab isn't on the mobile bottom nav, so this is
-  // intentionally a passive status display. Full diagnostic lives on web.
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '10px 12px', borderRadius: 10,
-      background: 'rgba(255,255,255,0.025)',
-      borderLeft: `3px solid ${statusColor}`,
-      userSelect: 'none',
-      marginBottom: 10,
-    }}>
-      <span style={{ fontSize: 10, fontWeight: 800, color: statusColor, letterSpacing: '0.05em', flexShrink: 0 }}>
-        {statusLabel}
-      </span>
-      <span style={{ fontSize: 10, color: T2, fontFamily: 'monospace', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {driftStr}{etaPart}{goalPart}
-      </span>
-    </div>
-  );
-}
+// Phase 4r.hygiene.1 — MobileCalibrationStrip removed. The function was
+// last rendered at the top of MobileEdgeIQ; that render was deleted in
+// 4r.intel.24 because the "BEHIND +X.X lb drift" signal duplicated what
+// the primary intelligence tile + WEIGHT cockpit cell already showed.
+// The function itself sat as dead code with no remaining callers until
+// this hygiene pass. The calibration logic (assessCalibration /
+// recommendCalorieTarget) still lives in energyBalance.js and is used by
+// web EdgeIQ + Calendar — only the mobile strip is gone.
 
 // ─── Today's energy target line (above coaching prompts) ───────────────────
 // Shows the activity-adjusted calorie + macro target. Updates as the user
 // logs activity throughout the day.
 function MobileTodaysTarget() {
   const storageVersion = useStorageVersion();
-  const dyn = useMemo(() => getDynamicMacroTarget(), [storageVersion]);
+  // Phase 4r.dataspine.4 — all fields sourced from getEffectiveTargets.
+  // baseline = derived MINUS the eat-back component (today's target
+  // before activity-credit). isTrainingDay = eat-back > 0. Macros
+  // (protein/carbs/fat/fiber) come from the new macro fields
+  // (deriveDailyMacros). Legacy getDynamicMacroTarget shim removed.
+  const dyn = useMemo(() => {
+    try {
+      const eff = getEffectiveTargets();
+      if (!eff?.dailyCalories?.effective) return { dynamicTarget: null };
+      const calExplain = eff.dailyCalories.explain || {};
+      const eatBack = calExplain.components?.eatBack || 0;
+      const dynamicTarget = eff.dailyCalories.effective;
+      return {
+        dynamicTarget,
+        baseline:     dynamicTarget - eatBack,
+        eatBackKcal:  eatBack,
+        isTrainingDay: eatBack > 0,
+        proteinG:     eff.dailyProtein?.effective || 0,
+        carbsG:       eff.dailyCarbs?.effective   || 0,
+        fatG:         eff.dailyFat?.effective     || 0,
+        fiberG:       eff.dailyFiber?.effective   || 0,
+      };
+    } catch { return { dynamicTarget: null }; }
+  }, [storageVersion]);
   if (!dyn.dynamicTarget) return null;
   return (
     <div style={{
@@ -2587,6 +2804,50 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   };
   const ptr = usePullToRefresh(handleRefresh);
 
+  // Phase 4r.intel.27 — Today-scoped action line beneath the DCY
+  // status word. PREVIOUSLY this surfaced the top strategic conflict
+  // title (e.g. "Weight cut + race in 10 days (A priority)") which
+  // (a) had no action, just exposition, and (b) read as if it were
+  // explaining the DCY score — but the DCY score is a today signal
+  // (moves when you eat) while the strategic conflict is multi-week.
+  // The two were on different timescales and the visual juxtaposition
+  // was misleading.
+  //
+  // Now: pull the highest-severity card from the synthesizer's
+  // ranked output, preferring TODAY-actionable pillars (Fuel >
+  // Recover > Train) over strategic ones (Goal/Body). Show the
+  // card's RECOMMENDATION (not its title) with a → glyph so it
+  // reads as "do this now." Strategic conflicts continue to live
+  // on EdgeIQ where they have full context.
+  const intelHeadline = useMemo(() => safeCompute('intelHeadline', () => {
+    const _acts  = getUnifiedActivities();
+    const _sleep = cleanSleepForAveraging(storage.get('sleep') || []);
+    const _hrv   = storage.get('hrv') || [];
+    const _wt    = storage.get('weight') || [];
+    const _cron  = storage.get('cronometer') || [];
+    const _prof  = { ...(storage.get('profile') || {}), ...getGoals() };
+    const us = computeUserState({
+      activities: _acts, sleep: _sleep, hrv: _hrv,
+      weight: _wt, cronometer: _cron, profile: _prof,
+    });
+    if (!us) return null;
+    // Phase 4r.intel.28 — synthesizeRecommendations returns the cards
+    // ARRAY directly (intelligence.js:891), not {cards:[...]}. Defensive
+    // handling in case the return shape changes again.
+    const synth = synthesizeRecommendations(us, { rawInsights: [], rawPrompts: [] });
+    const cards = Array.isArray(synth) ? synth : (synth?.cards || []);
+    if (!cards.length) return null;
+    // Today-scoped pillars first; severity within those.
+    const TODAY_PILLARS = ['Fuel', 'Recover', 'Train'];
+    const sevRank = { concern: 3, attention: 2, info: 1, positive: 0 };
+    const todayCards = cards.filter(c => TODAY_PILLARS.includes(c.pillar) && c.recommendation);
+    todayCards.sort((a, b) => (sevRank[b.severity] || 0) - (sevRank[a.severity] || 0));
+    const top = todayCards[0] || cards.find(c => c.recommendation);
+    if (!top || !top.recommendation) return null;
+    return (top.recommendation || '').trim() || null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [storageVersion]);
+
   // ── RENDER ──
   return (
     <div
@@ -2633,6 +2894,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         scoreSuffix={scoreSuffix}
         statusWord={statusWord}
         statusColor={statusColor}
+        intelHeadline={intelHeadline}
         factors={factors}
         stats={heroStats}
         raceDaysLeft={raceDaysLeft}
@@ -2668,10 +2930,9 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         return <CoachingHeroCard />;
       })()}
 
-      {/* Phase 4r.intel.12 — Insights strip on Play tab. Compact variant
-          (no section header) so the cockpit tiles below stay close. Hidden
-          when nothing significant — empty state stays out of the way. */}
-      <InsightsPanel compact maxItems={3} />
+      {/* Phase 4r.intel.12-fix6 — InsightsPanel moved off Start screen and
+          onto EdgeIQ where the rest of the analytical surface lives. Play
+          stays focused on "what to do now" instead of pattern callouts. */}
 
       {/* ── RUN ── */}
       <CategoryLabel label="Run" color={C.blue} />
@@ -3305,6 +3566,159 @@ function SystemDetailPanel({ systemId, data, comment }) {
   );
 }
 
+// ─── Mobile-compact intelligence card grid (Phase 4r.intel.23) ─────────────
+//
+// Renders the synthesizer's cards in a single-column stacked layout for
+// mobile. Same color-coded chrome as web (severity stripe on the left,
+// pillar tag in the header, headline + detail + recommendation) but
+// scaled down: smaller font, tighter padding, 2-line clamp on each
+// text block so cards stay short and the user can scan all 4 without
+// excessive scrolling.
+
+// ─── Mobile Priority tile (Phase 4r.intel.29) ─────────────────────────────
+//
+// Hero glance tile for the top synthesizer hypothesis. Sits at the very
+// top of MobileEdgeIQ. One block of text to read at first glance plus
+// an "ALSO:" footnote chip-line for everything else the synth flagged.
+//
+// Design contract (iterated through 4r.intel.24 → .27 → .29):
+//   - Combined header band reads "PRIORITY · {PILLAR}" so the section
+//     label and the pillar tag don't repeat as two small uppercase
+//     lines (4r.intel.27 had them stacked; user reported the
+//     repetition as confusing).
+//   - Severity is visually loud: thick top accent bar (5px), severity
+//     word badge on the right of the header band ("CONCERN" / "WATCH"
+//     / "NOTE" / "ON TRACK"), and a subtle severity-tinted background
+//     wash inside the tile. The earlier red top border alone wasn't
+//     pulling enough weight against the equally-bordered Health
+//     Systems cells.
+//   - Headline is the visual focal point: larger font (15px), bolder,
+//     stands alone — no inline pillar tag fighting for attention
+//     above it.
+//   - Footnote stays the same: ALSO: TAG phrase · TAG phrase, two
+//     lines max via CSS line-clamp, no JS truncation.
+function MobileIntelligenceCards({ cards }) {
+  if (!cards || cards.length === 0) return null;
+  const SEV_COLOR = {
+    concern:   '#f87171', critical:  '#f87171',
+    attention: '#fbbf24', warning:   '#fbbf24',
+    info:      '#60a5fa',
+    positive:  '#4ade80',
+  };
+  // Severity word badge — short, all-caps, color-matched.
+  const SEV_LABEL = {
+    concern: 'CONCERN', critical: 'CONCERN',
+    attention: 'WATCH', warning: 'WATCH',
+    info: 'NOTE',
+    positive: 'ON TRACK',
+  };
+  // Subtle tint applied to the tile background (rgba so it reads as a
+  // wash, not a solid panel). The number is the alpha — kept low (≈8%)
+  // so the wash hints at severity without competing with the headline
+  // text for legibility.
+  const SEV_TINT = {
+    concern:   'rgba(248,113,113,0.08)', critical: 'rgba(248,113,113,0.08)',
+    attention: 'rgba(251,191,36,0.07)',  warning:  'rgba(251,191,36,0.07)',
+    info:      'rgba(96,165,250,0.06)',
+    positive:  'rgba(74,222,128,0.06)',
+  };
+
+  // Cards are pre-ranked by severity inside synthesizeRecommendations.
+  const primary    = cards[0];
+  const others     = cards.slice(1);
+  const accent     = SEV_COLOR[primary.severity] || '#60a5fa';
+  const sevLabel   = SEV_LABEL[primary.severity] || 'NOTE';
+  const tintBg     = SEV_TINT[primary.severity]  || 'rgba(96,165,250,0.06)';
+  const pillarTag  = (primary.pillar || '').toUpperCase();
+
+  // Footnote: one-line summary of the remaining cards. Each entry is
+  // "PILLAR phrase". CSS line-clamp on the container (2 lines + word
+  // wrap) handles overflow; no JS truncation per 4r.intel.26.
+  const footnote = others.length === 0 ? null : others.map(c => {
+    const tag    = (c.pillar || '').toUpperCase();
+    const phrase = (c.title || c.detail || '').replace(/[.!?]+$/, '').trim();
+    return phrase ? `${tag} ${phrase}` : tag;
+  }).join(' · ');
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      {/* Combined header band: section label + pillar in one line so
+          we no longer repeat "Priority" outside the tile AND "GOAL"
+          inside it. Severity word sits on the right, color-coded. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 10, fontWeight: 700, letterSpacing: '0.1em',
+        color: 'var(--text-muted)', textTransform: 'uppercase',
+        marginTop: 6, marginBottom: 5,
+      }}>
+        <span>Priority{pillarTag ? ` · ${pillarTag}` : ''}</span>
+        <div style={{ flex: 1, height: 1, background: 'var(--border-default)' }} />
+        <span style={{
+          color: accent, fontSize: 9, fontWeight: 800,
+          letterSpacing: '0.12em',
+          padding: '2px 7px', borderRadius: 4,
+          background: `${accent}1f`,
+        }}>{sevLabel}</span>
+      </div>
+
+      {/* The tile itself: severity tint background + thick top accent
+          bar. Headline is the focal point at 15px (was 13px in the
+          previous version); pillar tag is no longer repeated inside
+          since the header band above carries it. */}
+      <div style={{
+        background: tintBg,
+        border: '0.5px solid var(--border-default)',
+        borderTop: `5px solid ${accent}`,
+        borderRadius: 'var(--radius-md, 8px)',
+        padding: '12px 13px',
+        display: 'flex', flexDirection: 'column', gap: 8,
+      }}>
+        {/* Headline — the one thing we want them to read. */}
+        <div style={{
+          fontSize: 15, fontWeight: 700,
+          color: 'var(--text-primary)',
+          lineHeight: 1.3,
+          letterSpacing: '-0.01em',
+        }}>
+          {primary.title}
+        </div>
+
+        {/* Recommendation — the one action we want them to take. */}
+        {primary.recommendation && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 7,
+            fontSize: 12, lineHeight: 1.4,
+            color: 'var(--text-secondary)',
+          }}>
+            <span aria-hidden style={{
+              color: accent, fontWeight: 800, flexShrink: 0,
+              fontSize: 13, lineHeight: 1.3,
+            }}>→</span>
+            <span>{primary.recommendation}</span>
+          </div>
+        )}
+
+        {/* Footnote — every other concern collapsed to a tag list. */}
+        {footnote && (
+          <div style={{
+            marginTop: 2, paddingTop: 7,
+            borderTop: `0.5px dashed ${accent}40`,
+            fontSize: 9.5, color: 'var(--text-muted)',
+            letterSpacing: '0.03em',
+            display: '-webkit-box', WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical', overflow: 'hidden',
+            lineHeight: 1.4,
+            overflowWrap: 'anywhere',
+          }}>
+            <span style={{ fontWeight: 800, marginRight: 4, color: 'var(--text-secondary)' }}>ALSO:</span>
+            {footnote}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function MobileEdgeIQ({ data, onOpenTab }) {
   const today = localDate();
   const report = useMemo(() => getSystemsReport(today), [today]);
@@ -3321,12 +3735,42 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
 
   // Cockpit data
   const G = getGoals();
+  const profile = useMemo(() => ({ ...(storage.get('profile') || {}), ...G }), [G]);
   // Unified activity universe — see core/dcyMath.js allActivities() for
   // the full dedup model (CSV/manual > FIT, HC excluded).
   const activities = getUnifiedActivities();
   const hrvData = storage.get('hrv') || [];
   const sleepData = cleanSleepForAveraging(storage.get('sleep') || []);
   const cronometer = storage.get('cronometer') || [];
+
+  // Phase 4r.intel.23 — Mobile intelligence pipeline. Same shape as
+  // TrainingTab (web EdgeIQ): build userState from current data, then
+  // synthesize the multi-hypothesis card grid. Cards render below the
+  // Health Systems grid in a mobile-compact stacked layout.
+  const intelligence = useMemo(() => {
+    // Phase 4r.hygiene.1 — silent catches replaced with safeCompute
+    // so failures surface in DevTools as `[MobileEdgeIQ:*] failed: …`
+    // instead of returning empty data with no diagnostic.
+    const rawInsights = safeCompute('MobileEdgeIQ:generateInsights', () =>
+      generateInsights({
+        activities, sleep: sleepData, hrv: hrvData,
+        weight: storage.get('weight') || [], cronometer, profile,
+      }) || [], []
+    );
+    const userState = safeCompute('MobileEdgeIQ:computeUserState', () =>
+      computeUserState({
+        activities, sleep: sleepData, hrv: hrvData,
+        weight: storage.get('weight') || [], cronometer, profile,
+      })
+    );
+    const cards = userState
+      ? safeCompute('MobileEdgeIQ:synthesizeRecommendations', () =>
+          synthesizeRecommendations(userState, { rawInsights, rawPrompts: [] }) || [], []
+        )
+      : [];
+    return { userState, cards };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activities, sleepData, hrvData, cronometer, profile]);
   // Phase 4r.cockpit.1 — weight data for the new Weight tile (was missing
   // from the EdgeIQ scope until now; the Signal Cockpit rewrite needs it).
   const weightData = storage.get('weight') || [];
@@ -3473,128 +3917,4 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <div style={{
               width: 22, height: 22, borderRadius: 6,
-              background: 'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',
-              border: '1px solid rgba(91,155,213,0.12)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 10, color: C.blue, fontWeight: 800,
-            }}>A</div>
-            <span style={{ fontSize: 10, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5, minWidth: 0 }}>
-            <Icon.GemSpark color={C.purple} size={18} />
-            <span style={{
-              fontSize: 16, fontWeight: 600, color: T1,
-              letterSpacing: '0.01em',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>EdgeIQ</span>
-          </div>
-        </div>
-        <span style={{
-          fontSize: 11, fontWeight: 500, color: T3,
-          letterSpacing: '0.04em',
-          whiteSpace: 'nowrap', marginTop: 4,
-        }}>{(()=>{const d=new Date();return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});})()}</span>
-      </div>
-
-      {/* ── CALIBRATION STRIP — today's target + drift tiles + path-to-target
-          + positive body prompts. Calibration-pillar prompts (drift card,
-          RMR floor, log coverage, phase) are intentionally excluded because
-          those drive the Start screen's single-headline coaching card.
-          We keep BODY-pillar prompts here so on-pace / off-pace weight
-          callouts have a home. ── */}
-      <MobileCalibrationStrip onOpenTab={onOpenTab} />
-
-      {/* ── HEALTH SYSTEMS ── */}
-      <div style={sectionHeader}>Health Systems
-        <div style={{ display: 'flex', gap: 6, fontSize: 10, color: T3, marginLeft: 'auto' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
-          </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />{focusCount}
-          </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171' }} />{defCount}
-          </span>
-        </div>
-      </div>
-      <div style={card}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
-          {report.map(sys => <MobileSystemTile key={sys.id} sys={sys} isActive={expandedSystem === sys.id} onTap={handleTileTap} />)}
-        </div>
-        {expandedSystem && <SystemDetailPanel systemId={expandedSystem} data={data} comment={report.find(s => s.id === expandedSystem)?.comment} />}
-      </div>
-
-      {/* ── SIGNAL COCKPIT ── */}
-      {/* Phase 4r.cockpit.1 — 4×2 grid, all tiles 7-day window. Sub-label
-          under each tile explicitly states the time scope so there's no
-          ambiguity ("7d avg" / "7d total" / "+0.4 in 7d" etc.). */}
-      <div style={sectionHeader}>Signal Cockpit <div style={shLine} /></div>
-      <div style={card}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-          {cockpitItems.map((item, i) => {
-            const goalVal = parseFloat(item.goal) || 0;
-            const val = parseFloat(item.value) || 0;
-            // Phase 4r.cockpit.4 — lower-is-better metrics (RHR, Weight)
-            // need inverted progress math: when val <= goal you've achieved
-            // (or beaten) the target → full bar; when val > goal the bar
-            // shrinks proportionally as a "distance from goal" indicator.
-            const pct = goalVal > 0
-              ? (item.lowerIsBetter
-                  ? (val <= goalVal ? 1 : Math.max(0, goalVal / val))
-                  : Math.min(val / goalVal, 1))
-              : 0;
-            return (
-              <div key={i} style={{
-                position: 'relative', overflow: 'hidden',
-                background: CARD_BG, borderRadius: 12, padding: '10px 6px 8px', textAlign: 'center',
-                border: `1px solid ${BORDER}`,
-              }}>
-                <div style={{ position: 'absolute', top: 0, left: 6, right: 6, height: 2, borderRadius: '0 0 2px 2px', background: item.color, opacity: 0.5 }} />
-                <div style={{ fontSize: 18, fontWeight: 800, color: item.color, lineHeight: 1 }}>{item.value}</div>
-                <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{item.unit}</div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: T2, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
-                {item.sub && (
-                  <div style={{ fontSize: 9, color: T4, marginTop: 2, fontWeight: 500 }}>{item.sub}</div>
-                )}
-                {goalVal > 0 && (
-                  <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 4 }}>
-                    <div style={{ height: 3, background: item.color, borderRadius: 2, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── DCY DETAILS (relocated from Start screen — fits the calibration
-          mood of EdgeIQ better than the start headline) ── */}
-      <div style={sectionHeader}>DCY Breakdown <div style={shLine} /></div>
-      <DcyDetails dcyDaily={dcyDaily} />
-
-      {/* ── ANNUAL PROGRESS ── */}
-      <div style={sectionHeader}>Annual Progress <div style={shLine} /></div>
-      <div style={card}>
-        {[
-          { label: 'Run distance', actual: totalMi.toFixed(0), target: G.annualRunDistanceTarget || 800, unit: 'mi', color: C.blue },
-          { label: 'Workouts', actual: totalSessions, target: G.annualWorkoutsTarget || 200, unit: '', color: C.purple },
-        ].map((p, i) => {
-          const pct = Math.min(parseFloat(p.actual) / parseFloat(p.target), 1);
-          return (
-            <div key={i} style={{ marginBottom: i === 0 ? 10 : 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: T2, marginBottom: 4 }}>
-                <span style={{ fontWeight: 600 }}>{p.label}</span>
-                <span style={{ fontWeight: 600 }}>{p.actual} / {p.target} {p.unit} <span style={{ color: T4, fontWeight: 500 }}>({Math.round(pct * 100)}%)</span></span>
-              </div>
-              <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
-                <div style={{ height: 5, background: p.color, borderRadius: 3, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-    </div>
-  );
-}
+          

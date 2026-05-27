@@ -22,7 +22,10 @@
 import { canonicalActivityType } from '../dcyMath.js';
 import { isRun, isStrength as isStrengthAct } from '../activityClass.js';
 import { timeframesFromCollection, aggregateTimeframes } from './kriAggregate.js';
-import { resolveCalorieTarget } from '../calorieTarget.js';
+// Phase 4r.dataspine.4 — Migrated from legacy resolveCalorieTarget to
+// the canonical Layer 3 reader getEffectiveTargets (see DATAMODEL.md).
+// resolveCalorieTarget is now deprecated/deleted.
+import { getEffectiveTargets } from '../goalModel.js';
 
 // Phase 4m.2.7 — VDOT race-time predictor (Jack Daniels' lookup table).
 // Used by the Race Predictor metric as a fallback when Garmin doesn't
@@ -92,6 +95,97 @@ export function riegelPredictFromRun(run, field) {
   const D2km = _FIELD_TO_KM[field];
   if (!D2km) return null;
   return Math.round(T1 * Math.pow(D2km / D1km, 1.06));
+}
+
+// Phase 4r.race.1 — find the best empirical anchor for race-time projection.
+// Replaces the previous "use Garmin's racePredictor raw" approach, which is
+// driven by VO2max and routinely under-predicts trained runners by 5-20%.
+// User reported a HM finish ~25-30 min faster than the tile's prediction.
+//
+// Priority chain (highest evidence first):
+//   1. Race effort at a standard distance — distance within ±5% of 5K/10K/HM/M
+//      AND (avg pace was demonstrably fast OR avg HR was in threshold/race zone).
+//      Window: last 24 weeks. Bias toward most-recent if multiple qualify.
+//   2. Quality long run — distance ≥ 10 mi, within last 8 weeks. No effort
+//      filter (Riegel will simply reflect the pace you sustained).
+//   3. null — caller should fall back to Garmin's racePredictor.
+//
+// Returns: { run, tier, label } or null.
+//   tier: 'race' | 'long'
+//   label: short string for the tile sublabel ('race effort 13.2mi · May 11', etc.)
+export function findEmpiricalRaceAnchor(activities) {
+  if (!Array.isArray(activities) || !activities.length) return null;
+  const today = new Date();
+  const daysOld = (dateStr) => {
+    if (!dateStr) return Infinity;
+    const d = new Date(`${dateStr}T12:00:00`);
+    if (!isFinite(d.getTime())) return Infinity;
+    return (today - d) / 86400000;
+  };
+  const STANDARD_KM = [5, 10, 21.1, 42.2];
+  const STANDARD_LABEL = { 5: '5K', 10: '10K', 21.1: 'HM', 42.2: 'M' };
+
+  // Build a list of runs with derived pace + km.
+  const runs = activities
+    .filter(a => isRun(a) && a?.distanceMi && a?.durationSecs)
+    .map(a => {
+      const km = (Number(a.distanceMi) || Number(a.distance_mi) || 0) * 1.60934;
+      const dur = Number(a.durationSecs) || 0;
+      const paceSecPerKm = km > 0 ? dur / km : Infinity;
+      return { run: a, km, dur, paceSecPerKm };
+    });
+
+  // ── Tier 1: race-effort at standard distance ────────────────────────────
+  // Distance must be within ±5% of a standard race distance. For "race effort"
+  // we use either: avgHR ≥ 85% of maxHR observed in the activity (threshold+
+  // zone), OR pace ≤ 92% of the median pace across recent ≥10mi runs (a
+  // simple "this was faster than your training" check).
+  const longRuns = runs.filter(r => r.km >= 16 && daysOld(r.run.date) <= 84);
+  const medianLongPace = (() => {
+    if (!longRuns.length) return null;
+    const sorted = longRuns.map(r => r.paceSecPerKm).sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  })();
+
+  const candidates = runs
+    .filter(r => daysOld(r.run.date) <= 168) // 24 weeks
+    .map(r => {
+      const match = STANDARD_KM.find(std => Math.abs(r.km - std) / std <= 0.05);
+      return { ...r, matchedKm: match || null };
+    })
+    .filter(r => r.matchedKm != null);
+
+  for (const c of candidates.sort((a, b) => (b.run.date || '').localeCompare(a.run.date || ''))) {
+    const hrHigh = c.run.maxHR && c.run.avgHR && (c.run.avgHR / c.run.maxHR) >= 0.85;
+    const paceFast = medianLongPace && c.paceSecPerKm <= medianLongPace * 0.92;
+    if (hrHigh || paceFast) {
+      const dateLabel = c.run.date || '';
+      return {
+        run: c.run,
+        tier: 'race',
+        label: `race effort · ${STANDARD_LABEL[c.matchedKm]} · ${dateLabel}`,
+      };
+    }
+  }
+
+  // ── Tier 2: quality long run within last 8 weeks ────────────────────────
+  // No effort filter — Riegel will inherit whatever pace you sustained. If
+  // the long was easy, the projection will be conservative (which is honest
+  // — your demonstrated 21k-pace projects to a 1:50 HM, not 1:30).
+  const longCandidates = runs
+    .filter(r => r.run.distanceMi >= 10 && daysOld(r.run.date) <= 56)
+    .sort((a, b) => (b.run.date || '').localeCompare(a.run.date || ''));
+  if (longCandidates.length) {
+    const c = longCandidates[0];
+    const miStr = (Number(c.run.distanceMi) || 0).toFixed(1);
+    return {
+      run: c.run,
+      tier: 'long',
+      label: `long run · ${miStr}mi · ${c.run.date || ''}`,
+    };
+  }
+
+  return null;
 }
 
 // Phase 4m.2.8 — Calibrated VDOT predictor (kept available as a secondary
@@ -618,34 +712,102 @@ export const TILE_METRICS = [
   {
     id: 'racePredictor', label: 'Race Predictor', category: 'run', unit: '',
     polarity: 'lower-better', // faster predicted time = better
-    historyOf: (ctx) => (ctx.activities || [])
-      .filter(a => isRun(a) && a?.racePredictor?.tHM)
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      .map(a => a.racePredictor.tHM),
-    compute: (ctx) => {
-      // Find most recent FIT with a racePredictor block
-      const runs = (ctx.activities || []).filter(a => a?.racePredictor)
+    // Phase 4r.race.1 — historyOf returns empirical Riegel projections from
+    // qualifying runs (race-effort or long run ≥ 10mi). The trend arrow now
+    // reflects evolving fitness as measured by what the user has ACTUALLY
+    // demonstrated, not Garmin's VO2max-derived ceiling.
+    historyOf: (ctx) => {
+      const acts = (ctx.activities || [])
+        .filter(a => isRun(a) && a?.distanceMi && a?.durationSecs)
         .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      const r = runs[0];
-      if (!r?.racePredictor) return null;
+      const out = [];
+      for (const a of acts) {
+        // Only project from runs that are themselves at least ~5K — Riegel
+        // gets noisy below that. Map every qualifying run to its HM
+        // projection (the default headline field).
+        const dMi = Number(a.distanceMi) || Number(a.distance_mi) || 0;
+        if (dMi < 3) continue;
+        const proj = riegelPredictFromRun(a, 'tHM');
+        if (proj && proj > 0) out.push(proj);
+      }
+      // Fall back to Garmin's projections if no qualifying activity data.
+      if (out.length === 0) {
+        return (ctx.activities || [])
+          .filter(a => isRun(a) && a?.racePredictor?.tHM)
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+          .map(a => a.racePredictor.tHM);
+      }
+      return out;
+    },
+    compute: (ctx) => {
       const fmt = s => {
-        if (s == null) return '—';
+        if (s == null || !Number.isFinite(s) || s <= 0) return '—';
         const h = Math.floor(s / 3600);
         const m = Math.floor((s % 3600) / 60);
         const sec = Math.round(s % 60);
         return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
                      : `${m}:${String(sec).padStart(2, '0')}`;
       };
-      const rp = r.racePredictor;
+
+      // Phase 4r.race.1 — empirical-first race-time projection.
+      // Previous version used Garmin's racePredictor.tHM raw, which is
+      // derived from VO2max and systematically under-predicts trained
+      // runners (user reported 25-30 min miss on an actual HM).
+      // New priority:
+      //   1. Empirical anchor (race-effort distance match OR quality long
+      //      run) → Riegel projection across all 4 standard distances.
+      //   2. Garmin's racePredictor block from most recent FIT — fallback.
+      const anchor = findEmpiricalRaceAnchor(ctx.activities || []);
+      const empirical = anchor ? {
+        t5k:  riegelPredictFromRun(anchor.run, 't5k'),
+        t10k: riegelPredictFromRun(anchor.run, 't10k'),
+        tHM:  riegelPredictFromRun(anchor.run, 'tHM'),
+        tM:   riegelPredictFromRun(anchor.run, 'tM'),
+      } : null;
+
+      const garminMostRecent = (ctx.activities || [])
+        .filter(a => a?.racePredictor)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+      const garmin = garminMostRecent?.racePredictor || null;
+
+      // No data at all → tile stays empty.
+      if (!empirical && !garmin) return null;
+
+      // Headline source: empirical if available, else Garmin.
+      const headline = empirical || garmin;
+      const source = empirical ? 'empirical' : 'garmin';
+
+      // Sublabel: surface the alternative source + the gap so the user can
+      // sanity-check. If both exist and disagree by >10%, name the delta —
+      // makes the "Garmin says 2:00, you trained for 1:30" disagreement
+      // visible instead of swept under one number.
+      let sublabel;
+      if (empirical && garmin?.tHM && headline.tHM) {
+        const delta = garmin.tHM - headline.tHM;
+        const deltaMin = Math.abs(Math.round(delta / 60));
+        const deltaStr = deltaMin >= 1
+          ? (delta > 0 ? `Garmin +${deltaMin}min conservative` : `Garmin ${deltaMin}min faster`)
+          : 'Garmin agrees';
+        sublabel = `${anchor.label} · ${deltaStr}`;
+      } else if (empirical) {
+        sublabel = anchor.label;
+      } else {
+        sublabel = `Garmin VO2max-based · no recent race-quality run`;
+      }
+
       return {
-        value: fmt(rp.tHM),  // headline number = half-marathon prediction
-        sublabel: `5K ${fmt(rp.t5k)} · 10K ${fmt(rp.t10k)}`,
-        full: rp,            // tile component can render the 4-row breakdown
+        value: fmt(headline.tHM),
+        sublabel,
+        full: headline,
+        source, // 'empirical' or 'garmin' — exposed for any UI that wants to badge it
       };
     },
-    // Race Predictor only available if any activity has it. Older Forerunners
-    // don't emit this; needs Garmin Wellness sync (Phase 4) for full coverage.
-    available: (ctx) => (ctx.activities || []).some(a => a?.racePredictor),
+    // Available if we have ANY data — empirical anchor OR Garmin block.
+    available: (ctx) => {
+      const acts = ctx.activities || [];
+      if (acts.some(a => a?.racePredictor)) return true;
+      return findEmpiricalRaceAnchor(acts) != null;
+    },
     // Phase 4m.2.5 — Race Predictor dynamically picks the prediction field
     // matching the next race on the docket (5K → t5k, 10K → t10k, Half →
     // tHM, Full → tM). If no upcoming race, fall back to half-marathon as
@@ -681,21 +843,24 @@ export const TILE_METRICS = [
         km <= 15      ? 't10k' :
         km <= 30      ? 'tHM' :
                         'tM';
-      // Two sources, in priority order:
-      //   1. Garmin's own racePredictor block (most accurate — per-run, watch-derived)
-      //   2. Riegel's formula (peer-reviewed, 1981) anchored to each qualifying
-      //      run's actual pace. T2 = T1 × (D2/D1)^1.06.
-      //      Naturally reflects current training state — no VO2max-vs-VDOT gap
-      //      to calibrate, no heuristic fudge factors. (Phase 4m.2.9)
+      // Phase 4r.race.1 — flipped to empirical-first. Garmin's racePredictor
+      // is now the fallback (it under-predicts trained runners by 5-20%
+      // because it's VO2max-derived). Riegel anchored on actual pace per
+      // run is the primary source. Aggregates over qualifying runs only
+      // (≥3mi, ≥15min — filter inside riegelPredictFromRun).
       return timeframesFromCollection(
         ctx.activities,
         {
           filter: a => isRun(a),
           valueField: a => {
+            const r = riegelPredictFromRun(a, fieldKey);
+            if (r && r > 0) return r;
+            // Fall back to Garmin's block for activities that don't qualify
+            // for Riegel (warm-ups, sprint reps, casual short runs).
             if (a?.racePredictor && a.racePredictor[fieldKey]) {
               return Number(a.racePredictor[fieldKey]) || null;
             }
-            return riegelPredictFromRun(a, fieldKey);
+            return null;
           },
           mode: 'avg',
           ytdMode: 'avg',
@@ -870,7 +1035,41 @@ export const TILE_METRICS = [
       red:   [[0, 0.5], [1.5, 99]],
     },
     // Trend window: 7 days makes sense for the rolling acute load.
-    historyOf: null,  // ACWR itself is already a derived ratio over a window
+    // Phase 4r.design.2 — historyOf now produces a 30-day series of
+    // rolling ACWR values (one per day, using each day as the
+    // "today" anchor for the 7/28 windows). Previously suppressed
+    // because "ACWR is already a window", but the 30d avg of the
+    // ratio is genuinely useful — it tells you whether today's
+    // load is at typical training balance or atypical.
+    historyOf: (ctx) => {
+      const acts = (ctx.activities || []).filter(isRun);
+      if (!acts.length) return [];
+      const out = [];
+      const day = (offset) => {
+        const d = new Date();
+        d.setDate(d.getDate() - offset);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      };
+      const isoFromDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      for (let offset = 0; offset < 30; offset++) {
+        const anchor = day(offset);
+        const cut7  = new Date(anchor); cut7.setDate(cut7.getDate() - 7);
+        const cut28 = new Date(anchor); cut28.setDate(cut28.getDate() - 28);
+        const anchorIso = isoFromDate(anchor);
+        const c7Iso  = isoFromDate(cut7);
+        const c28Iso = isoFromDate(cut28);
+        let mi7 = 0, mi28 = 0;
+        for (const a of acts) {
+          if (!a?.date || a.date > anchorIso) continue;
+          if (a.date >= c7Iso)  mi7  += (a.distanceMi || 0);
+          if (a.date >= c28Iso) mi28 += (a.distanceMi || 0);
+        }
+        const avg28Weekly = mi28 / 4;
+        if (avg28Weekly >= 1) out.push(+(mi7 / avg28Weekly).toFixed(2));
+      }
+      return out;
+    },
     compute: (ctx) => {
       const cutoff7  = daysAgo(7);
       const cutoff28 = daysAgo(28);
@@ -1138,9 +1337,28 @@ export const TILE_METRICS = [
       else if (ratio >= 1.5) system = 'Hypertrophy';
       else if (ratio >= 0.5) system = 'Mixed';
       else                   system = 'Endurance';
+      // Phase 4r.design.3 — pre-compute avg30 here and format as "1 : X.Y"
+      // because evaluate()'s auto-formatter rounds to an integer when
+      // result.value isn't numeric (it sees "1 : 1.5", Number() = NaN, and
+      // falls through to Math.round). Setting result.avg30 directly bypasses
+      // the auto-fill (evaluate() only fills when avg30 == null).
+      let avg30 = null;
+      try {
+        const ratios = (ctx.activities || [])
+          .filter(isStrengthAct)
+          .filter(a => a?.totalWorkSecs && a?.totalRestSecs)
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+          .slice(0, 30)
+          .map(a => a.totalRestSecs / a.totalWorkSecs);
+        if (ratios.length) {
+          const mean = ratios.reduce((s, v) => s + v, 0) / ratios.length;
+          avg30 = `1 : ${mean.toFixed(1)}`;
+        }
+      } catch {}
       return {
         value: `1 : ${ratio.toFixed(1)}`,
         sublabel: `${system} · ${Math.round(s.totalWorkSecs)}s work / ${Math.round(s.totalRestSecs)}s rest`,
+        avg30,
       };
     },
     available: (ctx) => (ctx.activities || []).some(a => a?.totalWorkSecs && a?.totalRestSecs),
@@ -1696,7 +1914,12 @@ export const TILE_METRICS = [
       const today = localToday();
       const cal = macroForDate(ctx, today, 'calories');
       if (cal <= 0) return null;
-      const target = resolveCalorieTarget(today, ctx.profile);
+      // Phase 4r.dataspine.4 — canonical Layer 3 reader.
+      const target = (() => {
+        try { return getEffectiveTargets({ date: today }).dailyCalories.effective; }
+        catch { return null; }
+      })();
+      if (!target) return null;
       const pct = cal / target;
       return {
         value: Math.round(cal),
@@ -1994,6 +2217,13 @@ export const TILE_METRICS = [
     ytdMode: 'avg',
     // Scale rows often have bodyFatPct stored as 0 when the impedance read
     // failed — guard with > 0 so we don't average in junk samples.
+    // Phase 4r.design.2 — add historyOf so the 30d-avg backfill in
+    // MetricTile can compute "30d avg" from the last 30 valid samples.
+    historyOf: (ctx) => (ctx.weightData || [])
+      .filter(r => r?.bodyFatPct != null && Number(r.bodyFatPct) > 0)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 30)
+      .map(r => +Number(r.bodyFatPct).toFixed(1)),
     compute: (ctx) => {
       const w = (ctx.weightData || [])
         .filter(r => r?.bodyFatPct != null && Number(r.bodyFatPct) > 0)
@@ -2058,6 +2288,29 @@ export const TILE_METRICS = [
     // Priority chain:
     //   1. r.bmi from Garmin Index scale row (most reliable, already plausibility-checked)
     //   2. computed from weight + profile height (fallback)
+    // Phase 4r.design.2 — add historyOf for the 30d-avg backfill.
+    // Mirrors the compute() priority chain: prefer r.bmi when valid,
+    // else compute from weightLbs + profile height.
+    historyOf: (ctx) => {
+      const heightIn = parseFloat(ctx.profile?.heightInches) ||
+                       (parseFloat(ctx.profile?.heightFt) * 12 + parseFloat(ctx.profile?.heightIn || 0));
+      const sorted = [...(ctx.weightData || [])]
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+        .slice(0, 30);
+      const out = [];
+      for (const r of sorted) {
+        const direct = Number(r?.bmi);
+        if (Number.isFinite(direct) && direct >= 10 && direct <= 60) {
+          out.push(+direct.toFixed(1));
+          continue;
+        }
+        if (!heightIn) continue;
+        const wt = Number(r?.weightLbs ?? r?.weight);
+        if (!Number.isFinite(wt) || wt <= 0) continue;
+        out.push(+(703 * wt / (heightIn * heightIn)).toFixed(1));
+      }
+      return out;
+    },
     compute: (ctx) => {
       const sorted = [...(ctx.weightData || [])]
         .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -2132,6 +2385,107 @@ export const TILE_METRICS = [
       }
     ),
   },
+
+  // ═══ COACH-SIGNAL VISUALIZATIONS — Phase 4r.narrative.4d ═══════════════
+  // These tiles surface the v2 coach-signal block (recovery velocity, TDEE
+  // drift, energy availability, glycogen) as visual artifacts. They read
+  // pre-computed values from ctx.coachSignals — same single source of truth
+  // the Coach narrative uses, so the numbers shown here match the prose
+  // exactly. When coachSignals isn't in the ctx (e.g., Start screen if it
+  // doesn't yet pass it through), the tile renders as "no data" rather
+  // than crashing.
+
+  // ─── Recovery velocity ────────────────────────────────────────────────────
+  {
+    id: 'recoveryVelocity', label: 'Recovery velocity', category: 'recovery', unit: 'd',
+    polarity: 'lower-better',  // shorter days-to-recover = better
+    ytdMode: 'avg',
+    compute: (ctx) => {
+      const rv = ctx?.coachSignals?.recoveryVelocity;
+      if (!rv || rv.status === 'insufficient' || rv.avgDaysToRecover == null) return null;
+      const status =
+        rv.status === 'concerning' ? 'red'
+        : rv.status === 'slowing'    ? 'amber'
+        : rv.status === 'improving'  ? 'green'
+        : null;
+      const sub = rv.baselineAvg != null
+        ? `${rv.driftPct != null ? (rv.driftPct > 0 ? '+' : '') + rv.driftPct + '% vs ' : 'baseline '}${rv.baselineAvg}d`
+        : null;
+      return { value: rv.avgDaysToRecover, sublabel: sub, status };
+    },
+    available: (ctx) => !!(ctx?.coachSignals?.recoveryVelocity && ctx.coachSignals.recoveryVelocity.avgDaysToRecover != null),
+  },
+
+  // ─── TDEE drift ───────────────────────────────────────────────────────────
+  {
+    id: 'tdeeDrift', label: 'TDEE drift', category: 'body', unit: 'kcal',
+    polarity: 'neutral', // direction depends on goal — going up could be good (rebounding) or neutral
+    ytdMode: 'avg',
+    compute: (ctx) => {
+      const t = ctx?.coachSignals?.tdeeDrift;
+      if (!t || t.status === 'insufficient' || t.recentTdee == null) return null;
+      const status =
+        t.status === 'starvation' ? 'red'
+        : t.status === 'adapting'  ? 'amber'
+        : t.status === 'rebounding'? 'green'
+        : null;
+      const sub = t.driftPct != null && t.baselineTdee != null
+        ? `${t.driftPct > 0 ? '+' : ''}${t.driftPct}% vs prior 4w (${t.baselineTdee})`
+        : null;
+      return { value: t.recentTdee, sublabel: sub, status };
+    },
+    available: (ctx) => !!(ctx?.coachSignals?.tdeeDrift && ctx.coachSignals.tdeeDrift.recentTdee != null),
+  },
+
+  // ─── Energy availability ──────────────────────────────────────────────────
+  {
+    id: 'energyAvailability', label: 'Energy avail', category: 'body', unit: 'kcal/kg',
+    polarity: 'higher-better',  // higher EA = more energy left for non-exercise function
+    thresholds: { green: [40, 999], amber: [30, 40], red: [0, 30] },
+    ytdMode: 'avg',
+    compute: (ctx) => {
+      const ea = ctx?.coachSignals?.energyAvailability;
+      if (!ea || !Number.isFinite(Number(ea.eaKcalPerKgLBM))) return null;
+      const status =
+        ea.status === 'deficient' ? 'red'
+        : ea.status === 'low'      ? 'amber'
+        : ea.status === 'sufficient' ? 'green'
+        : null;
+      const sub = ea.netKcal != null && ea.lbmKg != null
+        ? `${Math.round(ea.netKcal)} net · ${ea.lbmKg.toFixed(1)}kg LBM`
+        : null;
+      return { value: Math.round(ea.eaKcalPerKgLBM), sublabel: sub, status };
+    },
+    available: (ctx) => !!(ctx?.coachSignals?.energyAvailability && ctx.coachSignals.energyAvailability.eaKcalPerKgLBM != null),
+  },
+
+  // ─── Glycogen state ───────────────────────────────────────────────────────
+  {
+    id: 'glycogen', label: 'Glycogen', category: 'body', unit: '%',
+    polarity: 'higher-better',
+    thresholds: { green: [80, 999], amber: [50, 80], red: [0, 50] },
+    ytdMode: 'avg',
+    compute: (ctx) => {
+      const g = ctx?.coachSignals?.glycogen;
+      if (!g || !Number.isFinite(Number(g.adequacyRatio))) return null;
+      const status =
+        g.status === 'critical' ? 'red'
+        : g.status === 'depleted'? 'amber'
+        : g.status === 'replete' || g.status === 'moderate' ? 'green'
+        : null;
+      const sub = g.supplied24h != null && g.need24h != null
+        ? `${g.supplied24h}g / ${g.need24h}g need · 24h`
+        : null;
+      const lowConf = g.confidence === 'low';
+      return {
+        value: Math.round(g.adequacyRatio * 100),
+        sublabel: lowConf ? `${sub} · est` : sub,
+        status,
+        pct: Math.min(1, Math.max(0, g.adequacyRatio)),
+      };
+    },
+    available: (ctx) => !!(ctx?.coachSignals?.glycogen && Number.isFinite(Number(ctx.coachSignals.glycogen.adequacyRatio))),
+  },
 ];
 
 // ── Defaults for new users ──────────────────────────────────────────────────
@@ -2184,7 +2538,7 @@ export function normalizeTilePrefs(prefs) {
 // ── Context builder ─────────────────────────────────────────────────────────
 // Single function that gathers everything any metric might need from storage.
 // Called once per render rather than each metric reading storage individually.
-export function buildTileContext({ activities, sleepData, hrvData, weightData, nutritionLog, cronometer, dailyLogs, profile, wellness, races }) {
+export function buildTileContext({ activities, sleepData, hrvData, weightData, nutritionLog, cronometer, dailyLogs, profile, wellness, races, coachSignals }) {
   return {
     activities: activities || [],
     sleepData: sleepData || [],
@@ -2196,5 +2550,130 @@ export function buildTileContext({ activities, sleepData, hrvData, weightData, n
     profile: profile || {},
     wellness: wellness || [], // Phase 4 — empty until Garmin Connect Wellness sync ships
     races: races || [],       // Phase 4m.2.5 — used by Race Predictor to pick the right distance
+    // Phase 4r.narrative.4d — coachSignals carries pre-computed v2 signals
+    // (recovery velocity, TDEE drift, energy availability, glycogen, etc.)
+    // for tiles that surface those as visual artifacts. Optional — tiles
+    // that depend on it gracefully render null when it's absent.
+    coachSignals: coachSignals || null,
+  };
+}
+
+// Phase 4r.design.3 — protein tile 30d-avg debug. Run in console to see
+// exactly what macroForDate/macroHistory30 finds for the last 30 days:
+//   shape of nutritionLog rows, dates that returned > 0, dates that
+//   returned 0 (and why). Surfaces whether the issue is empty
+//   nutritionLog, missing 'full-day' meal rows, or a date format mismatch.
+if (typeof window !== 'undefined') {
+  // Phase 4r.race.1 — race predictor diagnostic. Surfaces which anchor was
+  // picked, what Garmin predicted, and the gap between them. Run after the
+  // tile feels off to see why.
+  window.racePredictorDebug = function () {
+    const _storage = (typeof window !== 'undefined') ? window.__arnoldStorage : null;
+    const activities = _storage ? (_storage.get('activities') || []) : [];
+    console.log('=== RACE PREDICTOR DEBUG ===');
+    console.log('total activities:', activities.length);
+    const runs = activities.filter(a => isRun(a) && a?.distanceMi && a?.durationSecs);
+    console.log('qualifying run activities:', runs.length);
+    const anchor = findEmpiricalRaceAnchor(activities);
+    if (anchor) {
+      console.log(`anchor picked: tier=${anchor.tier} · ${anchor.label}`);
+      console.log('  run:', {
+        date: anchor.run.date,
+        distanceMi: anchor.run.distanceMi,
+        durationSecs: anchor.run.durationSecs,
+        avgHR: anchor.run.avgHR,
+        maxHR: anchor.run.maxHR,
+      });
+      console.log('  Riegel projections:', {
+        t5k:  riegelPredictFromRun(anchor.run, 't5k'),
+        t10k: riegelPredictFromRun(anchor.run, 't10k'),
+        tHM:  riegelPredictFromRun(anchor.run, 'tHM'),
+        tM:   riegelPredictFromRun(anchor.run, 'tM'),
+      });
+    } else {
+      console.warn('NO empirical anchor found in last 24 weeks. Falling back to Garmin.');
+    }
+    const garminMostRecent = activities
+      .filter(a => a?.racePredictor)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+    if (garminMostRecent) {
+      console.log('Garmin racePredictor (most recent):', {
+        date: garminMostRecent.date,
+        ...garminMostRecent.racePredictor,
+      });
+    } else {
+      console.log('No Garmin racePredictor block found in any activity.');
+    }
+    return { anchor, garmin: garminMostRecent?.racePredictor };
+  };
+
+  window.proteinTileDebug = function () {
+    // Phase 4r.process.5 — read through the storage abstraction (which
+    // routes to IndexedDB when the Phase 7 engine is attached), NOT
+    // localStorage directly. The previous version of this helper read
+    // localStorage and reported 0 nutritionLog rows — but the tile
+    // pipeline reads through storage.get() which sees the IndexedDB
+    // contents. That mismatch led to a false "data is stale" diagnosis.
+    // window.__arnoldStorage is wired up in Arnold.jsx at boot.
+    const _storage = (typeof window !== 'undefined') ? window.__arnoldStorage : null;
+    let nutritionLog = [];
+    let cronometer = [];
+    if (_storage) {
+      try { nutritionLog = _storage.get('nutritionLog') || []; } catch {}
+      try { cronometer   = _storage.get('cronometer')   || []; } catch {}
+    } else {
+      console.warn('window.__arnoldStorage not available — debug results may be incomplete. Reload the app.');
+      try { nutritionLog = (window.localStorage && JSON.parse(localStorage.getItem('arnold:nutritionLog') || '[]')) || []; } catch {}
+      try { cronometer   = (window.localStorage && JSON.parse(localStorage.getItem('arnold:cronometer') || '[]')) || []; } catch {}
+    }
+    const ctx = { nutritionLog, cronometer };
+    const fullDayRows = nutritionLog.filter(e => e?.meal === 'full-day');
+    console.log('=== PROTEIN TILE DEBUG ===');
+    console.log('nutritionLog total rows:', nutritionLog.length);
+    console.log('  of which meal=full-day:', fullDayRows.length);
+    console.log('  unique meal values in nutritionLog:', [...new Set(nutritionLog.map(e => e?.meal))]);
+    console.log('  sample full-day row:', fullDayRows[0] || '(none)');
+    console.log('cronometer legacy rows:', cronometer.length);
+    // Phase 4r.process.4 — surface cronometer date range + most-recent dates
+    // so we can tell whether the issue is "data is too old for the window" vs
+    // "lookup is mismatched on a date that IS in the window".
+    const cronoDates = cronometer
+      .map(c => c?.date)
+      .filter(Boolean)
+      .sort();
+    console.log('  cronometer date range:', cronoDates[0] || '—', '→', cronoDates[cronoDates.length - 1] || '—');
+    console.log('  most recent 5 cronometer dates:', cronoDates.slice(-5));
+    console.log('  type of first cronometer.date:', typeof cronometer[0]?.date, '· raw value:', JSON.stringify(cronometer[0]?.date));
+    console.log('  sample cronometer row (newest by date):', cronometer.find(c => c?.date === cronoDates[cronoDates.length - 1]) || '(none)');
+    const today = new Date();
+    const series = [];
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(today); d.setDate(today.getDate() - i);
+      const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const v = macroForDate(ctx, ds, 'protein');
+      // Also report whether ANY cronometer row exists for that ds, so we
+      // can distinguish "no data on that date" from "data exists but
+      // protein field missing/wrong key".
+      const cronoHit = cronometer.find(c => c?.date === ds);
+      series.push({ date: ds, protein: v, found: v > 0, cronoHasRow: !!cronoHit, cronoProteinField: cronoHit?.protein ?? '—' });
+    }
+    console.table(series);
+    const found = series.filter(s => s.found);
+    const cronoHitsInWindow = series.filter(s => s.cronoHasRow).length;
+    console.log(`30d avg basis: ${found.length}/${series.length} days had protein > 0`);
+    console.log(`Cronometer rows present in 30d window: ${cronoHitsInWindow}/${series.length}`);
+    if (found.length) {
+      const avg = found.reduce((s, x) => s + x.protein, 0) / found.length;
+      console.log(`  computed avg: ${avg.toFixed(1)}g (this is what the tile should show)`);
+    } else if (cronoHitsInWindow > 0) {
+      console.warn('Cronometer rows exist in the 30d window but protein field is empty/zero — field-name mismatch.');
+    } else if (cronoDates.length > 0) {
+      const newest = cronoDates[cronoDates.length - 1];
+      const daysOld = Math.round((today - new Date(newest)) / 86400000);
+      console.warn(`Your most recent Cronometer row is ${newest} (${daysOld} days ago). The 30d window starts at ${series[series.length - 1].date} — no overlap. Re-import recent data or enable the live Cronometer Worker.`);
+    } else {
+      console.warn('No Cronometer data at all. Import a CSV or enable the live Cronometer Worker.');
+    }
+    return { nutritionLogCount: nutritionLog.length, fullDayCount: fullDayRows.length, cronometerCount: cronometer.length, daysFound: found.length, cronoHitsInWindow };
   };
 }

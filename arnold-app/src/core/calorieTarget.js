@@ -1,68 +1,37 @@
-// ─── Daily Calorie Target Resolver ──────────────────────────────────────────
-// Phase 4r.fuel.1 — single source of truth for "how many calories should you
-// eat today?" Replaces the static goals.dailyCalorieTarget that was scattered
-// across 5+ call sites in Arnold (Calendar drawer, Daily Fuel, mobile Fuel,
-// GoalsHub, NutritionInput).
+// ─── DEPRECATED — Phase 4r.dataspine.4 (2026-05-24) ────────────────────────
 //
-// The target is computed dynamically per-date:
-//   1. Preferred: computeTDEE(date).tdee — RMR (Katch-McArdle if body comp known,
-//      Mifflin-St Jeor fallback) + actual activity calories + NEAT + TEF for that
-//      specific day. This is the right baseline because rest days and HIIT days
-//      have very different total energy expenditure.
-//   2. Fallback: goals.dailyCalorieTarget — user-set static target.
-//   3. Last resort: 2200 — a reasonable adult-male endurance-athlete default.
+// The contents of this module — `resolveCalorieTarget` and
+// `resolveCalorieTargetVerbose` — were removed when Phase A data-spine
+// consolidation finished. The canonical Layer 3 reader is now
+// `getEffectiveTargets` from `./goalModel.js`.
 //
-// Why a helper file: when this logic changes (e.g. add bulk/cut adjustments,
-// or weekly periodization), we update ONE function instead of grepping.
+// Migration map for anyone resurrecting this code path:
+//   resolveCalorieTarget(date, goals)
+//     → getEffectiveTargets({ date }).dailyCalories.effective
+//   resolveCalorieTargetVerbose(date, goals)
+//     → getEffectiveTargets({ date }).dailyCalories
+//        // .effective / .derived / .override / .source / .explain
 //
-// Usage:
-//   import { resolveCalorieTarget } from './core/calorieTarget.js';
-//   const target = resolveCalorieTarget(date, goals);
+// Why deleted: the old resolver had no awareness of the override
+// system, the outcome-driven goal model, or the race-proximity
+// modifier. Keeping it alive meant TWO competing answers to the
+// same question, which produced visible inconsistencies (Nutrition
+// tab showing 2919 kcal while Calendar drawer showed 1965 kcal for
+// the same day). See POSTMORTEMS.md and AUDIT.md Batch 1 for the
+// full history.
+//
+// The exports below intentionally THROW. If a code path imports them
+// it will fail loudly at first call instead of silently falling back
+// to an inconsistent value.
 
-import { computeTDEE } from './energyBalance.js';
+const DEPRECATED_MSG =
+  '[calorieTarget.js DEPRECATED — Phase 4r.dataspine.4] ' +
+  'Use getEffectiveTargets from ./goalModel.js instead.';
 
-const FLOOR = 2200;
-
-/**
- * Resolve today's calorie target.
- *
- * @param {string} date — YYYY-MM-DD. Defaults to today via computeTDEE.
- * @param {Object} goals — { dailyCalorieTarget?: number, ... }
- * @returns {number} calorie target for this date
- */
-export function resolveCalorieTarget(date, goals) {
-  // Try computed TDEE first.
-  try {
-    const result = computeTDEE(date);
-    const tdee = result && Number(result.tdee);
-    if (Number.isFinite(tdee) && tdee > 1000) return Math.round(tdee);
-  } catch { /* fall through */ }
-
-  // Fall back to user-set static target.
-  const staticTarget = goals && parseFloat(goals.dailyCalorieTarget);
-  if (Number.isFinite(staticTarget) && staticTarget > 1000) return Math.round(staticTarget);
-
-  // Last resort.
-  return FLOOR;
+export function resolveCalorieTarget(/* date, goals */) {
+  throw new Error(DEPRECATED_MSG);
 }
 
-/**
- * Verbose version — returns the target plus the source label
- * (for UI that wants to show "computed via TDEE" vs "from goals").
- */
-export function resolveCalorieTargetVerbose(date, goals) {
-  try {
-    const result = computeTDEE(date);
-    const tdee = result && Number(result.tdee);
-    if (Number.isFinite(tdee) && tdee > 1000) {
-      return { target: Math.round(tdee), source: 'tdee', breakdown: result };
-    }
-  } catch { /* fall through */ }
-
-  const staticTarget = goals && parseFloat(goals.dailyCalorieTarget);
-  if (Number.isFinite(staticTarget) && staticTarget > 1000) {
-    return { target: Math.round(staticTarget), source: 'goals', breakdown: null };
-  }
-
-  return { target: FLOOR, source: 'fallback', breakdown: null };
+export function resolveCalorieTargetVerbose(/* date, goals */) {
+  throw new Error(DEPRECATED_MSG);
 }

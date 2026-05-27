@@ -19,10 +19,18 @@ export function attachEngine(engine) { _engine = engine; }
 // apply remote snapshots without re-triggering a push cycle.
 const _changeListeners = new Set();
 let _cloudApplying = false;
+// Phase 4r.signals.10 — global write counter. Bumps on every emitted change
+// event (i.e., every non-cloud-applying storage.set + every notifyStorageChanged
+// from cloud-sync's final flush). Exposed via getStorageWriteCount() so the
+// boot fingerprint can verify the change-listener machinery is alive and
+// smoke tests can confirm writes are reaching subscribers.
+let _writeCount = 0;
+export function getStorageWriteCount() { return _writeCount; }
 export function onStorageChange(fn) { _changeListeners.add(fn); return () => _changeListeners.delete(fn); }
 export function setCloudApplying(v) { _cloudApplying = !!v; }
 function emitStorageChange(fullKey) {
   if (_cloudApplying) return;
+  _writeCount++;
   for (const fn of _changeListeners) { try { fn(fullKey); } catch { /* ignore */ } }
 }
 // Phase 4o.mobile.11 — synthetic notify, bypasses the cloud-applying
@@ -34,6 +42,7 @@ let _suppressCloudPush = false;
 export function setSuppressCloudPush(v) { _suppressCloudPush = !!v; }
 export function isCloudPushSuppressed() { return _suppressCloudPush; }
 export function notifyStorageChanged(fullKey = '__cloud_apply__') {
+  _writeCount++;
   for (const fn of _changeListeners) { try { fn(fullKey); } catch { /* ignore */ } }
 }
 

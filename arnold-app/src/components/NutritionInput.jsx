@@ -13,8 +13,11 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { STATUS } from '../core/semantics.js';
 import { getGoals } from '../core/goals.js';
-import { getDynamicMacroTarget } from '../core/energyBalance.js';
-import { resolveCalorieTarget } from '../core/calorieTarget.js';
+// Phase 4r.dataspine.4 — all macro reads route through goalModel.
+// Legacy getDynamicMacroTarget + resolveCalorieTarget imports removed
+// (their consumers in this file now read getEffectiveTargets fields
+// for all five of calories/protein/carbs/fat/fiber).
+import { getEffectiveTargets } from '../core/goalModel.js';
 import {
   MEAL_CATEGORIES, createEntry, saveEntry, deleteEntry,
   getEntriesForDate, dailyTotals, goalImpact,
@@ -1399,15 +1402,38 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
   // user logs a run the eat-back kcal flows through to every readout.
   // Falls back to the static profile goals (G) when no dynamic value
   // exists (e.g., calibration not yet bootstrapped).
-  let dyn = null;
-  try { dyn = getDynamicMacroTarget(); } catch {}
+  // Phase 4r.dataspine.4 — canonical Layer 3 targets via goalModel.
+  // All four macros + fiber now come from getEffectiveTargets (macros
+  // landed in dataspine.4 via deriveDailyMacros). Legacy
+  // getDynamicMacroTarget + resolveCalorieTarget fallback chain and
+  // parseFloat(G.*) static-goal fallbacks removed; goalModel is the
+  // single source of truth for these numbers.
+  let eff = null;
+  try { eff = getEffectiveTargets({ date: dateStr }); } catch {}
   const effGoals = {
-    dailyCalorieTarget: dyn?.dynamicTarget ?? resolveCalorieTarget(dateStr, G),
-    dailyProteinTarget: dyn?.proteinG       ?? (parseFloat(G.dailyProteinTarget) || 150),
-    dailyCarbTarget:    dyn?.carbsG         ?? (parseFloat(G.dailyCarbTarget)    || 200),
-    dailyFatTarget:     dyn?.fatG           ?? (parseFloat(G.dailyFatTarget)     || 70),
-    dailyFiberTarget:   dyn?.fiberG         ?? (parseFloat(G.dailyFiberTarget)   || 35),
+    dailyCalorieTarget: eff?.dailyCalories?.effective || 0,
+    dailyProteinTarget: eff?.dailyProtein?.effective  || 0,
+    dailyCarbTarget:    eff?.dailyCarbs?.effective    || 0,
+    dailyFatTarget:     eff?.dailyFat?.effective      || 0,
+    dailyFiberTarget:   eff?.dailyFiber?.effective    || 0,
   };
+  // Shape-compat shim — the inline JSX below was written against
+  // the legacy `dyn` object from getDynamicMacroTarget (dynamicTarget,
+  // isTrainingDay, eatBackKcal, proteinG/carbsG/fatG/fiberG). Building
+  // a one-to-one shim here means the JSX stays untouched. baseline +
+  // eatBack come from goalModel's explain.components; training-day
+  // flag = eatBack > 0.
+  const _eatBack = eff?.dailyCalories?.explain?.components?.eatBack || 0;
+  const dyn = eff?.dailyCalories?.effective ? {
+    dynamicTarget: eff.dailyCalories.effective,
+    baseline:      eff.dailyCalories.effective - _eatBack,
+    eatBackKcal:   _eatBack,
+    isTrainingDay: _eatBack > 0,
+    proteinG:      eff.dailyProtein?.effective || 0,
+    carbsG:        eff.dailyCarbs?.effective   || 0,
+    fatG:          eff.dailyFat?.effective     || 0,
+    fiberG:        eff.dailyFiber?.effective   || 0,
+  } : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1574,18 +1600,33 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
         />
       )}
 
-      {/* Today's entries list (food only — water hidden, logged above) */}
+      {/* Today's entries list — food typed directly into Arnold only.
+          Cronometer-sourced rows (the full-day rollup and per-meal rows)
+          are hidden because Cronometer's own UI already shows them, and
+          having a copy here just duplicates that interface. The macro
+          totals + dials reflect Cronometer data fully; this list is
+          specifically for items you logged in Arnold manually. Phase
+          4r.signals.1.fix.2 (user feedback: "why do I need to see the per
+          item list from cronometer in Arnold as well?"). */}
       {(()=>{
         const foodEntries = entries.filter(e => {
           const m = e.macros || {};
           const isWaterOnly = (m.water || 0) > 0 && !(m.calories || m.protein || m.carbs || m.fat);
-          return !isWaterOnly;
+          if (isWaterOnly) return false;
+          // Hide every Cronometer-sourced row: both `cronometer-live` (the
+          // full-day rollup) and `cronometer-live-meal` (per-meal rows).
+          // The startsWith check covers any future Cronometer source
+          // variants we add (e.g. cronometer-live-recipe) without needing
+          // to update this filter.
+          const src = String(e?.source || '');
+          if (src.startsWith('cronometer')) return false;
+          return true;
         });
         if (!foodEntries.length) return null;
         return (
           <div style={{ ...panelStyle, padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '10px 14px 6px', fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-              LOGGED TODAY · {foodEntries.length} {foodEntries.length === 1 ? 'item' : 'items'}
+              LOGGED IN ARNOLD · {foodEntries.length} {foodEntries.length === 1 ? 'item' : 'items'}
             </div>
             {foodEntries.map(e => <EntryRow key={e.id} entry={e} onDelete={handleDelete} />)}
           </div>

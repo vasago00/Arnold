@@ -380,10 +380,15 @@ Rules:
     return Object.entries(groups).filter(([, items]) => items.length > 0);
   })();
 
+  // Phase 4r.narrative.5.fix.5 — web title "◈ Supplements" dropped (top
+  // nav already says "Stack"). Mobile keeps the inline title for now;
+  // the user scoped this cleanup to web only. Adherence subtitle stays
+  // on both since it carries actual data.
+  const _suppIsMobile = typeof window !== 'undefined' && window.innerWidth <= 600;
   return (
     <div style={sec}>
       <div>
-        <div style={titleStyle}>◈ Supplements</div>
+        {_suppIsMobile && <div style={titleStyle}>◈ Supplements</div>}
         <div style={sub}>Stack, catalog & daily nutrient totals · {adherence.pct}% 7-day adherence</div>
       </div>
 

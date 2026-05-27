@@ -479,145 +479,45 @@ export function assessCalibration(opts = {}) {
   };
 }
 
-// ─── Dynamic daily calorie target (activity-aware) ─────────────────────────
+// ─── DEPRECATED — Phase 4r.dataspine.4 (2026-05-24) ────────────────────────
+//
+// `getDynamicCalorieTarget` and `getDynamicMacroTarget` were removed
+// when Phase A data-spine consolidation finished. Their responsibility
+// — answering "what should today's calorie / macro target be?" — now
+// lives in `getEffectiveTargets` from `./goalModel.js`, which knows
+// about overrides, outcome-driven derivation, race proximity, recovery
+// modifiers, and the canonical macro split (deriveDailyMacros).
+//
+// Migration map for anyone resurrecting this code path:
+//   getDynamicCalorieTarget(date)
+//     → getEffectiveTargets({ date }).dailyCalories.effective
+//   getDynamicMacroTarget(date)
+//     → const eff = getEffectiveTargets({ date })
+//       eff.dailyCalories.effective   // was .dynamicTarget
+//       eff.dailyProtein.effective    // was .proteinG
+//       eff.dailyCarbs.effective      // was .carbsG
+//       eff.dailyFat.effective        // was .fatG
+//       eff.dailyFiber.effective      // was .fiberG
+//       eff.dailyCalories.explain.components.eatBack   // was .eatBackKcal
+//       eff.dailyCalories.effective - eatBack          // was .baseline
+//
+// Why deleted: keeping a parallel macro pipeline (reading legacy
+// goals.dailyCarbTarget / dailyFatTarget) meant inconsistencies
+// surfaced whenever the new outcome-only Goals UI stopped writing
+// those fields. The single-pipeline rule is now: every fuel surface
+// reads getEffectiveTargets.
+//
+// The stubs below throw to surface any forgotten import loudly.
+const _DYNAMIC_DEPRECATED =
+  '[energyBalance.js DEPRECATED — Phase 4r.dataspine.4] ' +
+  'Use getEffectiveTargets from ./goalModel.js. See migration map in the file header above the stubs.';
 
-/**
- * Today's calorie target adjusted for activity. The Stellingwerff "fuel the
- * work required" framework: rest-day baseline + a fraction of training-day
- * activity calories. Same weekly average as a static target if you average
- * across the week, but distributed to support performance + recovery.
- *
- * eatBackPct = 0.75 by default. Garmin tends to over-credit activity by
- * 20-30%, so eating 100% back wipes the deficit. 0.75 keeps the deficit
- * intact while still fuelling the session.
- *
- * @param {string} [dateStr]
- * @param {object} [opts]
- * @param {number} [opts.eatBackPct=0.75]
- * @returns {{
- *   baseline: number,
- *   activityKcal: number,
- *   eatBackKcal: number,
- *   dynamicTarget: number,
- *   eatBackPct: number,
- *   isTrainingDay: boolean,
- * }}
- */
-export function getDynamicCalorieTarget(dateStr, opts = {}) {
-  const date = dateStr || localDate();
-  const eatBackPct = opts.eatBackPct ?? 0.75;
-
-  // Phase 4r.fuel.3 — baseline now computed from RMR (Katch-McArdle or
-  // Mifflin-St Jeor fallback) + NEAT + TEF, NOT from the static
-  // goals.dailyCalorieTarget. That static value was a "cut" target (e.g.
-  // 1750) and didn't reflect today's actual metabolic floor. With the new
-  // baseline, the morning floor on a rest day for an active athlete is
-  // ~2100-2400, and activity adds eat-back on top.
-  //
-  // Fallback chain:
-  //   1. Computed: rmr + neatKcal + tefKcal (excluding activity, since
-  //      eatBack handles that separately).
-  //   2. goals.dailyCalorieTarget — user-set override.
-  //   3. 2000 — last-resort floor.
-  let baseline = 2000;
-  try {
-    const t = computeTDEE(date);
-    const rmrBaseline = t && Number(t.rmr) + Number(t.neatKcal || 0) + Number(t.tefKcal || 0);
-    if (Number.isFinite(rmrBaseline) && rmrBaseline > 1200) {
-      baseline = Math.round(rmrBaseline);
-    } else {
-      const goals = getGoals();
-      const staticTarget = parseFloat(goals.dailyCalorieTarget);
-      if (Number.isFinite(staticTarget) && staticTarget > 1000) baseline = staticTarget;
-    }
-  } catch {
-    try {
-      const goals = getGoals();
-      baseline = parseFloat(goals.dailyCalorieTarget) || 2000;
-    } catch { /* ignore */ }
-  }
-
-  const activityKcal = dailyActivityCalories(date);
-  const eatBackKcal = Math.round(activityKcal * eatBackPct);
-  return {
-    baseline,
-    activityKcal,
-    eatBackKcal,
-    dynamicTarget: baseline + eatBackKcal,
-    eatBackPct,
-    isTrainingDay: activityKcal >= 200,  // threshold: anything <200 kcal is incidental movement
-  };
+export function getDynamicCalorieTarget(/* dateStr, opts */) {
+  throw new Error(_DYNAMIC_DEPRECATED);
 }
 
-/**
- * Today's macro target adjusted for activity.
- *
- * Distributes the eat-back calories across all three macros proportional to
- * the user's baseline split. So if the baseline is 30% protein / 40% carb /
- * 30% fat and the user earns 500 eat-back kcal, the +500 is split:
- *   • protein: +150 kcal → +37g     (30% × 500 / 4 kcal/g)
- *   • carbs:   +200 kcal → +50g     (40% × 500 / 4 kcal/g)
- *   • fat:     +150 kcal → +17g     (30% × 500 / 9 kcal/g)
- *
- * Why proportional (vs. carbs-only): users want to SEE all three targets
- * move with their training day. Keeping the split intact preserves the
- * user-set ratio. The previous "carbs-only" approach was nutritionally
- * defensible (LBM-floored protein, hormonal-floored fat) but invisible —
- * users on a hard day saw their carb target jump while protein/fat stayed
- * static, which felt broken.
- *
- * If you specifically want LBM-floored protein semantics later, expose
- * opts.proteinMode = 'fixed' to opt back in.
- */
-export function getDynamicMacroTarget(dateStr, opts = {}) {
-  const dyn = getDynamicCalorieTarget(dateStr, opts);
-  let baseProteinG = 0, baseCarbsG = 0, baseFatG = 0, baseFiberG = 0;
-  try {
-    const goals = getGoals();
-    baseProteinG = parseFloat(goals.dailyProteinTarget) || 0;
-    baseCarbsG   = parseFloat(goals.dailyCarbTarget)   || 0;
-    baseFatG     = parseFloat(goals.dailyFatTarget)    || 0;
-    baseFiberG   = parseFloat(goals.dailyFiberTarget)  || 0;
-  } catch { /* ignore */ }
-
-  // Compute baseline split (% of baseline calories from each macro)
-  const baseProteinKcal = baseProteinG * 4;
-  const baseCarbsKcal   = baseCarbsG   * 4;
-  const baseFatKcal     = baseFatG     * 9;
-  const baseTotalKcal   = baseProteinKcal + baseCarbsKcal + baseFatKcal || 1;
-  const pPct = baseProteinKcal / baseTotalKcal;
-  const cPct = baseCarbsKcal   / baseTotalKcal;
-  const fPct = baseFatKcal     / baseTotalKcal;
-
-  // Allow caller to opt into the legacy carbs-only behaviour when the
-  // semantic priority is "protein/fat are floors, carbs are the swing".
-  const carbsOnly = opts.proteinMode === 'fixed';
-  const eat = dyn.eatBackKcal;
-
-  let proteinG, carbsG, fatG;
-  if (carbsOnly) {
-    proteinG = baseProteinG;
-    fatG     = baseFatG;
-    carbsG   = baseCarbsG + Math.round(eat / 4);
-  } else {
-    proteinG = baseProteinG + Math.round((eat * pPct) / 4);
-    carbsG   = baseCarbsG   + Math.round((eat * cPct) / 4);
-    fatG     = baseFatG     + Math.round((eat * fPct) / 9);
-  }
-
-  return {
-    ...dyn,
-    proteinG,
-    carbsG,
-    fatG,
-    fiberG: baseFiberG,
-    baseProteinG, baseCarbsG, baseFatG,
-    // Expose the deltas for UIs that want to surface the eat-back math
-    // ("Activity +500 kcal → +37g protein · +50g carbs · +17g fat").
-    eatBackProteinG: proteinG - baseProteinG,
-    eatBackCarbsG:   carbsG   - baseCarbsG,
-    eatBackFatG:     fatG     - baseFatG,
-  };
+export function getDynamicMacroTarget(/* dateStr, opts */) {
+  throw new Error(_DYNAMIC_DEPRECATED);
 }
 
 // ─── Empirical TDEE (derived from observed reality) ────────────────────────
@@ -861,6 +761,79 @@ export function recommendCalorieTarget(opts = {}) {
     avgActivityKcal: Math.round(avgActivityKcal),
     empirical: emp,
     warnings,
+  };
+}
+
+// ─── Safe-cut headroom (Phase 4r.intel.16) ─────────────────────────────────
+//
+// Lightweight helper for recommendation engines: how much CAN we suggest
+// cutting from the user's current daily calorie target without driving
+// intake below RMR? Returns a `phase` classifier so callers don't have
+// to redo the math:
+//   • 'plenty'   — target sits >200 kcal above RMR → normal cut advice is safe
+//   • 'thin'     — target is 50-200 kcal above RMR → prefer activity-side
+//                  increases over intake cuts; small cuts OK
+//   • 'at-floor' — target ≤50 kcal above RMR → DO NOT recommend cutting;
+//                  instead suggest extending goal date, adding zone-2,
+//                  or a maintenance diet break
+//
+// Also surfaces `burnLikelyOverstated` — true when empirical TDEE is
+// >300 kcal below model. When this is true, the right move is usually
+// to LOWER the goal target (recalibrate the math) rather than cut intake.
+//
+// Usage:
+//   const h = safeCutHeadroom();
+//   if (h.phase === 'at-floor') { /* don't cut */ }
+//   else if (h.phase === 'thin') { /* small cut OR zone-2 */ }
+//   else { /* normal cut OK */ }
+//
+// @returns {{
+//   rmr: number, tdeeCurrent: number, goalTarget: number,
+//   headroomKcal: number, phase: 'plenty'|'thin'|'at-floor',
+//   safeCutKcal: number, burnLikelyOverstated: boolean,
+//   empiricalConfidence: string,
+// }}
+export function safeCutHeadroom() {
+  const rec = recommendCalorieTarget();
+  const goals = storage.get('goals') || {};
+  const goalTarget = parseFloat(goals.dailyCalorieTarget) || rec.cutTarget || rec.tdeeCurrent;
+  const rmr = rec.rmr;
+  const tdeeCurrent = rec.tdeeCurrent;
+
+  // Distance from current goal calorie target down to the RMR floor.
+  // Negative means the user already configured a target BELOW RMR (rare,
+  // but possible) — clamp to 0 so safeCutKcal can't be negative.
+  const headroomKcal = Math.max(0, goalTarget - rmr);
+
+  // Classifier — these thresholds reflect typical buffer needed to avoid
+  // metabolic adaptation, hormonal dips, and recovery debt on training days.
+  let phase;
+  if (headroomKcal <= 50)        phase = 'at-floor';
+  else if (headroomKcal <= 200)  phase = 'thin';
+  else                            phase = 'plenty';
+
+  // Maximum cut we'd ever endorse: half the headroom, capped at 250.
+  const safeCutKcal = phase === 'at-floor' ? 0
+                    : Math.min(250, Math.round(headroomKcal / 2 / 50) * 50);
+
+  // Empirical TDEE significantly below model = Garmin (or activity-cal
+  // estimator) is over-crediting burn, OR RMR has adapted down. Either
+  // way: the goal target is built on inflated math and should be lowered.
+  const burnLikelyOverstated =
+    rec.tdeeEmpirical != null
+    && rec.tdeeModel != null
+    && (rec.tdeeModel - rec.tdeeEmpirical) > 300
+    && (rec.empirical?.confidence === 'high' || rec.empirical?.confidence === 'medium');
+
+  return {
+    rmr,
+    tdeeCurrent,
+    goalTarget: Math.round(goalTarget),
+    headroomKcal: Math.round(headroomKcal),
+    phase,
+    safeCutKcal,
+    burnLikelyOverstated,
+    empiricalConfidence: rec.empirical?.confidence || 'insufficient',
   };
 }
 

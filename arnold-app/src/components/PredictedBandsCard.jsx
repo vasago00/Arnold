@@ -265,6 +265,13 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
             // came from the drop-pin cache. Stronger background tint +
             // 'Pinned' label so the user knows the location is captured.
             const isPinned = src.locationSource === 'pin';
+            // Phase 4r.calendar.36d (2026-05-25) — Hide the Drop-a-pin
+            // button entirely when a fresh pin is already active. The
+            // button reappears when the 6h cache expires (locationSource
+            // falls back to travel-aware or default) so the user can
+            // refresh as needed. User feedback: button kept showing
+            // every day; ideally only when geo-location changes.
+            if (isPinned) return null;
             const titleAttr = isPinned
               ? 'Pinned to your current location (refreshes every 6h · tap to re-pin)'
               : 'Use my current location (6h cache)';
@@ -275,7 +282,8 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
                 className="arnold-compact-btn"
                 title={titleAttr}
                 style={{
-                  all: 'unset', cursor: pinning ? 'wait' : 'pointer',
+                  // position: 'relative' required — see POSTMORTEMS.md 2026-05-23
+                  all: 'unset', cursor: pinning ? 'wait' : 'pointer', position: 'relative',
                   fontSize: 9, fontWeight: 600, padding: '0 6px',
                   borderRadius: 4, color,
                   background: isPinned ? 'rgba(74,222,128,0.18)' : `${color}14`,

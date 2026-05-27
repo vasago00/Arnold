@@ -49,6 +49,12 @@ export function Workbench({ showToast }) {
   const [selectedId, setSelectedId] = useState(workouts[0]?.id || null);
   const selected = useMemo(() => workouts.find(w => w.id === selectedId) || null, [workouts, selectedId]);
   const [exporting, setExporting] = useState(false);
+  // Phase 4r.dataspine.7 — Workbench is now collapsible like GoalsHub,
+  // so the Plan tab can default to "see priorities + targets" and the
+  // user expands the workout builder when they want it. Defaults to
+  // collapsed since most Plan-tab visits are for goal review, not
+  // workout authoring.
+  const [expanded, setExpanded] = useState(false);
 
   // Persist any in-memory edits when selected changes.
   const updateSelected = (patch) => {
@@ -210,14 +216,26 @@ export function Workbench({ showToast }) {
       border: '0.5px solid var(--border-default)',
       borderLeft: '2px solid #fbbf24',
       borderRadius: 'var(--radius-md)',
-      padding: '10px 14px',
+      padding: expanded ? '10px 14px' : '8px 14px',
       marginBottom: 10,
     }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+      {/* Phase 4r.dataspine.7 — collapsible header. Click anywhere on
+          the title row to toggle. Workout count + duration shown in the
+          header so the user can see at-a-glance whether they have anything
+          to expand to. */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: expanded ? 10 : 0, flexWrap: 'wrap', cursor: 'pointer' }}
+      >
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>⚒ Workbench</span>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Build custom workouts · export to your Garmin watch as .fit</span>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+          {workouts.length} workout{workouts.length === 1 ? '' : 's'} · Build custom workouts · export to .fit
+        </span>
+        <span style={{ flex: 1 }}/>
+        <span style={{ color: 'var(--text-muted)', fontSize: 12, transition: 'transform 0.2s ease', transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}>▼</span>
       </div>
 
+      {!expanded ? null : (
       <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 12 }}>
         {/* ── LEFT: workout list ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -321,6 +339,7 @@ export function Workbench({ showToast }) {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

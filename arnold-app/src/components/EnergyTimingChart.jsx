@@ -12,6 +12,11 @@ import { storage } from '../core/storage.js';
 import { computeTDEE } from '../core/energyBalance.js';
 import { dailyTotals as nutDailyTotals } from '../core/nutrition.js';
 import { ymd } from '../core/time.js';
+// Phase 4r.fuel.12 (2026-05-25) — bar colors now respect goal direction
+// (cut → deficit is GOOD/green, surplus is BAD/red; bulk → opposite;
+// maintain → close-to-zero is good). Read goal direction from
+// getOutcomeGoal.
+import { getOutcomeGoal } from '../core/goalModel.js';
 
 function formatKcal(n) {
   if (!Number.isFinite(n)) return '—';
@@ -88,6 +93,45 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
     ? Math.round(trend.reduce((s, d) => s + d.balance, 0) / trend.length)
     : 0;
   const maxAbs = Math.max(500, ...trend.map(d => Math.abs(d.balance)));
+
+  // Phase 4r.fuel.12 — goal-aware color. Read outcome direction once
+  // and translate each bar's balance into "good" or "off" relative to
+  // the goal, instead of mechanical positive=green / negative=red.
+  // 'cut'   : negative balance (deficit) is GOOD (green), positive (surplus) is BAD (red)
+  // 'bulk'  : positive balance (surplus) is GOOD, negative is BAD
+  // 'maintain': close to zero is good; far either direction is off
+  const goalDirection = useMemo(() => {
+    try {
+      const o = getOutcomeGoal();
+      const lbsToLose = Number(o?.lbsToLose);
+      if (Number.isFinite(lbsToLose)) {
+        if (lbsToLose > 0.5)  return 'cut';
+        if (lbsToLose < -0.5) return 'bulk';
+      }
+      return 'maintain';
+    } catch { return 'maintain'; }
+  }, [dateStr]);
+
+  // Color a single day's balance based on goalDirection. Returns
+  // a hex color (green/amber/red). Slight magnitude awareness so
+  // small drift reads as amber rather than full red.
+  function balanceColor(balance) {
+    const abs = Math.abs(balance);
+    const mild = abs < 200;   // within ~200 kcal of target = small drift
+    if (goalDirection === 'cut') {
+      if (balance <= 0) return mild ? '#4ade80' : '#22c55e'; // deficit good
+      return mild ? '#fbbf24' : '#f87171';                    // surplus off
+    }
+    if (goalDirection === 'bulk') {
+      if (balance >= 0) return mild ? '#4ade80' : '#22c55e'; // surplus good
+      return mild ? '#fbbf24' : '#f87171';                    // deficit off
+    }
+    // maintain: close = good, far = off (direction agnostic)
+    if (mild) return '#4ade80';
+    return abs < 400 ? '#fbbf24' : '#f87171';
+  }
+
+  const trendAvgColor = balanceColor(trendAvg);
 
   // SVG geometry for the trend strip
   const tw = 280, th = 38;
@@ -183,7 +227,7 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
             7-day balance trend
           </div>
           <div style={{ fontSize: 9, color: '#94a3b8' }}>
-            <span style={{ color: trendAvg < 0 ? '#f87171' : '#4ade80' }}>
+            <span style={{ color: trendAvgColor }}>
               {trendAvg >= 0 ? '+' : ''}{formatKcal(trendAvg)}
             </span> avg
           </div>
@@ -201,7 +245,8 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
             const barH = balRatio * (ch / 2);
             const isPos = d.balance >= 0;
             const y = isPos ? zeroY - barH : zeroY;
-            const color = isPos ? '#4ade80' : '#f87171';
+            // Phase 4r.fuel.12 — color by goal direction, not just sign.
+            const color = balanceColor(d.balance);
             const fillOpacity = d.isToday ? 0.7 : 0.4;
             return (
               <g key={d.date}>

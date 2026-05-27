@@ -21,9 +21,13 @@ import {
   assessCalibration,
   recommendCalorieTarget,
   getCurrentBodyComp,
-  getDynamicCalorieTarget,
-  getDynamicMacroTarget,
+  safeCutHeadroom,
 } from './energyBalance.js';
+// Phase 4r.dataspine.4 — getDynamicCalorieTarget + getDynamicMacroTarget
+// imports removed once all 4 call sites migrated to getEffectiveTargets.
+// Phase 4r.dataspine.3 — prompt titles + thresholds route through goalModel
+// so the numbers prompts produce match what UI surfaces show.
+import { getEffectiveTargets } from './goalModel.js';
 import { dailyTotals } from './nutrition.js';
 import { storage } from './storage.js';
 import { getGoals } from './goals.js';
@@ -35,8 +39,12 @@ const SEVERITY_RANK = { critical: 4, warning: 3, info: 2, positive: 1 };
 
 // ─── Rule helpers ──────────────────────────────────────────────────────────
 
-function prompt({ severity, pillar, id, title, detail, action }) {
-  return { severity, pillar, id, title, detail, action: action || null };
+function prompt({ severity, pillar, id, title, detail, action, recommendation }) {
+  // Phase 4r.intel.15 — `recommendation` is the concrete next-step the
+  // user can take. Renders as a separate line in the EdgeIQ action grid
+  // ("Eat X kcal · 50g protein"). Distinct from `action.label` which is
+  // the button text on the tappable chip. `detail` is context/why.
+  return { severity, pillar, id, title, detail, action: action || null, recommendation: recommendation || null };
 }
 
 // ─── Rules: NUTRITION ──────────────────────────────────────────────────────
@@ -98,9 +106,20 @@ function r_nutritionLogCoverage() {
 /** Today's intake well behind/ahead of activity-adjusted target. */
 function r_nutritionPacing() {
   const today = localDate();
-  const dyn = getDynamicCalorieTarget(today);
-  const target = dyn.dynamicTarget;
+  // Phase 4r.dataspine.4 — canonical target via goalModel. Legacy
+  // getDynamicCalorieTarget fallback removed once getEffectiveTargets
+  // proved reliable across all surfaces.
+  // Phase 4r.coach-prompts.fix (2026-05-25) — derive training-day flag
+  // and eat-back details from goalModel's explain.components, not the
+  // legacy `dyn` variable (which was deleted in dataspine.4 but had
+  // lingering references that threw `dyn is not defined` in the
+  // browser console for every nutrition pacing rule evaluation).
+  const eff = (() => { try { return getEffectiveTargets({ date: today }); } catch { return null; } })();
+  const target = eff?.dailyCalories?.effective;
   if (!target) return null;
+  const eatBackKcal = eff?.dailyCalories?.explain?.components?.eatBack || 0;
+  const isTrainingDay = eatBackKcal > 0;
+  const baseline = target - eatBackKcal;
   let intake = 0;
   try { intake = parseFloat(dailyTotals(today)?.calories) || 0; } catch {}
   const hour = new Date().getHours();
@@ -111,8 +130,8 @@ function r_nutritionPacing() {
       pillar: 'nutrition',
       id: 'intake-not-logged',
       title: 'No food logged yet today',
-      detail: dyn.isTrainingDay
-        ? `Today's training-day target is ${target} kcal (baseline ${dyn.baseline} + ${dyn.eatBackKcal} from activity). Log a meal to start tracking.`
+      detail: isTrainingDay
+        ? `Today's training-day target is ${target} kcal (baseline ${baseline} + ${eatBackKcal} from activity). Log a meal to start tracking.`
         : 'Quick log keeps the calibration model accurate and prevents end-of-day guessing.',
       action: { label: 'Log a meal', kind: 'open-nutrition' },
     });
@@ -128,8 +147,8 @@ function r_nutritionPacing() {
       pillar: 'nutrition',
       id: 'intake-low-pace',
       title: `Intake ${Math.round(intake)} kcal vs ~${Math.round(expected)} expected`,
-      detail: dyn.isTrainingDay
-        ? `Training day target is ${target} kcal (earned ${dyn.eatBackKcal} from activity). Low intake risks bonking + evening overshoot.`
+      detail: isTrainingDay
+        ? `Training day target is ${target} kcal (earned ${eatBackKcal} from activity). Low intake risks bonking + evening overshoot.`
         : 'Low intake by mid-day often leads to evening overshooting. Anchor a balanced meal soon.',
       action: { label: 'Log meal', kind: 'open-nutrition' },
     });
@@ -140,7 +159,7 @@ function r_nutritionPacing() {
       pillar: 'nutrition',
       id: 'intake-high-pace',
       title: `Intake ${Math.round(intake)} kcal — ahead of pace`,
-      detail: `On track to exceed ${target} kcal target${dyn.isTrainingDay ? ' (training day)' : ''}. Lighter dinner protects the deficit.`,
+      detail: `On track to exceed ${target} kcal target${isTrainingDay ? ' (training day)' : ''}. Lighter dinner protects the deficit.`,
     });
   }
   return null;
@@ -186,8 +205,12 @@ function r_nutritionProteinGap() {
  */
 function r_macroBalance() {
   const today = localDate();
-  const dyn = getDynamicCalorieTarget(today);
-  const targetKcal = dyn.dynamicTarget;
+  // Phase 4r.dataspine.4 — canonical target via goalModel; macros now
+  // come from getEffectiveTargets.dailyCarbs / dailyFat / dailyProtein
+  // (carbs/fat derived from kcal + protein floor; see goalModel
+  // deriveDailyMacros). Legacy fallback removed.
+  const eff = (() => { try { return getEffectiveTargets({ date: today }); } catch { return null; } })();
+  const targetKcal = eff?.dailyCalories?.effective;
   if (!targetKcal) return null;
 
   let totals;
@@ -223,14 +246,19 @@ function r_macroBalance() {
   const [mostOver,  overRatio]  = sorted[2];
   if (underRatio >= 0.70 || overRatio <= 1.30) return null;
 
-  const dynMacros = getDynamicMacroTarget(today);
+  // Phase 4r.dataspine.4 — Read macro targets from canonical
+  // getEffectiveTargets instead of legacy getDynamicMacroTarget.
+  // The shape changed: eff.dailyCarbs.effective vs dynMacros.carbsG.
+  const macroProtein = eff?.dailyProtein?.effective || 0;
+  const macroCarbs   = eff?.dailyCarbs?.effective   || 0;
+  const macroFat     = eff?.dailyFat?.effective     || 0;
   const remainingKcal = targetKcal - intakeKcal;
 
   // Compute remaining grams for the under-represented macro
   const macroLabels = {
-    protein: { name: 'Protein', kcalPerG: 4, gTarget: dynMacros.proteinG, current: pG, foods: 'chicken, fish, lean beef, Greek yogurt, cottage cheese, whey, tofu, eggs' },
-    carbs:   { name: 'Carbs',   kcalPerG: 4, gTarget: dynMacros.carbsG,   current: cG, foods: 'rice, oats, potatoes, fruit, whole-grain bread, pasta' },
-    fat:     { name: 'Fat',     kcalPerG: 9, gTarget: dynMacros.fatG,     current: fG, foods: 'avocado, olive oil, nuts, seeds, fatty fish, eggs' },
+    protein: { name: 'Protein', kcalPerG: 4, gTarget: macroProtein, current: pG, foods: 'chicken, fish, lean beef, Greek yogurt, cottage cheese, whey, tofu, eggs' },
+    carbs:   { name: 'Carbs',   kcalPerG: 4, gTarget: macroCarbs,   current: cG, foods: 'rice, oats, potatoes, fruit, whole-grain bread, pasta' },
+    fat:     { name: 'Fat',     kcalPerG: 9, gTarget: macroFat,     current: fG, foods: 'avocado, olive oil, nuts, seeds, fatty fish, eggs' },
   };
   const under = macroLabels[mostUnder];
   const over  = macroLabels[mostOver];
@@ -248,6 +276,7 @@ function r_macroBalance() {
     id: 'macro-imbalance',
     title,
     detail,
+    recommendation: `Next meal: add ~${gNeeded}g ${under.name.toLowerCase()} via ${under.foods}.`,
   });
 }
 
@@ -276,6 +305,27 @@ function r_bodyTrendOffPace() {
   // Cut expected: -0.5 to -0.7 lb/wk healthy; if losing slower, off-pace
   if (direction === 'cut' && actualWeeklyDelta > -0.2) {
     const weeksAtThisRate = actualWeeklyDelta < 0 ? Math.ceil(distanceToTarget / -actualWeeklyDelta) : null;
+    // RMR-aware recommendation. If goal target is already at/near RMR,
+    // cutting further isn't an option — switch to activity-side or date-side
+    // levers instead. The previous fixed-text advice "drop 150-250 kcal/day"
+    // was unsafe for athletes already cutting on a thin margin.
+    let h = null; try { h = safeCutHeadroom(); } catch {}
+    let rec;
+    if (h?.burnLikelyOverstated) {
+      const newTarget = Math.max(h.rmr, h.tdeeCurrent - 500);
+      rec = `Your activity-cal estimate looks high (empirical TDEE ~${Math.round(h.tdeeCurrent)}). Lower the goal target to ~${Math.round(newTarget / 10) * 10} kcal/day — recalibrating the math, not eating less.`;
+    } else if (h?.phase === 'at-floor') {
+      rec = `Goal target ${h.goalTarget} is at RMR (${h.rmr}). Don't cut. Add 20-30 min zone-2 cardio on 3 currently-rest days (~200 kcal/day) OR extend goal date 4-6 weeks.`;
+    } else if (h?.phase === 'thin') {
+      rec = `Only ${h.headroomKcal} kcal between target and RMR. Add 20-30 min zone-2 cardio 3x/wk to widen the deficit through movement. Avoid further intake cuts.`;
+    } else if (h?.phase === 'plenty') {
+      const cut = Math.min(150, h.safeCutKcal);
+      rec = `Drop intake by ${cut} kcal/day for 7 days (still ${h.headroomKcal - cut} kcal above RMR). Or add 20-30 min zone-2 cardio 3x/wk if you'd rather not cut.`;
+    } else {
+      rec = actualWeeklyDelta >= 0
+        ? `Drop intake by 100-150 kcal/day for 7 days IF still well above RMR. Otherwise audit logging (weigh oils + sauces, scan everything).`
+        : `Add 20-30 min zone-2 cardio 3x/wk to push pace toward -0.5 lb/wk without cutting more intake.`;
+    }
     return prompt({
       severity: actualWeeklyDelta >= 0 ? 'warning' : 'info',
       pillar: 'body',
@@ -284,8 +334,9 @@ function r_bodyTrendOffPace() {
         ? `Weight stalled (+${(actualWeeklyDelta * 4).toFixed(1)} lb / 4 wk)`
         : `Cutting at ${actualWeeklyDelta.toFixed(2)} lb/wk — slow`,
       detail: weeksAtThisRate
-        ? `At this rate, target ${targetWeight} lb in ~${weeksAtThisRate} weeks. Tighten logging or open a small additional deficit (50-100 kcal).`
-        : 'Re-audit logging completeness before increasing deficit; the gap is usually intake, not metabolism.',
+        ? `At this rate, target ${targetWeight} lb in ~${weeksAtThisRate} weeks. ${h ? `Goal target ${h.goalTarget} kcal · RMR ${h.rmr} · ${h.headroomKcal} kcal headroom.` : 'Tighten logging before opening more deficit.'}`
+        : `${h ? `Goal ${h.goalTarget} kcal · RMR ${h.rmr} · ${h.headroomKcal} kcal headroom. ` : ''}Re-audit logging completeness before changing the deficit.`,
+      recommendation: rec,
     });
   }
 
@@ -297,6 +348,7 @@ function r_bodyTrendOffPace() {
       id: 'cut-pace-fast',
       title: `Losing fast: ${actualWeeklyDelta.toFixed(2)} lb/wk`,
       detail: '>1.2 lb/wk sustained risks LBM loss + RMR adaptation. Add ~150-250 kcal/day until rate slows to 0.7-1.0 lb/wk.',
+      recommendation: `Add 200 kcal/day (carbs around training, fats elsewhere) and re-measure in 7 days. Aim for -0.7 to -1.0 lb/wk.`,
     });
   }
 
@@ -308,6 +360,7 @@ function r_bodyTrendOffPace() {
       id: 'cut-pace-good',
       title: `On-pace: ${actualWeeklyDelta.toFixed(2)} lb/wk`,
       detail: `Sustainable rate. ~${Math.ceil(distanceToTarget / -actualWeeklyDelta)} weeks to target ${targetWeight} lb.`,
+      recommendation: `Hold current intake + training. Keep protein ≥0.8g/lb to protect lean mass on the deficit.`,
     });
   }
   return null;
@@ -425,6 +478,7 @@ function r_trainingDone() {
     id: 'training-done',
     title: `${intensity} session logged · ${activityKcal} kcal`,
     detail: 'Recovery markers look in line. Hydrate, anchor protein at the next meal, prioritize sleep tonight.',
+    recommendation: `Within 60 min: 30-40g protein + 500ml water with electrolytes. Aim for 7.5h+ sleep tonight.`,
   });
 }
 
@@ -447,17 +501,32 @@ function r_underFuelling() {
   try { intake = parseFloat(dailyTotals(today)?.calories) || 0; } catch {}
   const tdee = computeTDEE(today);
   if (!tdee.activityKcal || tdee.activityKcal < 300) return null; // not a real session
-  const dyn = getDynamicCalorieTarget(today);
-  const target = dyn.dynamicTarget;
+  // Phase 4r.dataspine.4 — canonical target via goalModel. THIS is the
+  // prompt that produced "Behind on training-day target · 1579 of 2919
+  // kcal" — the 2919 came from getDynamicCalorieTarget which honoured
+  // Garmin's inflated eat-back kcal. goalModel applies burn-correction
+  // so prompt + Calendar + Nutrition + EdgeIQ all agree. Legacy
+  // fallback removed.
+  const eff = (() => { try { return getEffectiveTargets({ date: today }); } catch { return null; } })();
+  const target = eff?.dailyCalories?.effective;
   if (!target) return null;
   if (!intake || intake >= target * 0.85) return null; // 85%+ of target = on track
   const remaining = target - intake;
+  // Concrete next-step: split remaining roughly 40C/30P/30F per meal.
+  const remainingCarbsG = Math.round((remaining * 0.40) / 4);
+  const remainingProteinG = Math.round((remaining * 0.30) / 4);
+  // Phase 4r.dataspine.4 — `dyn` was deleted when goalModel became canonical.
+  // Pull eatBack from goalModel's explain block; fall back to today's reported
+  // burn (50% of activity kcal) when explain isn't populated.
+  const eatBackKcal = eff?.dailyCalories?.explain?.components?.eatBack
+    ?? Math.round((tdee.activityKcal || 0) * 0.5);
   return prompt({
     severity: 'warning',
     pillar: 'nutrition',
     id: 'under-fuel-hard-day',
     title: `Behind on training-day target · ${intake} of ${target} kcal`,
-    detail: `Earned ${dyn.eatBackKcal} kcal from today's session. Need ~${remaining} more by bed to fuel recovery — anchor protein + carbs at the next meal.`,
+    detail: `Earned ${eatBackKcal} kcal from today's session. Need ~${remaining} more by bed to fuel recovery — anchor protein + carbs at the next meal.`,
+    recommendation: `Aim ~${remainingCarbsG}g carbs + ${remainingProteinG}g protein at the next meal (rice/oats + chicken/whey covers it).`,
   });
 }
 
@@ -488,29 +557,35 @@ function r_phaseInsight() {
 
 // ─── Public API ────────────────────────────────────────────────────────────
 
+// Phase 4r.process.2 — health probe shares the rule registry so a boot-time
+// probe can count fires + errors without duplicating the list. Single source
+// of truth: every new rule added here is automatically picked up by the
+// fingerprint, and any silently-swallowed ReferenceError gets counted instead
+// of vanishing into console.warn.
+const COACHING_RULES = [
+  r_nutritionBelowRMR,
+  r_nutritionCalibrationDrift,
+  r_nutritionLogCoverage,
+  r_nutritionPacing,
+  r_nutritionProteinGap,
+  r_macroBalance,
+  r_underFuelling,
+  r_bodyTrendOffPace,
+  r_bodyMissingWeighIns,
+  r_recoveryHrvLow,
+  r_recoverySleepLow,
+  r_trainingHoursUnder,
+  r_trainingDone,
+  r_phaseInsight,
+];
+
 /**
  * Return all coaching prompts that fired today, sorted by severity.
  * Each rule reads canonical state and returns either a prompt or null.
  */
 export function getDailyCoachingPrompts() {
-  const rules = [
-    r_nutritionBelowRMR,
-    r_nutritionCalibrationDrift,
-    r_nutritionLogCoverage,
-    r_nutritionPacing,
-    r_nutritionProteinGap,
-    r_macroBalance,
-    r_underFuelling,
-    r_bodyTrendOffPace,
-    r_bodyMissingWeighIns,
-    r_recoveryHrvLow,
-    r_recoverySleepLow,
-    r_trainingHoursUnder,
-    r_trainingDone,
-    r_phaseInsight,
-  ];
   const fired = [];
-  for (const rule of rules) {
+  for (const rule of COACHING_RULES) {
     try {
       const p = rule();
       if (p) fired.push(p);
@@ -521,6 +596,30 @@ export function getDailyCoachingPrompts() {
   }
   fired.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
   return fired;
+}
+
+/**
+ * Phase 4r.process.2 — boot-time health probe.
+ * Runs every rule, returns { totalRules, fires, errors:[{name,message}] }
+ * so the boot fingerprint can show a single-line summary like:
+ *   coach prompts: 14 rules / 8 fired / 0 errors
+ * The previous try/catch armor protected the panel from crashing but also
+ * hid ReferenceErrors (the `dyn` regression went unnoticed for days because
+ * the panel still rendered with whichever rules didn't crash). This probe
+ * makes the silent failures visible at boot.
+ */
+export function runCoachingPromptsHealthProbe() {
+  const errors = [];
+  let fires = 0;
+  for (const rule of COACHING_RULES) {
+    try {
+      const p = rule();
+      if (p) fires++;
+    } catch (e) {
+      errors.push({ name: rule.name, message: e?.message || String(e) });
+    }
+  }
+  return { totalRules: COACHING_RULES.length, fires, errors };
 }
 
 /** Top N most critical prompts — for compact UI surfaces. */
