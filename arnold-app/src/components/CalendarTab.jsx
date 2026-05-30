@@ -23,7 +23,7 @@ import { useSwipeNav } from "./MobileHome.jsx";
 import { storage } from "../core/storage.js";
 import { getRaces, saveRaces } from "../core/memory.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
-import { isRun, isStrength, isHIIT, isHybridWorkout, isMobility, isCycling, isSwim } from "../core/activityClass.js";
+import { isRun, isStrength, isHIIT, isExplicitHIIT, isHybridWorkout, isMobility, isCycling, isSwim } from "../core/activityClass.js";
 import { getPlannerWeek, savePlannerWeek, weekKey } from "../core/planner.js";
 import { fetchAndParseICS } from "../core/parsers/icsParser.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
@@ -90,6 +90,13 @@ function activityFamily(a) {
   // running distance. The hybrid check goes BEFORE the run-with-distance
   // check so HYROX sessions don't accidentally route to 'intervals'.
   if (isHybridWorkout(a)) return 'hiit';
+  // Phase 4r.calendar.fix.4 — explicit HIIT label ("HIIT", cardio_training,
+  // high_intensity_interval_training) wins over run-with-distance. Without
+  // this, a Garmin HIIT session that happened to record running distance
+  // landed in the 'intervals' branch and showed the speed-icon labelled
+  // "Intervals" instead of HIIT. Fartlek/sprint/tempo without the bare HIIT
+  // token still take the run-with-distance path below.
+  if (isExplicitHIIT(a)) return 'hiit';
   // Pure-running with distance: intervals get speed.png, regular runs
   // get easy-run.png. Long runs split off.
   if (isRun(a) && (Number(a.distanceMi) || 0) > 0) {
@@ -106,6 +113,63 @@ function activityFamily(a) {
   }
   if (isCycling(a) || isSwim(a)) return 'cross';
   return 'rest';
+}
+
+// Phase 4r.calendar.fix.8 — pick the DOMINANT activity for the tile's image
+// when a day has multiple completed sessions. Picking completed[0] (whichever
+// was logged first) caused days with morning mobility + afternoon HIIT/Run
+// to display the mobility figure instead of the main workout. The right
+// ranking is by training significance, not by log order.
+//
+// Priority (highest to lowest training-load weight):
+//   race > hiit > long_run > intervals > tempo > run > strength > cross >
+//   mobility > rest
+//
+// Mobility ranks LAST among active sessions because it's a recovery /
+// supplementary block, not a training stimulus. The secondary-activity
+// rail (small dots beside the image) still surfaces the mobility so it's
+// not invisible — it just doesn't claim the main image slot.
+const FAMILY_PRIORITY = {
+  race: 100,
+  hiit: 90,
+  long_run: 85,
+  intervals: 80,
+  tempo: 75,
+  run: 70,
+  strength: 65,
+  cross: 60,
+  mobility: 20,
+  rest: 0,
+};
+function dominantActivityFamily(completed) {
+  const a = dominantActivity(completed);
+  return a ? activityFamily(a) : null;
+}
+
+/**
+ * Pick the single most-significant completed activity by training-priority.
+ * Used so the rail-of-secondary-activities can filter against the SAME object
+ * the image is rendered from (instead of assuming index 0).
+ */
+function dominantActivity(completed) {
+  if (!completed || completed.length === 0) return null;
+  let best = completed[0];
+  let bestRank = FAMILY_PRIORITY[activityFamily(best)] ?? 50;
+  for (let i = 1; i < completed.length; i++) {
+    const r = FAMILY_PRIORITY[activityFamily(completed[i])] ?? 50;
+    if (r > bestRank) { best = completed[i]; bestRank = r; }
+  }
+  return best;
+}
+
+/**
+ * All completed activities EXCEPT the dominant one, preserving order.
+ * The rail renders these as small dots / family icons so a morning mobility
+ * stays visible after the HIIT/intervals claims the main image.
+ */
+function secondaryActivities(completed, max = 3) {
+  const dom = dominantActivity(completed);
+  return (completed || []).filter(a => a !== dom).slice(0, max);
 }
 
 // Pull today-or-earlier completed activities and group by date string.
@@ -673,6 +737,10 @@ function sigSrc(family) {
 const SIG_SCALE = {
   mobility: 1.22,
   race:     1.18,
+  // Phase 4r.calendar.fix.5 — hiit.png figure is framed smaller inside its
+  // canvas than the running figures (speed.png, easy-run.png), so HIIT tiles
+  // visually read smaller than adjacent run tiles. Modest boost normalizes it.
+  hiit:     1.12,
   // everything else = 1.0
 };
 
@@ -740,9 +808,11 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const isPlannedOnly = !hasRace && !hasCompleted && planned && planned.type && planned.type !== 'rest';
 
   // Dominant family for tile coloring (race > completed > planned > rest).
+  // Phase 4r.calendar.fix.8 — pick by training-priority not log order so
+  // morning mobility doesn't claim the tile when the day also had a HIIT.
   let family = 'rest';
   if (hasRace) family = 'race';
-  else if (hasCompleted) family = activityFamily(completed[0]);
+  else if (hasCompleted) family = dominantActivityFamily(completed);
   else if (isPlannedOnly) family = planned.type;
   const style = FAMILY_STYLE[family] || FAMILY_STYLE.rest;
 
@@ -929,12 +999,10 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
         </div>
 
         {/* Right rail: absolute-positioned so it doesn't compress the
-            image. Only renders for 2+ activities.
-            Phase 4r.calendar.18 — borderLeft removed (the visible
-            vertical line user flagged). Mobility now renders as the
-            shared Stretch SVG (matches mobile Start screen). Other
-            secondary activities still show the family-colored dot +
-            short label since we don't have icon parity for them yet. */}
+            image. Renders the activities that AREN'T the dominant one
+            shown in the main image (Phase 4r.calendar.fix.9 — previously
+            used completed.slice(1,4) which assumed index 0 was dominant;
+            after the priority fix it could drop the wrong activity). */}
         {hasCompleted && completed.length > 1 && (
           <div style={{
             position: 'absolute',
@@ -943,7 +1011,7 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
             gap: 3, paddingLeft: 2,
             alignItems: 'flex-end', justifyContent: 'center',
           }}>
-            {completed.slice(1, 4).map((a, i) => {
+            {secondaryActivities(completed, 3).map((a, i) => {
               const fam = activityFamily(a);
               const c = FAMILY_STYLE[fam] || FAMILY_STYLE.rest;
               // Mobility gets the dedicated reaching-up figure SVG.
@@ -1068,13 +1136,18 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
 
   let family = 'rest';
   if (hasRace) family = 'race';
-  else if (hasCompleted) family = activityFamily(completed[0]);
+  // Phase 4r.calendar.fix.8 — dominant-by-training-priority, not log order.
+  else if (hasCompleted) family = dominantActivityFamily(completed);
   else if (isPlannedOnly) family = planned.type;
   const style = FAMILY_STYLE[family] || FAMILY_STYLE.rest;
 
-  // Secondary mobility indicator — same trigger as desktop tile.
-  const hasMobilitySecondary = hasCompleted && completed.length > 1 &&
-    completed.slice(1).some(a => activityFamily(a) === 'mobility');
+  // Secondary mobility indicator. Phase 4r.calendar.fix.9 — was slice(1)
+  // which assumed completed[0] was the dominant activity; after the
+  // priority-based dominant-pick fix, mobility could be at index 0 with
+  // a higher-priority HIIT/run at index 1. Now: mobility is "secondary"
+  // whenever it's present AND it's not the dominant family on the tile.
+  const hasMobilitySecondary = hasCompleted && family !== 'mobility' &&
+    completed.some(a => activityFamily(a) === 'mobility');
 
   const sigImg = (hasRace || hasCompleted || isPlannedOnly) ? sigSrc(family) : null;
 

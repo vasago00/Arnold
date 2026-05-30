@@ -68,6 +68,8 @@ import {
 } from "../core/derive/tileMetrics.js";
 import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
+import { CoachComment } from "./CoachComment.jsx";
+import { CoachSigil } from "./CoachSigil.jsx";
 // Phase 4r.hygiene.1 — InsightsPanel import removed. Its last consumer in
 // this file (MobileEdgeIQ) was removed in 4r.intel.24 when the legacy
 // stat-gated insight tile was retired in favour of the multi-hypothesis
@@ -331,6 +333,12 @@ const T4       = 'rgba(255,255,255,0.45)';
 export const NAV_ITEMS = [
   { id: 'start',    label: 'Start' },
   { id: 'edgeiq',   label: 'EdgeIQ',   tab: 'weekly' },
+  // Phase 4r.narrative.5.fix.24 — Coach tab reverted from mobile nav.
+  // The full CoachBeta surface was just the web layout transplanted,
+  // which read poorly on a phone. New direction: the Coach is an
+  // AMBIENT presence — subtle sigil-branded comments woven into the
+  // screens where the leverage is actionable (the CoachLine pattern),
+  // not a destination tab. Being designed on web first.
   { id: 'play',     label: 'Play',     tab: 'activity' },
   { id: 'fuel',     label: 'Fuel',     tab: 'nutrition_mobile' },
   // Phase 4r.calendar.24 — Calendar moved before Core (per user
@@ -1118,20 +1126,17 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
           chips fit comfortably on a single row at ~75 px each. */}
       {intelHeadline && (
         <div style={{
-          fontSize: 11, fontWeight: 500, color: T3,
-          fontStyle: 'italic',
+          // Phase 4r.narrative.5.fix.27 — Start coaching headline is now
+          // sigil-marked (the Coach's voice) instead of a generic "→".
+          // Line-clamp removed so the Coach finishes its sentence.
+          display: 'flex', alignItems: 'flex-start', gap: 7,
           marginTop: -2, marginBottom: 7,
-          lineHeight: 1.4,
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
-          overflowWrap: 'anywhere',
         }}>
-          <span aria-hidden style={{
-            color: C.blue, fontStyle: 'normal',
-            fontWeight: 700, marginRight: 4,
-          }}>→</span>{intelHeadline}
+          <CoachSigil size={14} style={{ marginTop: 2, flexShrink: 0, opacity: 0.95 }} />
+          <span style={{
+            fontSize: 11, fontWeight: 500, color: T3,
+            lineHeight: 1.4, overflowWrap: 'anywhere',
+          }}>{intelHeadline}</span>
         </div>
       )}
       {factors?.length > 0 && (
@@ -3145,7 +3150,8 @@ export function MobileHome(props) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MOBILE EDGEIQ — standalone screen for the EdgeIQ tab on mobile
 // ═══════════════════════════════════════════════════════════════════════════════
-import { getSystemsReport, getSystemDetail, getSystemWeekly, SYSTEMS } from "../core/healthSystems.js";
+import { getSystemsReport, getSystemDetail, getSystemWeekly, SYSTEMS, getSystemCoachRead, getBioactiveStack } from "../core/healthSystems.js";
+import { GROUP_COLOR as BIO_GROUP_COLOR } from "./BioactiveStack.jsx";
 // Health system iconography — Gemini-generated line-art PNGs at 256×256, dark
 // #0b0d12 background. Each PNG already has the system's accent color baked in,
 // so the rendering doesn't need to tint or recolor them. Vite imports resolve
@@ -3215,7 +3221,20 @@ function MobileSystemTile({ sys, isActive, onTap }) {
             ? <img src={pngSrc} alt={sys.name} width={36} height={36} style={{ display: 'block' }} />
             : svgIcon}
         </div>
-        <div style={{ fontSize: 11, fontWeight: 700, color: T2, lineHeight: 1.15, marginBottom: 3, minHeight: 20 }}>
+        {/* Tile name — sized to fit "Energy/Strength" + "Brain/Cognition"
+            without clipping on narrow mobile widths. 10.5px lets the longest
+            names render whole; whiteSpace:nowrap + overflow:hidden prevents
+            mid-word truncation when a name still pushes past the tile edge
+            (instead, an ellipsis appears — graceful rather than alarming).
+            minHeight:30 reserves two text-lines of space so tiles align
+            even when one name wraps and another doesn't. */}
+        <div style={{
+          fontSize: 10.5, fontWeight: 700, color: T2,
+          lineHeight: 1.2, marginBottom: 3,
+          minHeight: 26,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          padding: '0 2px',
+        }}>
           {sys.name.replace(' & ', '/')}
         </div>
         <div style={{ fontSize: 15, fontWeight: 800, color: statusColor }}>{sys.pct}%</div>
@@ -3244,6 +3263,28 @@ function SystemDetailPanel({ systemId, data, comment }) {
   const today = localDate();
   const detail = useMemo(() => getSystemDetail(systemId, today), [systemId, today]);
   const weekly = useMemo(() => getSystemWeekly(systemId), [systemId]);
+
+  // Coach Read — surface what the Coach engine knows about this system today.
+  // Mirrors the web SystemDetail pattern; memoized on system + date so we
+  // don't recompute on every panel re-render.
+  const coachRead = useMemo(() => {
+    try {
+      const us = computeUserState({
+        activities:   storage.get('activities')   || [],
+        sleep:        storage.get('sleep')        || [],
+        hrv:          storage.get('hrv')          || [],
+        weight:       storage.get('weight')       || [],
+        nutritionLog: storage.get('nutritionLog') || [],
+        wellness:     storage.get('wellness')     || [],
+        planner:      storage.get('planner')      || null,
+        profile:      { ...(storage.get('profile') || {}), ...getGoals() },
+      });
+      return getSystemCoachRead(systemId, us?.coachSignals || null);
+    } catch (e) {
+      console.warn('[MobileCoachRead] failed for system', systemId, e?.message || e);
+      return null;
+    }
+  }, [systemId, today]);
 
   if (!detail) return null;
   const { system, details: nutrients } = detail;
@@ -3356,78 +3397,382 @@ function SystemDetailPanel({ systemId, data, comment }) {
         <div style={tabStyle(detailTab === 'annual')} onClick={() => setDetailTab('annual')}>Annual</div>
       </div>
 
-      {/* ── Daily tab ── */}
+      {/* ── Daily tab ── Phase 4r.intel.upgrade.mobile.1 — parity with web
+          WebSystemDetail: Coach sigil + line + signal tiles, bioactive hex
+          stack, nutrient donuts. Mobile-tuned widths and gaps. */}
       {detailTab === 'daily' && (
         <div>
-          {/* Nutrient breakdown */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Nutrients</div>
-          {nutrients.map((n, i) => (
-            <div key={i} style={{ marginBottom: 6 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T2, marginBottom: 2 }}>
-                <span style={{ fontWeight: 600 }}>{n.short}</span>
-                <span style={{ color: barColor(n.pct), fontWeight: 600 }}>{n.value} / {n.target} <span style={{ color: T4, fontWeight: 500 }}>({n.pct}%)</span></span>
-              </div>
-              <div style={{ height: 4, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
-                <div style={{ height: 4, background: barColor(n.pct), borderRadius: 2, width: `${Math.min(n.pct, 100)}%`, transition: 'width 0.4s ease' }} />
-              </div>
+          {/* Coach Read — sigil + line + signal tiles. Always renders when
+              coachRead is present; systems without active signals still get
+              a thoughtful fallback voice (gut, immune in early days, etc.) */}
+          {coachRead && (
+            <div style={{ marginBottom: 14 }}>
+              {coachRead.coachLine && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+                  <CoachSigil size={16} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <div style={{
+                    flex: 1, minWidth: 0,
+                    fontSize: 12.5, lineHeight: 1.5,
+                    color: T1,
+                  }}>
+                    {coachRead.coachLine}
+                  </div>
+                </div>
+              )}
+              {/* Stat cards — fixed-width metric tiles with left-edge accent
+                  strip, vertical hierarchy (LABEL · VALUE · context). Tiles
+                  wrap naturally and never stretch. Single-tile sections stay
+                  the same width as multi-tile ones. Empty values are
+                  filtered out so half-rendered chips can't appear. */}
+              {(() => {
+                const validSigs = coachRead.signals.filter(s => s && s.value != null && s.value !== '—' && s.value !== '');
+                if (validSigs.length === 0) return null;
+                return (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {validSigs.map((sig, i) => (
+                      <div key={i} style={{
+                        width: 108,
+                        minHeight: 78,
+                        background: BG,
+                        borderRadius: 10,
+                        position: 'relative',
+                        padding: '8px 9px 8px 12px',
+                        overflow: 'hidden',
+                        display: 'flex', flexDirection: 'column', gap: 3,
+                      }}>
+                        {/* Left accent strip — single visual cue for state color */}
+                        <div style={{
+                          position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
+                          background: sig.color, borderRadius: '10px 0 0 10px',
+                        }}/>
+                        <div style={{
+                          fontSize: 8.5, color: T4, fontWeight: 600,
+                          textTransform: 'uppercase', letterSpacing: '0.08em',
+                          lineHeight: 1.2,
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
+                        }}>{sig.label}</div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 2, marginTop: 1 }}>
+                          <span style={{ fontSize: 17, fontWeight: 700, color: sig.color, lineHeight: 1 }}>{sig.value}</span>
+                          {sig.unit && <span style={{ fontSize: 9, color: T4 }}>{sig.unit}</span>}
+                        </div>
+                        {sig.headline && (
+                          <div style={{
+                            fontSize: 8.5, color: T4, lineHeight: 1.3,
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                            marginTop: 'auto',
+                          }}>
+                            {sig.headline}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
-          ))}
-
-          {/* Training signals */}
-          {signals.training.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Training</div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.training.length, 3)}, 1fr)`, gap: 6 }}>
-                {signals.training.map((sig, i) => {
-                  const r = resolveSignal(sig, 'daily');
-                  return (
-                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
           )}
 
-          {/* Body signals */}
-          {signals.body.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Body</div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.body.length, 3)}, 1fr)`, gap: 6 }}>
-                {signals.body.map((sig, i) => {
-                  const r = resolveSignal(sig, 'daily');
-                  return (
-                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{r.unit}</div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          {/* Bioactive hex stack + nutrient donuts — mirrors web. Detects
+              compounds by name pattern (NMN, Rv, Curcumin, etc.), maps each
+              to {short, group}, then renders the hex chips grouped by
+              category alongside category color. Regular nutrients (Protein,
+              Mg, etc.) get donut rings underneath. */}
+          {(() => {
+            const visibleNutrients = (nutrients || []).filter(n =>
+              n && (n.value > 0 || n.target > 0) && n.pct != null
+            );
+            if (visibleNutrients.length === 0) return null;
 
-          {/* Blood markers */}
-          {signals.blood.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T3, textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 10, marginBottom: 6 }}>Blood</div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 3)}, 1fr)`, gap: 6 }}>
-                {signals.blood.map((sig, i) => {
-                  const r = resolveBlood(sig);
-                  return (
-                    <div key={i} style={{ background: BG, borderRadius: 10, padding: '10px 6px 8px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: r.value === '—' ? T4 : T1, lineHeight: 1 }}>{r.value}</div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: T3, marginTop: 3 }}>{sig}</div>
+            // Canonical source of truth for "taken today": getBioactiveStack
+            // walks the supplements log + stack + catalog and returns each
+            // bioactive with taken=true the moment ANY dose containing it has
+            // been logged. This matches what the Daily/Fuel summary shows.
+            const canonicalBio = getBioactiveStack(today);
+            const takenByName = new Map(canonicalBio.map(b => [b.name, b.taken]));
+
+            // Name → {short, group, ui-color category} mapping. Each entry
+            // matches by the canonical nutrient name from supplements.js
+            // SEED_CATALOG so this stays aligned with the upstream data model.
+            const NAME_META = {
+              'NMN (Nicotinamide Mononucleotide)':           { short: 'NMN', group: 'longevity' },
+              'Trans-Resveratrol':                           { short: 'Rv',  group: 'longevity' },
+              'Spermidine (wheat germ extract)':             { short: 'Sp',  group: 'longevity' },
+              'Trimethylglycine (TMG/Betaine anhydrous)':    { short: 'TMG', group: 'longevity' },
+              'Apigenin':                                    { short: 'Ap',  group: 'longevity' },
+              'Quercetin':                                   { short: 'Qc',  group: 'defense' },
+              'Fisetin':                                     { short: 'Fis', group: 'neural' },
+              'Turmeric (curcumin extract)':                 { short: 'Cur', group: 'defense' },
+              'Fish Oil (total)':                            { short: 'FO',  group: 'defense' },
+              'Ashwagandha (KSM-66)':                        { short: 'Ash', group: 'performance' },
+              'Beetroot powder concentrate':                 { short: 'Btr', group: 'performance' },
+              'Creatine':                                    { short: 'Cre', group: 'neural' },
+              'Magnesium L-Threonate (Magtein)':             { short: 'MgT', group: 'neural' },
+              'Shilajit resin':                              { short: 'Shi', group: 'adaptive' },
+            };
+            const bioactives = [];
+            const regularNutrients = [];
+            for (const n of visibleNutrients) {
+              const key = n.nutrient || n.name || '';
+              const meta = NAME_META[key];
+              if (meta) {
+                const taken = takenByName.has(key) ? takenByName.get(key) : (n.pct >= 80);
+                bioactives.push({ ...n, _short: meta.short, _group: meta.group, _taken: taken });
+              } else {
+                regularNutrients.push(n);
+              }
+            }
+            const bioByGroup = {};
+            for (const b of bioactives) {
+              (bioByGroup[b._group] = bioByGroup[b._group] || []).push(b);
+            }
+            const BIO_GROUP_LABEL = {
+              neural: 'Neural', longevity: 'Longevity', defense: 'Defense',
+              performance: 'Perform', adaptive: 'Adaptive', other: 'Other',
+            };
+            const BIO_GROUP_ORDER = ['neural','longevity','defense','performance','adaptive','other'];
+            const withAlpha = (hex, a) => {
+              const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+              return `rgba(${r},${g},${b},${a})`;
+            };
+            const HexChip = ({ short, taken, color }) => (
+              <svg width={26} height={26} viewBox="-15 -15 30 30" style={{ display:'block' }} fontFamily="ui-sans-serif" fontWeight={500} textAnchor="middle">
+                <polygon
+                  points="-12,-7 -12,7 0,14 12,7 12,-7 0,-14"
+                  fill={taken ? withAlpha(color, 0.22) : 'transparent'}
+                  stroke={taken ? color : withAlpha(color, 0.40)}
+                  strokeWidth={1.2}
+                  strokeDasharray={taken ? undefined : '2 2'}
+                />
+                <text y="0" dominantBaseline="central" fill={taken ? color : '#94a3b8'} fontSize={8}>{short}</text>
+              </svg>
+            );
+            const capitalize = (s) => {
+              if (!s) return s;
+              if (/[A-Z]/.test(s)) return s;
+              return s.charAt(0).toUpperCase() + s.slice(1);
+            };
+            const Donut = ({ pct, color, size = 48 }) => {
+              const stroke = 4;
+              const r = (size - stroke) / 2;
+              const C = 2 * Math.PI * r;
+              const filled = Math.max(0, Math.min(pct / 100, 1)) * C;
+              return (
+                <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display:'block' }}>
+                  <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={stroke}/>
+                  <circle cx={size/2} cy={size/2} r={r}
+                    fill="none" stroke={color} strokeWidth={stroke}
+                    strokeLinecap="round"
+                    strokeDasharray={`${filled} ${C - filled}`}
+                    transform={`rotate(-90 ${size/2} ${size/2})`}/>
+                </svg>
+              );
+            };
+            return (
+              <>
+                {Object.keys(bioByGroup).length > 0 && (
+                  <>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>Bioactive stack · taken today</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+                      {BIO_GROUP_ORDER.filter(g => bioByGroup[g] && bioByGroup[g].length).map(g => {
+                        const color = BIO_GROUP_COLOR[g] || '#94a3b8';
+                        const items = bioByGroup[g];
+                        const takenCount = items.filter(x => x._taken).length;
+                        return (
+                          <div key={g} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{
+                              fontSize: 9.5, fontWeight: 500, color,
+                              letterSpacing: '0.08em', textTransform: 'uppercase',
+                              minWidth: 86, flexShrink: 0,
+                            }}>
+                              {BIO_GROUP_LABEL[g] || g}
+                              <span style={{ color: T4, fontWeight: 400, marginLeft: 4 }}>
+                                {takenCount}/{items.length}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                              {items.map((b, i) => (
+                                <HexChip key={i} short={b._short} taken={b._taken} color={color} />
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  </>
+                )}
+                {regularNutrients.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.10em', marginTop: 4, marginBottom: 6 }}>Nutrients · today's intake</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
+                      {regularNutrients.map((n, i) => {
+                        const c = barColor(n.pct);
+                        const name = capitalize(n.short || n.name);
+                        return (
+                          <div key={i} style={{
+                            width: 78,
+                            background: BG,
+                            borderRadius: 8,
+                            border: `0.5px solid ${c}33`,
+                            padding: '7px 4px 5px',
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                          }}>
+                            <div style={{ position: 'relative' }}>
+                              <Donut pct={n.pct} color={c}/>
+                              <div style={{
+                                position: 'absolute', inset: 0,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 10, fontWeight: 700, color: c, letterSpacing: '-0.02em',
+                              }}>{n.pct}%</div>
+                            </div>
+                            <div style={{
+                              fontSize: 9.5, fontWeight: 500, color: T1,
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                              maxWidth: '100%', textAlign: 'center',
+                            }}>{name}</div>
+                            <div style={{ fontSize: 8, color: T4, lineHeight: 1 }}>
+                              {n.value}/{n.target}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
+
+          {/* Training / Body / Blood signal tiles — unified stat-card pattern.
+              Fixed-width tiles (108px), wrap naturally, never stretch. The
+              left-edge accent strip now carries threshold meaning: each
+              signal has a target (from goals or a clinical norm) and the
+              strip colors green/yellow/red based on where the value lands.
+              A short status word (recovered / fit / restful / etc.) renders
+              as the footer so the visual cue and the text cue agree.
+              Blood markers stay neutral since they don't have universal
+              thresholds in this view. */}
+          {(() => {
+            const goals = getGoals();
+            // Per-signal target → drives the % bands for non-clinical signals.
+            const sigTarget = (name) => {
+              if (name === 'HRV') return parseFloat(goals?.targetHRV) || 45;
+              if (name === 'RHR') return parseFloat(goals?.targetRHR) || 50;
+              if (name === 'Sleep Score') return parseFloat(goals?.targetSleepScore) || 80;
+              if (name === 'Avg HR') return parseFloat(goals?.targetAvgRunHR) || null;
+              if (name === 'Weekly Miles') return parseFloat(goals?.weeklyRunDistanceTarget) || null;
+              if (name === 'Weekly Hours') return parseFloat(goals?.weeklyTimeTargetHrs) || null;
+              if (name === 'Strength Sessions') return parseFloat(goals?.weeklyStrengthTarget) || null;
+              if (name === 'Weight') return parseFloat(goals?.targetWeight) || null;
+              if (name === 'Body Fat %') return parseFloat(goals?.targetBodyFat) || null;
+              if (name === 'Lean Mass') return parseFloat(goals?.targetLeanMass) || null;
+              return null;
+            };
+            // Threshold-based color. Returns null when there's no usable
+            // threshold (neutral grey is rendered in that case).
+            const sigColor = (name, val) => {
+              if (val == null || val === '—' || !Number.isFinite(Number(val))) return null;
+              const v = Number(val);
+              // Clinical hard thresholds — same numbers as web sigColor().
+              if (name === 'HRV')         return v >= 40 ? '#4ade80' : v >= 30 ? '#fbbf24' : '#f87171';
+              if (name === 'RHR')         return v <= 55 ? '#4ade80' : v <= 65 ? '#fbbf24' : '#f87171';
+              if (name === 'Sleep Score') return v >= 80 ? '#4ade80' : v >= 60 ? '#fbbf24' : '#f87171';
+              const t = sigTarget(name);
+              if (t == null) return null;
+              // Avg HR is "lower vs target" — same shape as the web.
+              if (name === 'Avg HR') return v <= t * 1.05 ? '#4ade80' : v <= t * 1.15 ? '#fbbf24' : '#f87171';
+              // Body Fat % and Weight are "closer to target = better" —
+              // green if within ±5% of target, yellow within ±10%, red beyond.
+              if (name === 'Body Fat %' || name === 'Weight') {
+                const drift = Math.abs(v - t) / t;
+                return drift <= 0.05 ? '#4ade80' : drift <= 0.10 ? '#fbbf24' : '#f87171';
+              }
+              // Default: % of target, higher = better (miles, hours, sessions, lean mass).
+              const pct = v / t;
+              return pct >= 0.9 ? '#4ade80' : pct >= 0.7 ? '#fbbf24' : '#f87171';
+            };
+            // Short status word — confirms what the color is saying.
+            const sigStatus = (name, val) => {
+              if (val == null || val === '—' || !Number.isFinite(Number(val))) return null;
+              const v = Number(val);
+              if (name === 'HRV')         return v >= 40 ? 'recovered' : v >= 30 ? 'borderline' : 'strained';
+              if (name === 'RHR')         return v <= 55 ? 'fit' : v <= 65 ? 'normal' : 'elevated';
+              if (name === 'Sleep Score') return v >= 80 ? 'restful' : v >= 60 ? 'fair' : 'poor';
+              if (name === 'Avg HR') {
+                const t = sigTarget(name); if (t == null) return null;
+                return v <= t * 1.05 ? 'on pace' : v <= t * 1.15 ? 'drifting' : 'over';
+              }
+              if (name === 'Body Fat %' || name === 'Weight') {
+                const t = sigTarget(name); if (t == null) return null;
+                const drift = Math.abs(v - t) / t;
+                return drift <= 0.05 ? 'on target' : drift <= 0.10 ? 'near' : 'off';
+              }
+              const t = sigTarget(name); if (t == null) return null;
+              const pct = v / t;
+              return pct >= 0.9 ? 'on track' : pct >= 0.7 ? 'behind' : 'short';
+            };
+
+            const NEUTRAL = '#475569';   // dark slate — clearly inert vs the live colors
+            const renderStatCard = (label, r, accent, footer, valueColor) => (
+              <div style={{
+                width: 108,
+                minHeight: 78,
+                background: BG,
+                borderRadius: 10,
+                position: 'relative',
+                padding: '8px 9px 8px 12px',
+                overflow: 'hidden',
+                display: 'flex', flexDirection: 'column', gap: 3,
+              }}>
+                <div style={{
+                  position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
+                  background: accent, borderRadius: '10px 0 0 10px',
+                }}/>
+                <div style={{
+                  fontSize: 8.5, color: T4, fontWeight: 600,
+                  textTransform: 'uppercase', letterSpacing: '0.08em',
+                  lineHeight: 1.2,
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                  display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
+                }}>{label}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 2, marginTop: 1 }}>
+                  <span style={{ fontSize: 17, fontWeight: 700, color: valueColor || T1, lineHeight: 1 }}>{r.value}</span>
+                  {r.unit && <span style={{ fontSize: 9, color: T4 }}>{r.unit}</span>}
+                </div>
+                {footer && (
+                  <div style={{ fontSize: 8.5, color: T4, lineHeight: 1.3, marginTop: 'auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {footer}
+                  </div>
+                )}
               </div>
-            </>
-          )}
+            );
+
+            const sections = [];
+            const tT = signals.training.map((sig) => ({ sig, r: resolveSignal(sig, 'daily') })).filter(t => t.r.value != null && t.r.value !== '—');
+            const tB = signals.body.map((sig) => ({ sig, r: resolveSignal(sig, 'daily') })).filter(t => t.r.value != null && t.r.value !== '—');
+            const tBl = signals.blood.map((sig) => ({ sig, r: resolveBlood(sig) })).filter(t => t.r.value != null && t.r.value !== '—');
+            if (tT.length) sections.push({ title: 'Training signals', tiles: tT, clinical: true });
+            if (tB.length) sections.push({ title: 'Body signals', tiles: tB, clinical: true });
+            if (tBl.length) sections.push({ title: 'Blood markers', tiles: tBl, clinical: false });
+            return sections.map((s, si) => (
+              <div key={si}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T3, textTransform: 'uppercase', letterSpacing: '0.10em', marginTop: 12, marginBottom: 6 }}>{s.title}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {s.tiles.map(({ sig, r }, i) => {
+                    if (!s.clinical) {
+                      // Blood markers — no universal threshold available here,
+                      // strip stays neutral and footer is blank.
+                      return <div key={i}>{renderStatCard(sig, r, NEUTRAL, null, null)}</div>;
+                    }
+                    const c = sigColor(sig, r.value);
+                    const status = sigStatus(sig, r.value);
+                    return <div key={i}>{renderStatCard(sig, r, c || NEUTRAL, status, c)}</div>;
+                  })}
+                </div>
+              </div>
+            ));
+          })()}
         </div>
       )}
 
@@ -3917,4 +4262,140 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <div style={{
               width: 22, height: 22, borderRadius: 6,
-          
+              background: 'linear-gradient(135deg, rgba(91,155,213,0.15), rgba(94,196,212,0.1))',
+              border: '1px solid rgba(91,155,213,0.12)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 10, color: C.blue, fontWeight: 800,
+            }}>A</div>
+            <span style={{ fontSize: 10, fontWeight: 700, color: T3, letterSpacing: '0.14em' }}>ARNOLD</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5, minWidth: 0 }}>
+            <Icon.GemSpark color={C.purple} size={18} />
+            <span style={{
+              fontSize: 16, fontWeight: 600, color: T1,
+              letterSpacing: '0.01em',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>EdgeIQ</span>
+          </div>
+        </div>
+        <span style={{
+          fontSize: 11, fontWeight: 500, color: T3,
+          letterSpacing: '0.04em',
+          whiteSpace: 'nowrap', marginTop: 4,
+        }}>{(()=>{const d=new Date();return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});})()}</span>
+      </div>
+
+      {/* Phase 4r.intel.24 — MobileCalibrationStrip ("BEHIND +0.6 lb drift")
+          removed. The same calibration signal is already encoded in the
+          primary intelligence tile (multi-hypothesis synthesizer) below
+          and in the WEIGHT cockpit tile. Stacking it as a fourth channel
+          of the same fact was redundant and pushed the screen toward a
+          "wall of text" feel that violated the glance-first principle. */}
+
+      {/* Phase 4r.narrative.5.fix.26 — the unbranded MobileIntelligenceCards
+          "PRIORITY · …" tile is replaced by the sigil-marked ambient Coach.
+          That tile WAS the Coach's synthesized leverage/action, just without
+          the voice. Now it carries the Convergent Wedge sigil so it reads
+          unmistakably as "the Coach speaking." It only renders when there's
+          an actionable leverage — on an aligned day the screen stays quiet.
+          Same <CoachComment> component used on web EdgeIQ, so the Coach is
+          one consistent voice across surfaces.
+          Phase 4r.narrative.5.fix.28 — mobile EdgeIQ has a DEDICATED focus:
+          the recovery/readiness read (HRV/sleep/RHR), distinct from Start
+          which shows "the one thing." surface='edgeiq_mobile'. */}
+      <CoachComment surface="edgeiq_mobile" />
+
+      {/* ── HEALTH SYSTEMS ── */}
+      <div style={sectionHeader}>Health Systems
+        <div style={{ display: 'flex', gap: 6, fontSize: 10, color: T3, marginLeft: 'auto' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />{focusCount}
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171' }} />{defCount}
+          </span>
+        </div>
+      </div>
+      <div style={card}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
+          {report.map(sys => <MobileSystemTile key={sys.id} sys={sys} isActive={expandedSystem === sys.id} onTap={handleTileTap} />)}
+        </div>
+        {expandedSystem && <SystemDetailPanel systemId={expandedSystem} data={data} comment={report.find(s => s.id === expandedSystem)?.comment} />}
+      </div>
+
+      {/* ── SIGNAL COCKPIT ── */}
+      {/* Phase 4r.cockpit.1 — 4×2 grid, all tiles 7-day window. Sub-label
+          under each tile explicitly states the time scope so there's no
+          ambiguity ("7d avg" / "7d total" / "+0.4 in 7d" etc.). */}
+      <div style={sectionHeader}>Signal Cockpit <div style={shLine} /></div>
+      <div style={card}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+          {cockpitItems.map((item, i) => {
+            const goalVal = parseFloat(item.goal) || 0;
+            const val = parseFloat(item.value) || 0;
+            // Phase 4r.cockpit.4 — lower-is-better metrics (RHR, Weight)
+            // need inverted progress math: when val <= goal you've achieved
+            // (or beaten) the target → full bar; when val > goal the bar
+            // shrinks proportionally as a "distance from goal" indicator.
+            const pct = goalVal > 0
+              ? (item.lowerIsBetter
+                  ? (val <= goalVal ? 1 : Math.max(0, goalVal / val))
+                  : Math.min(val / goalVal, 1))
+              : 0;
+            return (
+              <div key={i} style={{
+                position: 'relative', overflow: 'hidden',
+                background: CARD_BG, borderRadius: 12, padding: '10px 6px 8px', textAlign: 'center',
+                border: `1px solid ${BORDER}`,
+              }}>
+                <div style={{ position: 'absolute', top: 0, left: 6, right: 6, height: 2, borderRadius: '0 0 2px 2px', background: item.color, opacity: 0.5 }} />
+                <div style={{ fontSize: 18, fontWeight: 800, color: item.color, lineHeight: 1 }}>{item.value}</div>
+                <div style={{ fontSize: 10, color: T4, marginTop: 2 }}>{item.unit}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: T2, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{item.label}</div>
+                {item.sub && (
+                  <div style={{ fontSize: 9, color: T4, marginTop: 2, fontWeight: 500 }}>{item.sub}</div>
+                )}
+                {goalVal > 0 && (
+                  <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 4 }}>
+                    <div style={{ height: 3, background: item.color, borderRadius: 2, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── DCY DETAILS (relocated from Start screen — fits the calibration
+          mood of EdgeIQ better than the start headline) ── */}
+      <div style={sectionHeader}>DCY Breakdown <div style={shLine} /></div>
+      <DcyDetails dcyDaily={dcyDaily} />
+
+      {/* ── ANNUAL PROGRESS ── */}
+      <div style={sectionHeader}>Annual Progress <div style={shLine} /></div>
+      <div style={card}>
+        {[
+          { label: 'Run distance', actual: totalMi.toFixed(0), target: G.annualRunDistanceTarget || 800, unit: 'mi', color: C.blue },
+          { label: 'Workouts', actual: totalSessions, target: G.annualWorkoutsTarget || 200, unit: '', color: C.purple },
+        ].map((p, i) => {
+          const pct = Math.min(parseFloat(p.actual) / parseFloat(p.target), 1);
+          return (
+            <div key={i} style={{ marginBottom: i === 0 ? 10 : 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: T2, marginBottom: 4 }}>
+                <span style={{ fontWeight: 600 }}>{p.label}</span>
+                <span style={{ fontWeight: 600 }}>{p.actual} / {p.target} {p.unit} <span style={{ color: T4, fontWeight: 500 }}>({Math.round(pct * 100)}%)</span></span>
+              </div>
+              <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
+                <div style={{ height: 5, background: p.color, borderRadius: 3, width: `${pct * 100}%`, transition: 'width 0.6s ease' }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+    </div>
+  );
+}

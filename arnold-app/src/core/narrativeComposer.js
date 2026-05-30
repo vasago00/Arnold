@@ -35,6 +35,8 @@ import {
   getNode,
   eachNode,
 } from './narrativeGraph.js';
+// Phase 4r.utc.2 — local-timezone day. Replaces UTC fallbacks in this file.
+import { localDate } from './time.js';
 
 // ─── Punctuation helpers ────────────────────────────────────────────────────
 // The composer joins sentence fragments. These helpers handle the
@@ -584,7 +586,7 @@ function composeAlignedNarrative(coachSignals) {
   };
 
   return {
-    asOf: cs.asOf || new Date().toISOString().slice(0, 10),
+    asOf: cs.asOf || localDate(),
     leveragePoint: null,
     threads: [],
     story,
@@ -609,7 +611,7 @@ export function composeNarrative(userState) {
   const cs = userState?.coachSignals;
   if (!cs) {
     return {
-      asOf: new Date().toISOString().slice(0, 10),
+      asOf: localDate(),
       leveragePoint: null,
       threads: [],
       story: {
@@ -647,7 +649,7 @@ export function composeNarrative(userState) {
   for (const e of graph.edges) activeThreadSet.add(e.threadId);
 
   return {
-    asOf: cs.asOf || new Date().toISOString().slice(0, 10),
+    asOf: cs.asOf || localDate(),
     leveragePoint: {
       signalKey: leverage.key,
       label: getNode(leverage.key)?.label,

@@ -30,6 +30,8 @@
 import { computeUserState } from './intelligence.js';
 import { storage } from './storage.js';
 import { getGoals } from './goals.js';
+// Phase 4r.utc.2 — local-timezone day. Replaces UTC fallbacks across the file.
+import { localDate } from './time.js';
 // Phase 4r.coach.v2.hyrox.fix — use the unified activity universe
 // (storage activities + FIT entries from dailyLogs) so manually-
 // entered workouts and Garmin-imported sessions both get counted.
@@ -51,7 +53,7 @@ function fmt0(n) { return Number.isFinite(n) ? Math.round(n).toString() : '—';
 function daysUntil(dateIso) {
   if (!dateIso) return null;
   const target = new Date(dateIso + 'T00:00:00').getTime();
-  const today  = new Date(new Date().toISOString().slice(0,10) + 'T00:00:00').getTime();
+  const today  = new Date(localDate() + 'T00:00:00').getTime();
   return Math.round((target - today) / 86400000);
 }
 
@@ -101,7 +103,7 @@ function isHyrox(race) {
 function getRecentActivities(days = 14) {
   try {
     const acts = allActivities() || [];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDate();
     const cutoff = daysUntil_str(today, -days);
     return acts.filter(a => a?.date && a.date >= cutoff && a.date <= today);
   } catch { return []; }
@@ -1535,7 +1537,7 @@ if (typeof window !== 'undefined') {
   // wasn't to see the raw shape and fix the classifier from real data.
   window.coachActivitiesDebug = function () {
     const acts = (allActivities() || []);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDate();
     const cutoff = daysUntil_str(today, -14);
     const recent = acts.filter(a => a?.date && a.date >= cutoff && a.date <= today);
     console.log('=== COACH ACTIVITIES (last 14d) ===', recent.length, 'activities');

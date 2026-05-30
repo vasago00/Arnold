@@ -50,9 +50,11 @@ import { CalendarTab } from "./components/CalendarTab.jsx";
 // a graceful retry UI instead of blanking the whole tab.
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 // Phase 4r.coach.v2.surface — Coach BETA tab.
-import { CoachBeta } from "./components/CoachBeta.jsx";
+// CoachBeta import retired with the Coach tab (Phase 4r.coach.retire). The
+// CoachBeta.jsx file is kept in tree in case we revive it as a diagnostics view.
 import { CoachLine } from "./components/CoachLine.jsx";
 import { CoachSigil } from "./components/CoachSigil.jsx";
+import { CoachComment } from "./components/CoachComment.jsx";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
 import { summarizeRecentSignatures } from "./core/derive/recoverySignature.js";
@@ -79,7 +81,9 @@ import { MiniBar } from "./components/MiniBar.jsx";
 import { FocusCard } from "./components/FocusCard.jsx";
 import { NutritionInput as NutritionInputPanel } from "./components/NutritionInput.jsx";
 import { createEntry as createNutEntry, saveEntry as saveNutEntry, getEntriesForDate as getNutEntries, deleteEntry as deleteNutEntry, dailyTotals as nutDailyTotals } from "./core/nutrition.js";
-import { getSystemsReport, getSystemDetail, getSystemWeekly } from "./core/healthSystems.js";
+import { getSystemsReport, getSystemDetail, getSystemWeekly, getSystemCoachRead, getBioactiveStack } from "./core/healthSystems.js";
+import { computeUserState as _computeUserStateForCoachRead } from "./core/intelligence.js";
+import { GROUP_COLOR as BIO_GROUP_COLOR } from "./components/BioactiveStack.jsx";
 import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
 import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
 import { getTopCoachingPrompts, getPromptsByPillar, runCoachingPromptsHealthProbe } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
@@ -547,12 +551,11 @@ function raceTypeBadge(distKm){
 
 const TABS=[
   {id:"training", label:"EdgeIQ",icon:"◈"},
-  // Phase 4r.coach.v2.surface — Coach BETA tab sits between EdgeIQ and
-  // Daily for the 2-3 week evaluation window. `beta:true` makes the
-  // nav render a small BETA chip next to the label so it's obviously
-  // experimental. Mobile bar deliberately doesn't include this tab
-  // until the voice is calibrated; web only for now.
-  {id:"coach_beta", label:"Coach", icon:"◎", beta:true},
+  // Phase 4r.coach.retire — Coach BETA tab retired. The whole architectural
+  // direction was "Coach should be ambient, not a tab" (mobile already
+  // followed this). The web tab was the holdout duplicating the synthesis
+  // surfaces. CoachBeta.jsx kept in tree in case we revive as a diagnostics
+  // view; nav + tab render removed.
   {id:"daily",    label:"Daily",  icon:"⊕"},
   {id:"weekly",   label:"Trend",  icon:"◈"},
   {id:"races",    label:"Calendar", icon:"▦"},
@@ -1181,7 +1184,7 @@ export default function App(){
       // (syncDailyEnergy target collection, dailyLogs schema, etc). Lets us
       // verify desktop and phone are running the SAME bundle by comparing
       // these stamps in their consoles.
-      console.log('%c[arnold-build] Phase 4r.narrative.5.fix.21 · REAL FIX: bash mount had a stale-cache view of coachSignals.js + narrativeComposer.js (saw 2178 / 769 lines when actual file had 2360 / 882). My "restore" appends from fix.20 piled duplicate content on top of intact originals. Removed all duplicated trailing content. Files now end at their proper original close. 2026-05-27','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
+      console.log('%c[arnold-build] Phase 4r.intel.upgrade.9 · Every Health System now has a Coach voice. Gut/Bones/Immune signal maps broadened to adjacent signals (gut: glycogen+EA+TDEE drift+monotony; bones: +goalProgress; immune: +recoveryVelocity). Added FALLBACK voice composer — when no Coach signals fire for a system, returns a tailored per-system neutral line instead of silence. Honest about thin signal coverage (e.g., gut says: "Real gut-specific signals — fiber rhythm, meal cadence — are a future build"). Panel renders Coach line whenever coachRead exists; tile grid only when signals fire. No system goes silent. 2026-05-28','background:#1f3a1f;color:#c8e6c9;padding:2px 6px;border-radius:4px;font-weight:600');
       // Phase 4r.narrative.2 + 2.1 — eager-import the composer + scenario
       // fixtures so window.narrativeDebug() and window.narrativeScenarios()
       // are registered at boot, even before the user opens the Coach tab.
@@ -1352,6 +1355,40 @@ export default function App(){
           });
         }
       } catch (e) { console.warn('[garmin-backfill] init failed:', e); }
+
+      // Phase 4r.calendar.fix.7 — one-shot typeKey backfill.
+      // The retired Garmin parser block silently rewrote Run-menu Fartlek /
+      // interval / sprint runs to activityType='HIIT' before today's fix.
+      // Legacy records carry no garminTypeKey, so the classifier can't
+      // distinguish a corrupted Fartlek-Run from a genuine HIIT session.
+      // The only reliable recovery is to re-pull each affected activity
+      // from Garmin so the fixed parser populates garminTypeKey from the
+      // structured menu choice. Sentinel-gated: runs exactly ONCE after
+      // this build deploys, in the background, on a fresh launch. Window
+      // is 60 days so multi-month history catches up (Garmin Worker is
+      // rate-limited but 60d × typical training freq stays under 100 acts).
+      try {
+        const RESYNC_KEY = 'arnold:garmin-typeKey-backfill-v1';
+        if (!localStorage.getItem(RESYNC_KEY)) {
+          Promise.all([
+            import('./core/garmin-activities-client.js'),
+            import('./core/garmin-client.js'),
+          ]).then(([acts, client]) => {
+            if (!client.isGarminConfigured?.()) return;
+            console.log('[typeKey-backfill] starting one-shot re-sync of last 60 days to populate garminTypeKey…');
+            return acts.resyncPastActivities(60, 100).then(r => {
+              if (r?.ok) {
+                console.log(`[typeKey-backfill] ✓ refreshed ${r.successful}/${r.attempted} activities; ` +
+                  `classifier now has Garmin\'s structured menu choice for the last 60 days.`);
+                showToast?.(`✓ Re-synced ${r.successful} past activities — Fartlek vs HIIT now correctly distinguished`);
+                localStorage.setItem(RESYNC_KEY, String(Date.now()));
+              } else {
+                console.warn('[typeKey-backfill] resync failed:', r?.error);
+              }
+            }).catch(e => console.warn('[typeKey-backfill] threw:', e?.message || e));
+          });
+        }
+      } catch (e) { console.warn('[typeKey-backfill] init failed:', e); }
 
       // ── Garmin Activity auto-sync (Phase 4d) ──
       // Same once-per-day pattern as wellness backfill. Pulls the last 14 days
@@ -1763,13 +1800,17 @@ export default function App(){
             purple on EdgeIQ, etc.) so each page reads thematically.
             Padding is uniform across every tab. Date chip on the right
             only on day-anchored tabs (Play / Fuel / Daily). */}
-        {/* Phase 4r.narrative.5.fix.2 — mobile per-tab header gate. Previously
-            this also excluded `weekly` (EdgeIQ/Trend) via mobileHomeActive,
-            but the user reported the EdgeIQ page felt disorienting without
-            a label. Start (`training`) keeps its custom cockpit treatment
-            and skips the standard header; every other mobile tab including
-            `weekly` now gets the consistent header bar. */}
-        {isMobileApp&&tab!=='training'&&(()=>{
+        {/* Phase 4r.narrative.5.fix.2 + fix.22 — mobile per-tab header gate.
+            Excludes BOTH `training` (Start — custom cockpit header) AND
+            `weekly` (EdgeIQ — MobileEdgeIQ renders its OWN ARNOLD+EdgeIQ+date
+            header internally, lines ~3910 in MobileHome.jsx). fix.2 had
+            loosened this to only exclude `training`, which double-stacked
+            the header on EdgeIQ (user-reported 2026-05-27). Every other
+            mobile drill-down tab (Play/Fuel/Daily/Calendar/Plan/Labs/Core/
+            Settings) gets this unified header since they don't render
+            their own. (coach_beta is web-only — no mobile Coach tab as of
+            fix.24; the Coach is ambient on mobile.) */}
+        {isMobileApp&&tab!=='training'&&tab!=='weekly'&&(()=>{
           const label = TAB_LABEL[tab] || tab;
           const accentColor = TAB_ACCENT_COLOR[tab] || TAB_ACTIVE_COLOR;
           // Date persists on every drill-down tab (Phase 4q.header.5) so
@@ -1821,7 +1862,16 @@ export default function App(){
             per tab instead (e.g. EdgeIQ Coach Focus card). Mobile keeps
             the ambient line because it sits BELOW the mobile per-tab
             header in the rendered order. Phase 4r.narrative.5.fix.4. */}
-        {isMobileApp && <ErrorBoundary tabName="CoachLine"><CoachLine tabId={tab} setTab={setTab}/></ErrorBoundary>}
+        {/* Phase 4r.narrative.5.fix.27 — the old unbranded CoachLine is
+            replaced by the sigil-marked CoachComment so every mobile
+            coaching comment speaks in the Coach's voice. EdgeIQ (weekly)
+            handles its own Coach comment inside MobileEdgeIQ; Start
+            (training) inside the hero rail. Phase 4r.race.12 — Play
+            (activity) and Fuel (nutrition_mobile) had their dispatch HERE
+            but it rendered the Coach line FLOATING above the card. The
+            Coach now lives INSIDE the relevant card on each tab (top of
+            the activity card on Play; via NutritionInput's coachSlot on
+            Fuel), so it visually belongs to the section it speaks about. */}
         {/* Phase 4r.hygiene.1 — Each tab wrapped in ErrorBoundary so a
             render error inside the tab content shows a retry UI instead
             of blanking the tab. tabName drives the boundary's headline
@@ -1841,7 +1891,7 @@ export default function App(){
         {/* Phase 4r.coach.v2.surface — Coach BETA tab, web-only.
             Phase 4r.narrative.4c — setTab is plumbed in so the embedded
             narrative tiles can navigate to their source tab on tap. */}
-        {tab==="coach_beta"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Coach"><CoachBeta setTab={setTab}/></ErrorBoundary></div>}
+        {/* Phase 4r.coach.retire — coach_beta tab removed (see TABS comment). */}
         {tab==="daily"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Daily"><LogDay data={data} persist={persist} showToast={showToast} setTab={setTab}/></ErrorBoundary></div>}
         {tab==="activity"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Play"><LogDay data={data} persist={persist} showToast={showToast} mobileView="activity" setTab={setTab}/></ErrorBoundary></div>}
         {tab==="nutrition_mobile"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Fuel"><LogDay data={data} persist={persist} showToast={showToast} mobileView="nutrition" setTab={setTab}/></ErrorBoundary></div>}
@@ -1853,7 +1903,7 @@ export default function App(){
               Workbench below (where you do the work).
             WeeklyPlanner component kept in src/components/ for now in
             case it's needed elsewhere; just unmounted here. */}
-        {tab==="goals"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Plan"><div style={S.sec}><GoalsHub showToast={showToast}/><Workbench showToast={showToast}/></div></ErrorBoundary></div>}
+        {tab==="goals"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Plan"><div style={S.sec}>{!isMobileApp && <CoachComment surface="plan" />}<GoalsHub showToast={showToast}/><Workbench showToast={showToast}/></div></ErrorBoundary></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Supplements"><SupplementsTab showToast={showToast}/></ErrorBoundary></div>}
         {tab==="settings"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Settings"><ProfileSettings data={data} persist={persist} showToast={showToast}/></ErrorBoundary></div>}
       </main>
@@ -2226,25 +2276,32 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
         // Weight: ALWAYS prefer scale (daily reading is the freshest possible).
         const weight = hybrid('weightLbs', dxa.totalMass, latest.dexa?.date);
 
+        // Phase 4r.core.1 — sub text shortened: dropped the "🔬 Lab ·" /
+        // "🔬 DEXA ·" prefixes and the "(DEXA only)" suffix so the tile reads
+        // cleanly at 3-col mobile width. The label already says what it is;
+        // the source live in the tile's accent colour.
         const cards = [
-          {label:"VO₂ Max",     value: fmt(vo2Headline),     unit:"ml/kg/min", sub: vo2Sub,                                                                                       color:"#34d399", icon:"◈"},
-          {label:"Bio Age",     value: fmt(v2.bioAge),       unit:"years",     sub: v2.bioAge != null ? `🔬 Lab · ${labVO2Date}` : "—",                                          color:"#4ade80", icon:"∿"},
-          {label:"Body Fat",    value: fmt1(bodyFat.value),  unit:"%",         sub: bodyFat.sub,                                                                                 color:"#f59e0b", icon:"⊗"},
-          {label:"Lean Mass",   value: fmt(leanMass.value),  unit:"lbs",       sub: leanMass.sub,                                                                                color:"#a78bfa", icon:"◆"},
-          {label:"Weight",      value: fmt1(weight.value),   unit:"lbs",       sub: weight.sub,                                                                                  color:"#60a5fa", icon:"⚖"},
-          {label:"RMR",         value: fmtKcal(rm.rmr),      unit:"kcal",      sub: latest.rmr?.date ? `🔬 Lab · ${latest.rmr.date}` : "—",                                       color:"#4ade80", icon:"⬡"},
-          {label:"T-Score",     value: fmt(dxa.tScore),      unit:"",          sub: dxa.tScore != null ? `🔬 DEXA · ${latest.dexa.date} (DEXA only)` : "—",                       color:"#4ade80", icon:"○"},
-          {label:"Visceral Fat",value: fmt(dxa.visceralFat), unit:"lbs",       sub: dxa.visceralFat != null ? `🔬 DEXA · ${latest.dexa.date} (DEXA only)` : "—",                  color:"#facc15", icon:"⚡"},
-          {label:"ALMI",        value: fmt(dxa.almi),        unit:"kg/m²",     sub: dxa.almi != null ? `🔬 DEXA · ${latest.dexa.date} (DEXA only)` : "—",                         color:"#fb923c", icon:"◉"},
+          {label:"VO₂ Max",     value: fmt(vo2Headline),     unit:"ml/kg/min", sub: vo2Sub,                                                                  color:"#34d399", icon:"◈"},
+          {label:"Bio Age",     value: fmt(v2.bioAge),       unit:"years",     sub: v2.bioAge != null ? labVO2Date : "—",                                    color:"#4ade80", icon:"∿"},
+          {label:"Body Fat",    value: fmt1(bodyFat.value),  unit:"%",         sub: bodyFat.sub,                                                             color:"#f59e0b", icon:"⊗"},
+          {label:"Lean Mass",   value: fmt(leanMass.value),  unit:"lbs",       sub: leanMass.sub,                                                            color:"#a78bfa", icon:"◆"},
+          {label:"Weight",      value: fmt1(weight.value),   unit:"lbs",       sub: weight.sub,                                                              color:"#60a5fa", icon:"⚖"},
+          {label:"RMR",         value: fmtKcal(rm.rmr),      unit:"kcal",      sub: latest.rmr?.date || "—",                                                 color:"#4ade80", icon:"⬡"},
+          {label:"T-Score",     value: fmt(dxa.tScore),      unit:"",          sub: dxa.tScore     != null ? latest.dexa.date : "—",                         color:"#4ade80", icon:"○"},
+          {label:"Visceral Fat",value: fmt(dxa.visceralFat), unit:"lbs",       sub: dxa.visceralFat!= null ? latest.dexa.date : "—",                         color:"#facc15", icon:"⚡"},
+          {label:"ALMI",        value: fmt(dxa.almi),        unit:"kg/m²",     sub: dxa.almi       != null ? latest.dexa.date : "—",                         color:"#fb923c", icon:"◉"},
         ];
         return (<>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        {/* Phase 4r.core.1 — auto-fit grid lands ~3 cols on a phone, 4–5 on
+            desktop, instead of the old fixed 2×5 stack of oversized tiles.
+            Tile padding tightened (was clamp(12,1vw,18) on S.sc2). */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(110px, 1fr))",gap:6}}>
           {cards.map((c,i)=>(
-            <div key={i} style={{...S.sc2,borderColor:`${c.color}40`}}>
-              <div style={{fontSize:14,color:c.color,opacity:0.8}}>{c.icon}</div>
-              <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em"}}>{c.value}<span style={{fontSize:"clamp(10px,0.4vw + 8px,12px)",color:C.m,fontWeight:400,marginLeft:3}}>{c.unit}</span></div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,letterSpacing:"0.06em",textTransform:"uppercase"}}>{c.label}</div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:c.color,marginTop:1}}>{c.sub}</div>
+            <div key={i} style={{...S.sc2,borderColor:`${c.color}40`,padding:"9px 10px",gap:2,minWidth:0}}>
+              <div style={{fontSize:12,color:c.color,opacity:0.8,lineHeight:1}}>{c.icon}</div>
+              <div style={{fontSize:"clamp(15px,1vw + 10px,22px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em",lineHeight:1.1}}>{c.value}<span style={{fontSize:"clamp(9px,0.3vw + 7px,11px)",color:C.m,fontWeight:400,marginLeft:3}}>{c.unit}</span></div>
+              <div style={{fontSize:"clamp(9px,0.2vw + 8px,10px)",color:C.m,letterSpacing:"0.05em",textTransform:"uppercase",lineHeight:1.2}}>{c.label}</div>
+              <div style={{fontSize:"clamp(9px,0.2vw + 8px,10px)",color:c.color,marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.sub}</div>
             </div>
           ))}
         </div>
@@ -2288,12 +2345,13 @@ Give: 1) Integrated health score with reasoning 2) Top 3 strengths across all te
           <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:"#a78bfa",letterSpacing:"0.1em",textTransform:"uppercase"}}>DEXA Body Composition · {dexa.date}</div>
           <div style={{fontSize:"clamp(12px,0.5vw + 10px,14px)",color:C.m,marginTop:2}}>{dexa.source==='pdf' ? 'Lab scan' : (dexa.source||'')}</div>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        {/* Phase 4r.core.1 — auto-fit grid + tighter tiles to match Overview. */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(110px, 1fr))",gap:6}}>
           {cards.map((c,i)=>(
-            <div key={i} style={{...S.sc2,borderColor:`${c.clr}30`}}>
-              <div style={{fontSize:"clamp(17px,1.2vw + 11px,26px)",fontWeight:500,color:C.t}}>{c.val}<span style={{fontSize:"clamp(10px,0.4vw + 8px,12px)",color:C.m,fontWeight:400,marginLeft:2}}>{c.unit}</span></div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:C.m,letterSpacing:"0.06em",textTransform:"uppercase"}}>{c.lbl}</div>
-              <div style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",color:c.clr,marginTop:1}}>{c.note}</div>
+            <div key={i} style={{...S.sc2,borderColor:`${c.clr}30`,padding:"9px 10px",gap:2,minWidth:0}}>
+              <div style={{fontSize:"clamp(15px,1vw + 10px,22px)",fontWeight:500,color:C.t,lineHeight:1.1}}>{c.val}<span style={{fontSize:"clamp(9px,0.3vw + 7px,11px)",color:C.m,fontWeight:400,marginLeft:2}}>{c.unit}</span></div>
+              <div style={{fontSize:"clamp(9px,0.2vw + 8px,10px)",color:C.m,letterSpacing:"0.05em",textTransform:"uppercase",lineHeight:1.2}}>{c.lbl}</div>
+              <div style={{fontSize:"clamp(9px,0.2vw + 8px,10px)",color:c.clr,marginTop:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.note}</div>
             </div>
           ))}
         </div>
@@ -3882,6 +3940,11 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
           duplicate "◈ Trend" label inside the content was visual noise.
           Same cleanup applied to Plan / Labs / Core / Coach / Calendar /
           EdgeIQ / Daily / Profile / Supplements (user feedback 2026-05-27). */}
+
+      {/* Phase 4r.narrative.5.fix.29 — ambient Coach for the Trend tab:
+          the recovery/trend read (HRV/sleep/RHR). Silent when nothing
+          actionable. */}
+      <CoachComment surface="trend" />
 
       {/* ── Cockpit · WoW values + 8-week sparkline trend ──
           Headline = THIS WEEK (Mon-Sun current). Sparkline = 8-week trend.
@@ -6122,36 +6185,17 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   </div>
                 )}
 
-                {/* ── Compact fuel narrative ── */}
-                {fuel && fuelPctConsumed != null && (
-                  <div style={{ fontSize:10, color:'var(--text-secondary)', lineHeight:1.4 }}>
-                    Fueled {fuelPctConsumed}% of today's
-                    {fuel.isTrainingDay ? ' training-day' : ''} target
-                    {fuel.isTrainingDay ? ` (+${fuel.earned} from session)` : ''}.
-                    {fuelPctConsumed < 50  ? ' Anchor the next meal.' :
-                     fuelPctConsumed < 90  ? ' On pace — stay consistent.' :
-                     fuelPctConsumed < 110 ? ' At target.' :
-                                              ' Past target — lighter dinner.'}
-                  </div>
-                )}
-
-                {/* ── Single nutrition coaching prompt ── */}
-                {nutritionPrompts.length > 0 && (
-                  <div style={{ display:'flex', flexDirection:'column', gap:5, paddingTop:6, borderTop:'0.5px solid var(--border-subtle)' }}>
-                    {nutritionPrompts.map(p => {
-                      const c = colorFor(p.severity);
-                      return (
-                        <div key={p.id} style={{ display:'flex', alignItems:'flex-start', gap:6, fontSize:10, lineHeight:1.4 }}>
-                          <span aria-hidden style={{ width:5, height:5, borderRadius:'50%', background:c, flexShrink:0, marginTop:4 }}/>
-                          <span style={{ minWidth:0 }}>
-                            <span style={{ fontWeight:600, color:c }}>{p.title}</span>
-                            <span style={{ color:'var(--text-muted)' }}> · {p.detail}</span>
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Phase 4r.coach.cleanup — retired the residual "Compact
+                    fuel narrative" line ("Fueled X% of today's target.
+                    Anchor the next meal.") that lived above the Coach. The
+                    coaching half of that line ("Anchor the next meal" /
+                    "On pace — stay consistent" / etc.) was a second voice
+                    competing with the sigil-marked Coach. Calorie + macro
+                    numbers stay visible via the panel above; the Coach is
+                    the only commenting voice on the Fuel hero. */}
+                <div style={{ paddingTop:4, borderTop:'0.5px solid var(--border-subtle)' }}>
+                  <CoachComment surface="fuel" />
+                </div>
               </section>
             );
           }
@@ -6216,82 +6260,101 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
               flexDirection: 'column',
               gap: 7,
             }}>
-              {/* Phase 4r.viz.26 — single row: speedometer LEFT, rings + A:C
-                  ratio RIGHT. No duplicate rTSS number — the speedometer
-                  itself shows the value. */}
-              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                <svg width="100" height="60" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet" style={{flexShrink:0}}>
-                  <path d={arcPath(0,  b1)}        stroke={zoneEasy} strokeWidth="10" fill="none" opacity={zoneIdx>0?0.35:zoneIdx===0?1:0.35}/>
-                  <path d={arcPath(b1, b2)}        stroke={zoneMod}  strokeWidth="10" fill="none" opacity={zoneIdx>1?0.35:zoneIdx===1?1:0.35}/>
-                  <path d={arcPath(b2, b3)}        stroke={zoneHard} strokeWidth="10" fill="none" opacity={zoneIdx>2?0.35:zoneIdx===2?1:0.35}/>
-                  <path d={arcPath(b3, gaugeMax)}  stroke={zoneOver} strokeWidth="10" fill="none" opacity={zoneIdx===3?1:0.35}/>
-                  {[0, b1, b2, b3, gaugeMax].map(v=>{
-                    const inner = polar(angleFor(v), R-13);
-                    const outer = polar(angleFor(v), R-3);
-                    return <line key={v} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} stroke="var(--border-subtle)" strokeWidth="0.6"/>;
-                  })}
-                  <line x1={cx} y1={cy} x2={needleEnd.x} y2={needleEnd.y} stroke={needleColor} strokeWidth="2.5" strokeLinecap="round"/>
-                  <circle cx={cx} cy={cy} r="4" fill={needleColor}/>
-                  <text x={cx} y={cy - 22} textAnchor="middle" fontSize="22" fontWeight="700" fill="var(--text-primary)">{gaugeDisplay}</text>
-                  <text x={cx} y={cy - 6} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text-muted)" letterSpacing="0.06em">rTSS</text>
-                </svg>
-                <MiniRing val={r7Score}  label="7d"/>
-                <MiniRing val={r30Score} label="30d"/>
-                {acr.ratio != null && (
-                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start',
-                    marginLeft:'auto', paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)' }}>
-                    <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
-                      <span style={{ fontSize:13, fontWeight:600, color: ZONE_COLORS[acr.zone] }}>{acr.ratio}</span>
-                      <span style={{ fontSize:8.5, color: ZONE_COLORS[acr.zone] }}>{ZONE_LABELS[acr.zone]}</span>
-                    </div>
-                    <span style={{ fontSize:8.5, color:'var(--text-muted)', marginTop:2 }}>A:C ratio</span>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Compact training narrative ── */}
+              {/* Phase 4r.viz.27 — three-column hero matching web layout:
+                  LEFT cluster (7d · 30d · A:C) | CENTER speedometer |
+                  RIGHT cluster (Pace · Effort · Efficiency from today's run).
+                  When today has no run logged, RIGHT cluster is omitted so
+                  the speedometer + LEFT cluster center naturally. */}
               {(() => {
-                const tier =
-                  r7Score >= 80 ? 'strong'  :
-                  r7Score >= 65 ? 'solid'   :
-                  r7Score >= 50 ? 'mixed'   :
-                  r7Score >  0  ? 'fragile' : null;
-                const delta = r7Score - r30Score;
-                const trendClause =
-                  delta >=  6 ? `up ${delta} on 30d`     :
-                  delta <= -6 ? `${Math.abs(delta)} off 30d` :
-                                `steady on 30d`;
-                if (!tier) return null;
-                let acrClause = '';
-                if (acr.ratio != null) {
-                  if (acr.zone === 'overreaching')        acrClause = ' · ramping fast — protect recovery.';
-                  else if (acr.zone === 'danger')         acrClause = ' · injury risk — back off.';
-                  else if (acr.zone === 'undertraining') acrClause = ' · load dropped — rebuild.';
+                // Pre-compute today's run-metric tier labels for the RIGHT
+                // cluster. Same logic as the cells builder lower in the file,
+                // hoisted up so the hero and the panel below stay aligned.
+                let runTiles = null;
+                if (runMetrics && runMetrics.rTSS) {
+                  const IF = runMetrics.intensityFactor;
+                  const EF = runMetrics.efficiencyFactor;
+                  let effortTier = '—', effortColor = 'var(--text-muted)';
+                  if (IF != null) {
+                    if      (IF < 0.65) { effortTier = 'Easy';      effortColor = '#4ade80'; }
+                    else if (IF < 0.80) { effortTier = 'Aerobic';   effortColor = '#4ade80'; }
+                    else if (IF < 0.92) { effortTier = 'Tempo';     effortColor = '#fbbf24'; }
+                    else if (IF < 1.00) { effortTier = 'Threshold'; effortColor = '#fb923c'; }
+                    else                { effortTier = 'VO2/Race';  effortColor = '#f87171'; }
+                  }
+                  let efSub = 'baseline', efColor = 'var(--text-muted)';
+                  if (EF != null && ef30Avg) {
+                    const pct = (EF - ef30Avg) / ef30Avg;
+                    if      (pct >=  0.06) { efSub = `↑ ${Math.round(pct*100)}%`;    efColor = '#4ade80'; }
+                    else if (pct <= -0.06) { efSub = `↓ ${Math.round(Math.abs(pct)*100)}%`; efColor = '#fbbf24'; }
+                    else                   { efSub = `≈ 30d avg`;                     efColor = 'var(--text-secondary)'; }
+                  } else if (EF == null) { efSub = 'needs HR'; }
+                  runTiles = [
+                    { v: runMetrics.ngpPace || '—', lbl: 'Pace',       sub: 'graded',    color: 'var(--text-primary)', subColor: 'var(--text-muted)' },
+                    { v: IF ?? '—',                 lbl: 'Effort',     sub: effortTier,  color: effortColor,           subColor: effortColor },
+                    { v: EF ?? '—',                 lbl: 'Efficiency', sub: efSub,       color: 'var(--text-primary)', subColor: efColor },
+                  ];
                 }
+
                 return (
-                  <div style={{ fontSize:10, color:'var(--text-secondary)', lineHeight:1.4 }}>
-                    Readiness {r7Score} — {tier}, {trendClause}{acrClause}
+                  <div style={{ display:'flex', alignItems:'center', gap:8, justifyContent:'space-between' }}>
+                    {/* LEFT cluster — readiness rings + A:C ratio */}
+                    <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+                      <MiniRing val={r7Score}  label="7d"/>
+                      <MiniRing val={r30Score} label="30d"/>
+                      {acr.ratio != null && (
+                        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', paddingLeft:6, borderLeft:'0.5px solid var(--border-subtle)' }}>
+                          <span style={{ fontSize:13, fontWeight:600, color: ZONE_COLORS[acr.zone], lineHeight:1 }}>{acr.ratio}</span>
+                          <span style={{ fontSize:8, color: ZONE_COLORS[acr.zone], marginTop:2 }}>{ZONE_LABELS[acr.zone]}</span>
+                          <span style={{ fontSize:7.5, color:'var(--text-muted)', marginTop:1, letterSpacing:'0.04em' }}>A:C</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CENTER — speedometer (the focal point) */}
+                    <svg width="100" height="60" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet" style={{flexShrink:0}}>
+                      <path d={arcPath(0,  b1)}        stroke={zoneEasy} strokeWidth="10" fill="none" opacity={zoneIdx>0?0.35:zoneIdx===0?1:0.35}/>
+                      <path d={arcPath(b1, b2)}        stroke={zoneMod}  strokeWidth="10" fill="none" opacity={zoneIdx>1?0.35:zoneIdx===1?1:0.35}/>
+                      <path d={arcPath(b2, b3)}        stroke={zoneHard} strokeWidth="10" fill="none" opacity={zoneIdx>2?0.35:zoneIdx===2?1:0.35}/>
+                      <path d={arcPath(b3, gaugeMax)}  stroke={zoneOver} strokeWidth="10" fill="none" opacity={zoneIdx===3?1:0.35}/>
+                      {[0, b1, b2, b3, gaugeMax].map(v=>{
+                        const inner = polar(angleFor(v), R-13);
+                        const outer = polar(angleFor(v), R-3);
+                        return <line key={v} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} stroke="var(--border-subtle)" strokeWidth="0.6"/>;
+                      })}
+                      <line x1={cx} y1={cy} x2={needleEnd.x} y2={needleEnd.y} stroke={needleColor} strokeWidth="2.5" strokeLinecap="round"/>
+                      <circle cx={cx} cy={cy} r="4" fill={needleColor}/>
+                      <text x={cx} y={cy - 22} textAnchor="middle" fontSize="22" fontWeight="700" fill="var(--text-primary)">{gaugeDisplay}</text>
+                      <text x={cx} y={cy - 6} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text-muted)" letterSpacing="0.06em">rTSS</text>
+                    </svg>
+
+                    {/* RIGHT cluster — today's run quality (Pace · Effort · Efficiency).
+                        Omitted entirely on non-run days so the speedometer and
+                        LEFT cluster can center naturally. */}
+                    {runTiles && (
+                      <div style={{ display:'flex', flexDirection:'column', gap:2, flexShrink:0, paddingLeft:6, borderLeft:'0.5px solid var(--border-subtle)', minWidth:0 }}>
+                        {runTiles.map((t, i) => (
+                          <div key={i} style={{ display:'flex', alignItems:'baseline', gap:4, minWidth:0 }}>
+                            <span style={{ fontSize:11, fontWeight:700, color: t.color, lineHeight:1.1, minWidth:34, textAlign:'right' }}>{t.v}</span>
+                            <span style={{ fontSize:7.5, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.04em', minWidth:38 }}>{t.lbl}</span>
+                            <span style={{ fontSize:7.5, color: t.subColor, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.sub}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
 
-              {/* ── Single training coaching prompt ── */}
-              {trainingPrompts.length > 0 && (
-                <div style={{ display:'flex', flexDirection:'column', gap:5, paddingTop:6, borderTop:'0.5px solid var(--border-subtle)' }}>
-                  {trainingPrompts.map(p => {
-                    const c = colorFor(p.severity);
-                    return (
-                      <div key={p.id} style={{ display:'flex', alignItems:'flex-start', gap:6, fontSize:10, lineHeight:1.4 }}>
-                        <span aria-hidden style={{ width:5, height:5, borderRadius:'50%', background:c, flexShrink:0, marginTop:4 }}/>
-                        <span style={{ minWidth:0 }}>
-                          <span style={{ fontWeight:600, color:c }}>{p.title}</span>
-                          <span style={{ color:'var(--text-muted)' }}> · {p.detail}</span>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {/* Phase 4r.coach.cleanup — retired the residual "Compact
+                  training narrative" line ("Readiness X — strong, steady on
+                  30d · ramping fast — protect recovery") that lived above
+                  the Coach. It duplicated coaching the Coach already does
+                  and competed with the sigil-marked voice. Numbers stay
+                  visible via the rings + A:C chip above; the Coach is the
+                  only commenting voice on the Play hero. */}
+              <div style={{ paddingTop:4, borderTop:'0.5px solid var(--border-subtle)' }}>
+                <CoachComment surface="play" />
+              </div>
             </section>
 
             {/* Phase 4r.race.2 — Race card on Play tab. Renders only
@@ -6328,7 +6391,11 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
             padding: 'clamp(10px,1vw,14px) clamp(12px,1.2vw,16px)',
             marginBottom: 12,
             display: 'grid',
-            gridTemplateColumns: '120px minmax(0,1.25fr) minmax(0,1fr)',
+            // Phase 4r.narrative.5.fix.34 — give the Coach digest (COL 3) the
+            // widest share so its paragraph extends left and fills what used
+            // to be empty space. Readiness (COL 2) keeps enough room for its
+            // rings + metric row, which flex-wrap if pushed.
+            gridTemplateColumns: '120px minmax(0,1fr) minmax(0,1.45fr)',
             gap: 'clamp(8px,1vw,12px)',
             alignItems: 'start',
             minWidth: 0,
@@ -6598,43 +6665,26 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   else if (acr.zone === 'optimal')   acrClause = ` Load ramp is in the sweet spot (A:C ${acr.ratio}).`;
                 }
 
-                return (
-                  <div style={{ fontSize:10.5, color:'var(--text-secondary)', lineHeight:1.5,
-                    paddingTop:6, borderTop:'0.5px solid var(--border-subtle)' }}>
-                    {headline}{driverClause}{acrClause}
-                  </div>
-                );
+                // Phase 4r.narrative.5.fix.30 — legacy readiness narrative
+                // retired. It was an unbranded coaching interpretation
+                // ("Readiness 83 — strong… activity is the lever…") that
+                // competed with the ambient Coach. The Coach (Daily +
+                // EdgeIQ surfaces) is the single coaching voice now; the
+                // readiness rings/stats above still show the numbers.
+                void headline; void driverClause; void acrClause;
+                return null;
               })()}
             </div>
 
             {/* ── COL 3 · Coaching prompts + calibration ── */}
             <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:0,
               borderLeft: '0.5px solid var(--border-subtle)', paddingLeft: 12 }}>
-              {/* Prompts wrap onto multiple lines so the full coaching text
-                  reads — the old single-line ellipsis truncation hid most
-                  of the detail (Phase 4o.daily.12 fix). */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-                {topPrompts.length === 0 ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11, lineHeight: 1.4 }}>
-                    <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', flexShrink: 0, marginTop: 5, opacity: 0.7 }}/>
-                    <span style={{ minWidth: 0 }}>
-                      <span style={{ fontWeight: 600, color: '#4ade80' }}>All clear</span>
-                      <span style={{ color: 'var(--text-muted)' }}> · No flagged prompts. Keep the data flowing.</span>
-                    </span>
-                  </div>
-                ) : topPrompts.map(p => {
-                  const c = colorFor(p.severity);
-                  return (
-                    <div key={p.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11, lineHeight: 1.4, minWidth: 0 }}>
-                      <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0, marginTop: 5 }}/>
-                      <span style={{ minWidth: 0 }}>
-                        <span style={{ fontWeight: 600, color: c }}>{p.title}</span>
-                        <span style={{ color: 'var(--text-muted)' }}> · {p.detail}</span>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+              {/* Phase 4r.narrative.5.fix.33 — COL 3 is the empty right slot
+                  of the hero, so it now carries the WHOLE-DAY Coach digest:
+                  one warm, cohesive paragraph (training + fuel + rest) instead
+                  of three terse per-section status lines. The Daily screen is
+                  the diary — reassuring, never a wall of red warnings. */}
+              <CoachComment surface="daily_digest" />
 
               {/* Calibration row (BEHIND/ON PACE/AHEAD + drift/ETA) removed
                   Phase 4o.daily.13 — that signal is the headline of EdgeIQ
@@ -6658,10 +6708,10 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
         {/* ── LEFT: Activity (show in desktop or mobileView=activity) ── */}
         {mobileView!=='nutrition'&&<div style={{minWidth:0}}>
-          {/* Coaching now lives in the Daily Hero rail at the top of the
-              page — single source of truth. Per-panel coaching strip
-              removed (Phase 4o.daily.8). */}
-
+          {/* Phase 4r.narrative.5.fix.33 — per-section training/nutrition
+              Coach lines retired: the Daily diary speaks once, cohesively,
+              in the hero digest above (training + fuel + rest in one warm
+              paragraph) rather than scattering status lines per column. */}
           {!fitData?(
             <div style={panelStyle}>
               {/* Header — title + Garmin sync button so the user can pull
@@ -6693,6 +6743,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   {syncFitState==='syncing' ? '↻ Syncing…' : syncFitState==='done' ? '✓ Synced' : syncFitState==='error' ? '✗ Failed' : '↻ Sync'}
                 </button>
               </div>
+              {/* Phase 4r.race.13 — Coach moved up to the mobile Play hero
+                  rail (replacing the legacy trainingPrompts bullets). The
+                  Activity card is just the session data now. */}
               <div style={{textAlign:'center',padding:'24px 0',color:'var(--text-muted)',fontSize:12}}>
                 No activity logged yet today — sync Garmin or upload a .fit file.
               </div>
@@ -7464,9 +7517,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
 
         {/* ── RIGHT: Nutrition (show in desktop or mobileView=nutrition) ── */}
         {mobileView!=='activity'&&<div style={{minWidth:0}}>
-          {/* Coaching now lives in the Daily Hero rail at the top of the
-              page — single source of truth. Per-panel coaching strip
-              removed (Phase 4o.daily.8). */}
+          {/* Phase 4r.narrative.5.fix.33 — per-section nutrition Coach line
+              retired; the Daily diary now speaks once in the hero digest
+              (training + fuel + rest as one warm paragraph). */}
 
           {/* Phase 4r.viz.17 — Race-prep banner removed from Fuel tab per
               user request. Race fueling info lives on the Play race card. */}
@@ -7475,6 +7528,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
               and the dynamic Today's Target line, mirroring Activity's
               "Run · sync · date" header structure. ── */}
           <div>
+            {/* Phase 4r.race.13 — Coach now lives in the mobile Fuel hero
+                rail above this card (replacing the legacy nutritionPrompts
+                bullets), so no coachSlot is passed here. */}
             <NutritionInputPanel
               key={nutUploadKey}
               date={todayStr}
@@ -8305,6 +8361,28 @@ function WebSystemDetail({ system, comment, onClose, data }) {
   const nutrients = detail.details || [];
   const signals = SYSTEM_SIGNALS[system.id] || { training: [], body: [], blood: [] };
 
+  // Phase 4r.intel.upgrade.1 — Coach Read for this system. Compose userState
+  // here so the panel surfaces what the Coach engine actually knows about this
+  // system today. Memoized on `today` so it doesn't recompute every render.
+  const coachRead = useMemo(() => {
+    try {
+      const us = _computeUserStateForCoachRead({
+        activities:   storage.get('activities')   || [],
+        sleep:        storage.get('sleep')        || [],
+        hrv:          storage.get('hrv')          || [],
+        weight:       storage.get('weight')       || [],
+        nutritionLog: storage.get('nutritionLog') || [],
+        wellness:     storage.get('wellness')     || [],
+        planner:      storage.get('planner')      || null,
+        profile:      { ...(storage.get('profile') || {}), ...getGoals() },
+      });
+      return getSystemCoachRead(system.id, us?.coachSignals || null);
+    } catch (e) {
+      console.warn('[CoachRead] failed for system', system.id, e?.message || e);
+      return null;
+    }
+  }, [system.id, today]);
+
   // Status color mirrors the tile
   const statusColor = system.status === 'good' ? '#4ade80'
                     : system.status === 'focus' ? '#fbbf24'
@@ -8520,48 +8598,54 @@ function WebSystemDetail({ system, comment, onClose, data }) {
     return null;
   };
 
-  // ── Enriched signal tile renderer ──
-  // Each tile: label + value+unit + sparkline + target/status sub-line.
-  // Significantly more info than the single-value version, less black space.
-  const renderSignalGrid = (sigList, period, opts = {}) => (
-    // Always render at least 3 columns so a single-signal section (e.g.
-    // Heart > Body > Weight) doesn't stretch to a giant empty banner.
-    // Set { fillCols: false } to disable this when you actually want the
-    // grid to size to content.
+  // ── Unified signal tile renderer — Phase 4r.intel.upgrade.4 ──
+  // Same visual treatment as Coach signal tiles above. Compact, dense,
+  // value-forward. Sparklines retired here to keep tile size consistent
+  // with the Coach Read section; they were making Training/Body tiles
+  // tower over the Coach tiles and pulled visual focus from the voice.
+  // Sub-line carries the same "goal X · status" info but as a single
+  // compact headline.
+  const renderSignalGrid = (sigList, period, opts = {}) => {
+    const list = (sigList || []).filter((sig) => {
+      const r = resolveSignal(sig, period);
+      const hasValue = r.value != null && r.value !== '—' && r.value !== '';
+      return hasValue;
+    });
+    if (list.length === 0) return null;
+    return (
     <div style={{
-      display: 'grid',
-      gridTemplateColumns: opts.fillCols === false
-        ? `repeat(${Math.min(sigList.length, 4)}, minmax(0, 1fr))`
-        : `repeat(${Math.max(3, Math.min(sigList.length, 4))}, minmax(0, 1fr))`,
+      display: 'flex',
+      flexWrap: 'wrap',
       gap: 8,
     }}>
-      {sigList.map((sig, i) => {
+      {list.map((sig, i) => {
         const r = resolveSignal(sig, period);
         const valueColor = sigColor(sig, r.value);
         const target = sigTarget(sig);
         const statusWord = sigStatus(sig, r.value);
-        const hist = sigHistory[sig] || [];
+        const headline = target != null && statusWord
+          ? `goal ${target}${r.unit ? ` ${r.unit}` : ''} · ${statusWord}`
+          : target != null
+          ? `goal ${target}${r.unit ? ` ${r.unit}` : ''}`
+          : statusWord || null;
         return (
-          <div key={i} style={signalCellStyle}>
+          <div key={i} style={{ ...signalCellStyle, borderColor: `${valueColor}40`, width: 210, minHeight: 72, justifyContent: 'space-between' }}>
             <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sig}</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-              <span style={{ fontSize: 18, fontWeight: 600, color: r.value === '—' ? 'var(--text-muted)' : valueColor, lineHeight: 1 }}>{r.value}</span>
+              <span style={{ fontSize: 18, fontWeight: 600, color: valueColor, lineHeight: 1 }}>{r.value}</span>
               {r.unit && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{r.unit}</span>}
             </div>
-            <SignalSparkline history={hist} color={valueColor === 'var(--text-muted)' ? 'var(--text-muted)' : valueColor}/>
-            <div style={{ fontSize: 9, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: 6, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-              {target != null ? (
-                <span>goal {target}{r.unit ? ` ${r.unit}` : ''}</span>
-              ) : (
-                <span>{statusWord || ''}</span>
-              )}
-              {target != null && statusWord && <span style={{ color: valueColor, fontWeight: 500 }}>{statusWord}</span>}
-            </div>
+            {headline && (
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.35, marginTop: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {headline}
+              </div>
+            )}
           </div>
         );
       })}
     </div>
-  );
+    );
+  };
 
   return (
     <div ref={containerRef} style={{
@@ -8634,6 +8718,13 @@ function WebSystemDetail({ system, comment, onClose, data }) {
         const labelStyle = { fontSize: 9, fontWeight: 700, color: statusColor, letterSpacing: '0.10em', textTransform: 'uppercase', marginRight: 8 };
 
         if (tab === 'daily') {
+          // Phase 4r.intel.upgrade.2 — when the Coach line is rendering up
+          // in the Daily tab body, suppress this verdict box. Two boxes
+          // both saying coach-like things were two competing voices for
+          // the same square inch. Coach line is the voice on Daily; this
+          // summary still runs on Weekly/Annual where it carries unique
+          // info (WoW delta, lab-panel age) that the Coach doesn't.
+          if (coachRead && coachRead.signals.length > 0) return null;
           const score = system.pct || 0;
           const verdict = score >= 80 ? 'Strong' : score >= 50 ? 'On track' : 'Needs attention';
           const nutHook = lowestNutrient && lowestNutrient.pct < 50 ? `${lowestNutrient.short || lowestNutrient.name} ${lowestNutrient.pct}%` : null;
@@ -8696,36 +8787,267 @@ function WebSystemDetail({ system, comment, onClose, data }) {
       {/* ── Daily tab ── */}
       {tab === 'daily' && (
         <div>
-          {/* Nutrient breakdown */}
-          {nutrients.length > 0 && (
-            <>
-              <div style={{ ...subHeaderStyle, marginTop: 0 }}>Nutrients · today's intake</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 'clamp(8px,1vw,14px)' }}>
-                {nutrients.map((n, i) => (
-                  <div key={i}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 3 }}>
-                      <span style={{ fontWeight: 500 }}>{n.short || n.name}</span>
-                      <span style={{ color: barColor(n.pct), fontWeight: 600 }}>
-                        {n.value} / {n.target}
-                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 4 }}>({n.pct}%)</span>
-                      </span>
+          {/* Phase 4r.intel.upgrade.9 — Coach line ALWAYS renders when
+              coachRead is present, even with no signal tiles. Systems
+              without active signals get a thoughtful fallback voice
+              instead of silence. */}
+          {coachRead && (
+            <div style={{ marginBottom: 16 }}>
+              {coachRead.coachLine && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginBottom: 12 }}>
+                  <CoachSigil size={18} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <div style={{
+                    flex: 1, minWidth: 0,
+                    fontSize: 13, lineHeight: 1.55,
+                    color: 'var(--text-primary)',
+                  }}>
+                    {coachRead.coachLine}
+                  </div>
+                </div>
+              )}
+              {coachRead.signals.length > 0 && (
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+              }}>
+                {coachRead.signals.map((sig, i) => (
+                  <div key={i} style={{
+                    ...signalCellStyle,
+                    borderColor: `${sig.color}40`,
+                    width: 210,
+                    minHeight: 72,
+                    justifyContent: 'space-between',
+                  }}>
+                    <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{sig.label}</div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                      <span style={{ fontSize: 18, fontWeight: 600, color: sig.color, lineHeight: 1 }}>{sig.value}</span>
+                      {sig.unit && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{sig.unit}</span>}
                     </div>
-                    <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
-                      <div style={{ height: 5, background: barColor(n.pct), borderRadius: 3, width: `${Math.min(n.pct, 100)}%`, transition: 'width 0.4s ease' }} />
-                    </div>
+                    {sig.headline && (
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.35, marginTop: 0 }}>
+                        {sig.headline}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-            </>
+              )}
+            </div>
           )}
 
-          {signals.training.length > 0 && (<><div style={subHeaderStyle}>Training signals</div>{renderSignalGrid(signals.training, 'daily')}</>)}
-          {signals.body.length > 0 && (<><div style={subHeaderStyle}>Body signals</div>{renderSignalGrid(signals.body, 'daily')}</>)}
-          {signals.blood.length > 0 && (
+          {/* Nutrient donut rings + Bioactive hex chips — Phase 4r.intel.
+              upgrade.8. Bioactives (NMN/Rv/Sp/Ap/Qc/Cur/FO/Ash/Btr/Cre/
+              MgT/Shi/TMG/Fis) split out of the donut grid and rendered
+              as hexagon chips matching the Daily/Nutrition/Fuel summary
+              visual: same polygon shape, same category color, same
+              taken/untaken treatment (filled solid vs dashed outline). */}
+          {(() => {
+            const visibleNutrients = (nutrients || []).filter(n =>
+              n && (n.value > 0 || n.target > 0) && n.pct != null
+            );
+            if (visibleNutrients.length === 0) return null;
+
+            // Detect bioactives by name and map to short code + category.
+            // Source-of-truth is BioactiveStack.jsx's SHORT_CODE + group maps;
+            // this is the panel-side detector that bridges the system's
+            // verbose nutrient names ("NMN (Nicotinamide Mononucleotide)") to
+            // the bioactive identity ({short, group}) used for hex rendering.
+            // Canonical "taken today" state comes from getBioactiveStack
+            // (walks the supplements log + stack + catalog). The system's
+            // n.pct measures intake vs target, which gives partial dose %s;
+            // taken is binary — the moment ANY dose containing the compound
+            // is logged, it lights up. Matches Daily / Fuel summary exactly.
+            const canonicalBio = getBioactiveStack(today);
+            const takenByName = new Map(canonicalBio.map(b => [b.name, b.taken]));
+            const NAME_META = {
+              'NMN (Nicotinamide Mononucleotide)':           { short: 'NMN', group: 'longevity' },
+              'Trans-Resveratrol':                           { short: 'Rv',  group: 'longevity' },
+              'Spermidine (wheat germ extract)':             { short: 'Sp',  group: 'longevity' },
+              'Trimethylglycine (TMG/Betaine anhydrous)':    { short: 'TMG', group: 'longevity' },
+              'Apigenin':                                    { short: 'Ap',  group: 'longevity' },
+              'Quercetin':                                   { short: 'Qc',  group: 'defense' },
+              'Fisetin':                                     { short: 'Fis', group: 'neural' },
+              'Turmeric (curcumin extract)':                 { short: 'Cur', group: 'defense' },
+              'Fish Oil (total)':                            { short: 'FO',  group: 'defense' },
+              'Ashwagandha (KSM-66)':                        { short: 'Ash', group: 'performance' },
+              'Beetroot powder concentrate':                 { short: 'Btr', group: 'performance' },
+              'Creatine':                                    { short: 'Cre', group: 'neural' },
+              'Magnesium L-Threonate (Magtein)':             { short: 'MgT', group: 'neural' },
+              'Shilajit resin':                              { short: 'Shi', group: 'adaptive' },
+            };
+            const bioactives = [];
+            const regularNutrients = [];
+            for (const n of visibleNutrients) {
+              const key = n.nutrient || n.name || '';
+              const meta = NAME_META[key];
+              if (meta) {
+                const taken = takenByName.has(key) ? takenByName.get(key) : (n.pct >= 80);
+                bioactives.push({ ...n, _short: meta.short, _group: meta.group, _taken: taken });
+              } else {
+                regularNutrients.push(n);
+              }
+            }
+            // Group bioactives by category for the same row-per-group layout
+            // BioactiveStack uses on Daily/Nutrition/Fuel.
+            const bioByGroup = {};
+            for (const b of bioactives) {
+              (bioByGroup[b._group] = bioByGroup[b._group] || []).push(b);
+            }
+            const BIO_GROUP_LABEL = {
+              neural: 'Neural', longevity: 'Longevity', defense: 'Defense',
+              performance: 'Perform', adaptive: 'Adaptive', other: 'Other',
+            };
+            const BIO_GROUP_ORDER = ['neural','longevity','defense','performance','adaptive','other'];
+            const withAlpha = (hex, a) => {
+              const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+              return `rgba(${r},${g},${b},${a})`;
+            };
+            // Single hex chip, same polygon as BioactiveStack.jsx MiniHive.
+            const HexChip = ({ short, taken, color }) => (
+              <svg width={28} height={28} viewBox="-15 -15 30 30" style={{ display:'block' }} fontFamily="ui-sans-serif" fontWeight={500} textAnchor="middle">
+                <polygon
+                  points="-12,-7 -12,7 0,14 12,7 12,-7 0,-14"
+                  fill={taken ? withAlpha(color, 0.22) : 'transparent'}
+                  stroke={taken ? color : withAlpha(color, 0.40)}
+                  strokeWidth={1.2}
+                  strokeDasharray={taken ? undefined : '2 2'}
+                />
+                <text y="0" dominantBaseline="central" fill={taken ? color : '#94a3b8'} fontSize={8}>{short}</text>
+              </svg>
+            );
+
+            // Capitalize the display name for regular nutrients. Acronyms (Mg,
+            // K, EPA, DHA, FFMI, ALMI etc.) stay as-is; ordinary lowercase
+            // words get a leading capital ("beetroot" → "Beetroot").
+            const capitalize = (s) => {
+              if (!s) return s;
+              if (/[A-Z]/.test(s)) return s;
+              return s.charAt(0).toUpperCase() + s.slice(1);
+            };
+            // SVG donut helper — circumference math, fills stroke-dasharray.
+            const Donut = ({ pct, color, size = 52 }) => {
+              const stroke = 4;
+              const r = (size - stroke) / 2;
+              const C = 2 * Math.PI * r;
+              const filled = Math.max(0, Math.min(pct / 100, 1)) * C;
+              return (
+                <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display:'block' }}>
+                  <circle cx={size/2} cy={size/2} r={r}
+                    fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={stroke}/>
+                  <circle cx={size/2} cy={size/2} r={r}
+                    fill="none" stroke={color} strokeWidth={stroke}
+                    strokeLinecap="round"
+                    strokeDasharray={`${filled} ${C - filled}`}
+                    transform={`rotate(-90 ${size/2} ${size/2})`}/>
+                </svg>
+              );
+            };
+            return (
+            <>
+              {/* Bioactive stack — same hex chips + category colors as the
+                  Daily/Nutrition/Fuel summary, so a Longevity/NMN looks
+                  the same wherever it appears. Renders only when this
+                  system actually weights bioactives. */}
+              {Object.keys(bioByGroup).length > 0 && (
+                <>
+                  <div style={{ ...subHeaderStyle, marginTop: 8 }}>Bioactive stack · taken today</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+                    {BIO_GROUP_ORDER.filter(g => bioByGroup[g] && bioByGroup[g].length).map(g => {
+                      const color = BIO_GROUP_COLOR[g] || '#94a3b8';
+                      const items = bioByGroup[g];
+                      const takenCount = items.filter(x => x._taken).length;
+                      return (
+                        <div key={g} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{
+                            fontSize: 10, fontWeight: 500, color,
+                            letterSpacing: '0.08em', textTransform: 'uppercase',
+                            minWidth: 90, flexShrink: 0,
+                          }}>
+                            {BIO_GROUP_LABEL[g] || g}
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 4 }}>
+                              {takenCount}/{items.length}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            {items.map((b, i) => (
+                              <HexChip key={i} short={b._short} taken={b._taken} color={color} />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              {/* Regular nutrient donuts — only when there are non-bioactive
+                  nutrients to show. */}
+              {regularNutrients.length > 0 && (
+              <>
+              <div style={{ ...subHeaderStyle, marginTop: 8 }}>Nutrients · today's intake</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {regularNutrients.map((n, i) => {
+                  const c = barColor(n.pct);
+                  const name = capitalize(n.short || n.name);
+                  return (
+                    <div key={i} style={{
+                      width: 86,
+                      background: 'var(--bg-elevated)',
+                      borderRadius: 8,
+                      border: `0.5px solid ${c}33`,
+                      padding: '8px 6px 6px',
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                    }}>
+                      <div style={{ position: 'relative' }}>
+                        <Donut pct={n.pct} color={c}/>
+                        <div style={{
+                          position: 'absolute', inset: 0,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 11, fontWeight: 700, color: c, letterSpacing: '-0.02em',
+                        }}>{n.pct}%</div>
+                      </div>
+                      <div style={{
+                        fontSize: 10, fontWeight: 500, color: 'var(--text-primary)',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        maxWidth: '100%', textAlign: 'center',
+                      }}>{name}</div>
+                      <div style={{ fontSize: 8, color: 'var(--text-muted)', lineHeight: 1 }}>
+                        {n.value}/{n.target}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              </>
+              )}
+            </>
+            );
+          })()}
+
+          {/* Training/body signal sections render NOTHING when all tiles in
+              the section would be empty (renderSignalGrid returns null). */}
+          {(() => {
+            const trainingGrid = signals.training.length > 0 ? renderSignalGrid(signals.training, 'daily') : null;
+            return trainingGrid ? (<><div style={subHeaderStyle}>Training signals</div>{trainingGrid}</>) : null;
+          })()}
+          {(() => {
+            const bodyGrid = signals.body.length > 0 ? renderSignalGrid(signals.body, 'daily') : null;
+            return bodyGrid ? (<><div style={subHeaderStyle}>Body signals</div>{bodyGrid}</>) : null;
+          })()}
+          {(() => {
+            // Phase 4r.intel.upgrade.1 — only render the blood section when
+            // at least one marker has a value (lab panel exists for at least
+            // one of the tracked markers).
+            const hasAnyBlood = signals.blood.some(sig => {
+              const v = resolveBlood(sig).value;
+              return v != null && v !== '—' && v !== '';
+            });
+            return signals.blood.length > 0 && hasAnyBlood;
+          })() && (
             <>
               <div style={subHeaderStyle}>Blood markers · last lab panel</div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.length, 4)}, 1fr)`, gap: 8 }}>
-                {signals.blood.map((sig, i) => {
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(signals.blood.filter(sig => { const v = resolveBlood(sig).value; return v != null && v !== '—' && v !== ''; }).length, 4)}, 1fr)`, gap: 8 }}>
+                {signals.blood.filter(sig => { const v = resolveBlood(sig).value; return v != null && v !== '—' && v !== ''; }).map((sig, i) => {
                   const r = resolveBlood(sig);
                   return (
                     <div key={i} style={signalCellStyle}>
@@ -8868,8 +9190,8 @@ function HealthSystemTile({ sys, isExpanded, onClick }) {
           ? <img src={pngSrc} alt={name} width={44} height={44} style={{ display: 'block' }} />
           : svgIcon}</div>
         <div style={{
-          fontSize: 9, fontWeight: 600, color: 'var(--text-primary)',
-          lineHeight: 1.15, marginBottom: 3, minHeight: 22,
+          fontSize: 11, fontWeight: 600, color: 'var(--text-primary)',
+          lineHeight: 1.2, marginBottom: 3, minHeight: 26,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>{name.replace(' & ', '/')}</div>
         <div style={{
@@ -10215,144 +10537,17 @@ Structure:
                   • Tap affordance ("open ↗") in italic, lower-case,
                     smaller — feels like a "read more" link in editorial
                     copy, not a button. */}
-            {(() => {
-              const narrative = safeCompute('EdgeIQ:coachSummary', () => {
-                const cs_data = {
-                  activities:   storage.get('activities')   || [],
-                  sleep:        storage.get('sleep')        || [],
-                  hrv:          storage.get('hrv')          || [],
-                  weight:       storage.get('weight')       || [],
-                  cronometer:   storage.get('cronometer')   || [],
-                  nutritionLog: storage.get('nutritionLog') || [],
-                  wellness:     storage.get('wellness')     || [],
-                  planner:      storage.get('planner')      || null,
-                  profile:      { ...(storage.get('profile') || {}), ...getGoals() },
-                };
-                const us = computeUserState(cs_data);
-                return composeNarrative(us);
-              }, null);
-              if (!narrative) return null;
-              const { leveragePoint, story, alignedFallback } = narrative;
-              const isAligned = alignedFallback || !leveragePoint;
-              const sev = leveragePoint?.state || '';
-
-              // Severity now communicated via a tiny dot — the Coach's color
-              // stays teal regardless. The dot color is the only place state
-              // shows on this surface.
-              let stateDot, stateTag;
-              if (sev === 'severe' || sev === 'concerning' || sev === 'critical') {
-                stateDot = '#f87171'; stateTag = 'severe';
-              } else if (
-                sev === 'moderate' || sev === 'slowing' || sev === 'adapting' ||
-                sev === 'depleted' || sev === 'rising' || sev === 'grey-zone' ||
-                sev === 'hot' || sev === 'impaired' || sev === 'mixed' || sev === 'low'
-              ) {
-                stateDot = '#fbbf24'; stateTag = 'watch';
-              } else if (sev === 'mild' || sev === 'sparse-easy') {
-                stateDot = '#fbbf24'; stateTag = 'mild';
-              } else {
-                stateDot = '#5eead4'; stateTag = 'aligned';
-              }
-
-              const summaryText = isAligned
-                ? 'System aligned — no leverage signal today.'
-                : (story?.action?.text || story?.opening || `${leveragePoint.label} is the leverage point.`);
-
-              // Coach signature color — teal stays constant; the panel never
-              // turns red/amber. Severity lives only in the dot.
-              const COACH = '#5eead4';
-
-              return (
-                <div
-                  onClick={() => setTab('coach_beta')}
-                  style={{
-                    marginTop: 12,
-                    // Phase 4r.narrative.5.fix.19 — tightened padding.
-                    // Previous serif-italic version was burning ~80 px of
-                    // vertical space on the EdgeIQ dashboard for what is
-                    // ultimately a one-line summary + leverage tag.
-                    padding: '10px 14px',
-                    borderRadius: 8,
-                    background: 'rgba(8, 11, 16, 0.55)',
-                    border: `0.5px solid rgba(94, 234, 212, 0.22)`,
-                    cursor: 'pointer',
-                    position: 'relative',
-                    transition: 'border-color 200ms ease, background 200ms ease',
-                    display: 'flex', alignItems: 'flex-start', gap: 12,
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.borderColor = 'rgba(94, 234, 212, 0.45)';
-                    e.currentTarget.style.background = 'rgba(8, 11, 16, 0.75)';
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.borderColor = 'rgba(94, 234, 212, 0.22)';
-                    e.currentTarget.style.background = 'rgba(8, 11, 16, 0.55)';
-                  }}
-                  title="Open Coach for the full read">
-
-                  {/* Sigil sits on the left, vertically centered with the
-                      header row. The mark IS the signature — no "Coach"
-                      wordmark needed. */}
-                  <CoachSigil size={26} style={{ flexShrink: 0, marginTop: 1 }} />
-
-                  {/* Body column: leverage tag (prominent) on top, summary
-                      sentence below. Both sans-serif now — the italic +
-                      Georgia register from fix.8-10 was fighting the eye
-                      on a data-dense screen (user feedback fix.19). The
-                      identity comes from the sigil + teal border + tag
-                      typography, not from the body font. */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    {/* Leverage tag — state-colored, uppercase, bold. THIS is
-                        what was barely visible in the muted-italic version;
-                        making it state-colored at 12px/700/uppercase pulls
-                        it forward as a proper headline. */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      marginBottom: 4,
-                    }}>
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 6,
-                        fontSize: 11, fontWeight: 700,
-                        color: stateDot,
-                        letterSpacing: '0.12em',
-                        textTransform: 'uppercase',
-                      }}>
-                        <span aria-hidden style={{
-                          width: 7, height: 7, borderRadius: '50%',
-                          background: stateDot,
-                          boxShadow: `0 0 6px ${stateDot}66`,
-                        }}/>
-                        {isAligned
-                          ? stateTag
-                          : `${leveragePoint.label} · ${stateTag}`}
-                      </span>
-                      <span style={{
-                        marginLeft: 'auto',
-                        fontSize: 10, color: COACH, fontWeight: 600,
-                        letterSpacing: '0.04em',
-                        flexShrink: 0,
-                      }}>
-                        open ↗
-                      </span>
-                    </div>
-
-                    {/* Summary body — clean sans-serif at body size.
-                        2-line clamp so the action stays whole. */}
-                    <div style={{
-                      fontSize: 13, lineHeight: 1.5,
-                      color: 'var(--text-primary)',
-                      fontWeight: 400,
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }}>
-                      {summaryText}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
+            {/* Phase 4r.narrative.5.fix.25 — ambient Coach. The inline
+                summary IIFE is replaced by the shared <CoachComment>
+                component (surface='edgeiq' → leverage + action). It only
+                renders when there's an actionable leverage signal; on an
+                aligned day it stays silent. Same component is woven into
+                Daily / Plan / Trend with their own surface focus, so the
+                Coach speaks contextually everywhere instead of living in
+                a dedicated tab. */}
+            <div style={{ marginTop: 8 }}>
+              <CoachComment surface="edgeiq_web" />
+            </div>
 
             {/* Phase 4r.narrative.5.fix.6 — Goal Tensions block and Today's
                 Status strip both moved to the Coach tab (Model B). EdgeIQ
@@ -11332,4 +11527,14 @@ const S={
   ic:{background:C.surf,borderWidth:"0.5px",borderStyle:"solid",borderColor:C.b,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
   uz:{border:`0.5px dashed ${C.b}`,borderRadius:"var(--radius-md)",padding:20,display:"flex",flexDirection:"column",alignItems:"center",gap:6,cursor:"pointer",background:"transparent"},
   is:{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"clamp(12px,1vw,18px)",background:C.ad,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-md)",textAlign:"center"},
-  aib:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderLeft:`3px solid ${C.acc}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--f
+  aib:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderLeft:`3px solid ${C.acc}`,borderRadius:"var(--radius-md)",padding:"clamp(14px,1.5vw,20px) clamp(20px,2vw,32px)",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",fontWeight:500,letterSpacing:"0.03em",cursor:"pointer",display:"flex",alignItems:"center",gap:8,justifyContent:"center",width:"100%",boxSizing:"border-box",transition:`background var(--transition),border-color var(--transition)`},
+  qb:{background:C.surf,border:`0.5px solid ${C.b}`,color:C.s,padding:"9px 12px",borderRadius:"var(--radius-sm)",cursor:"pointer",fontFamily:"var(--font-ui)",fontSize:"clamp(12px,0.5vw + 10px,14px)",textAlign:"left",transition:`all var(--transition)`},
+  ab:{background:C.ad,color:C.ta,border:`0.5px solid ${C.ab2}`,borderRadius:"var(--radius-sm)",padding:"0 14px",fontFamily:"var(--font-ui)",fontWeight:500,fontSize:"clamp(12px,0.5vw + 10px,14px)",cursor:"pointer",whiteSpace:"nowrap",transition:`all var(--transition)`},
+  air:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
+  aih:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,color:C.ta,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:8},
+  ait:{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.s,lineHeight:1.75,whiteSpace:"pre-wrap"},
+  aisp:{background:C.surf,border:`0.5px solid ${C.b}`,borderRadius:"var(--radius-md)",padding:"clamp(12px,1vw,18px)"},
+  aish:{fontSize:"clamp(10px,0.3vw + 9px,11px)",fontWeight:500,color:C.ta,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:10,display:"flex",alignItems:"center",gap:6},
+  aist:{fontSize:"clamp(13px,0.5vw + 10px,15px)",color:C.s,lineHeight:1.85,whiteSpace:"pre-wrap"},
+  toast:{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:"var(--status-ok-bg)",color:"var(--text-accent)",border:"0.5px solid var(--accent-border)",padding:"10px 20px",borderRadius:"var(--radius-sm)",fontWeight:500,fontSize:13,zIndex:100,backdropFilter:"blur(8px)"},
+};

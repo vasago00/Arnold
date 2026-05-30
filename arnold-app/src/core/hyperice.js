@@ -12,6 +12,8 @@
 // files.
 
 import { storage } from './storage.js';
+// Phase 4r.utc.2 — local-timezone day.
+import { localDate } from './time.js';
 
 export const HYPERICE_PRODUCTS = [
   { id: 'normatec',  label: 'Normatec',  short: 'Boots',  category: 'compression' },
@@ -43,7 +45,7 @@ export function logHypericeSession({ productId, minutes, dateStr }) {
     id: `hi-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     productId,
     minutes: Math.round(parseFloat(minutes)),
-    dateStr: dateStr || new Date().toISOString().slice(0, 10),
+    dateStr: dateStr || localDate(),
     ts: Date.now(),
   };
   all.push(session);

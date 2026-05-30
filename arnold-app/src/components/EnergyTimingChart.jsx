@@ -83,6 +83,8 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
         date: ds,
         label: dayLabel(ds),
         balance: dayIntake - dayTarget,
+        intake: dayIntake,
+        target: dayTarget,
         isToday: i === 0,
       });
     }
@@ -115,18 +117,23 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
   // Color a single day's balance based on goalDirection. Returns
   // a hex color (green/amber/red). Slight magnitude awareness so
   // small drift reads as amber rather than full red.
+  // Phase 4r.fuel.14 — per user feedback: ANY positive balance reads RED
+  // regardless of goal direction (except bulk, where surplus is the goal).
+  // The earlier "mild" amber buffer hid small surplus days that the user
+  // wanted to see called out. Bulk goal is the only case where surplus is
+  // affirmed; everywhere else surplus = attention.
   function balanceColor(balance) {
     const abs = Math.abs(balance);
-    const mild = abs < 200;   // within ~200 kcal of target = small drift
-    if (goalDirection === 'cut') {
-      if (balance <= 0) return mild ? '#4ade80' : '#22c55e'; // deficit good
-      return mild ? '#fbbf24' : '#f87171';                    // surplus off
-    }
+    const mild = abs < 200;
     if (goalDirection === 'bulk') {
-      if (balance >= 0) return mild ? '#4ade80' : '#22c55e'; // surplus good
-      return mild ? '#fbbf24' : '#f87171';                    // deficit off
+      if (balance >= 0) return mild ? '#4ade80' : '#22c55e'; // surplus is the goal
+      return '#f87171';
     }
-    // maintain: close = good, far = off (direction agnostic)
+    if (balance > 0) return '#f87171';                        // ANY surplus = red
+    if (goalDirection === 'cut') {
+      return mild ? '#4ade80' : '#22c55e';                    // deficit is the goal
+    }
+    // maintain on the deficit side — small drift fine, deep deficit amber/red.
     if (mild) return '#4ade80';
     return abs < 400 ? '#fbbf24' : '#f87171';
   }
@@ -248,11 +255,21 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
             // Phase 4r.fuel.12 — color by goal direction, not just sign.
             const color = balanceColor(d.balance);
             const fillOpacity = d.isToday ? 0.7 : 0.4;
+            // Phase 4r.fuel.14 — per-bar tooltip so the user can verify what
+            // the system computed for any given day (especially useful when
+            // a day "feels" like surplus but lands as deficit, or vice-versa,
+            // due to Cronometer sync gaps or eat-back differences).
+            const sign = d.balance >= 0 ? '+' : '';
+            const tipLabel = d.isToday ? 'today' : d.label;
+            const tip = `${tipLabel}: ${sign}${Math.round(d.balance)} kcal · intake ${Math.round(d.intake || 0)} vs target ${Math.round(d.target || 0)}`;
             return (
               <g key={d.date}>
+                <title>{tip}</title>
                 <rect x={x0} y={y} width={barW} height={Math.max(2, barH)}
                       fill={color} fillOpacity={fillOpacity}
-                      stroke={color} strokeWidth={d.isToday ? 0.8 : 0.5} />
+                      stroke={color} strokeWidth={d.isToday ? 0.8 : 0.5}>
+                  <title>{tip}</title>
+                </rect>
                 <text x={cx} y={th - 2} fontSize="7"
                       fill={d.isToday ? '#cbd5e1' : '#64748b'}
                       fontWeight={d.isToday ? 500 : 400}

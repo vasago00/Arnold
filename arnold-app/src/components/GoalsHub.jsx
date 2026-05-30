@@ -28,6 +28,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import { storage } from "../core/storage.js";
+import { getCutMode, refreshCutMode, getCutModeOverride, setCutModeOverride } from "../core/cutMode.js";
 import {
   computeRMR,
   computeTDEE,
@@ -1144,6 +1145,116 @@ function PlanHeroRail({ goalsV2 }) {
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ─── Cut Mode badge ────────────────────────────────────────────────────────
+// Shows the classifier's current verdict + a manual override dropdown so
+// the user can force a state during off-season ("I'm not cutting") or when
+// the auto-detection lags behind their actual plan. Sits at the top of the
+// Goals tab so the user can see what Arnold thinks they're optimizing for.
+function CutModeBadge({ showToast }) {
+  const [cm, setCm] = useState(() => { try { return getCutMode(); } catch { return null; } });
+  const [override, setOverrideState] = useState(() => getCutModeOverride() || 'auto');
+  if (!cm) return null;
+
+  // Visual treatment per state. Background_cut and maintenance are calm
+  // colors; alarms (under_fueled, crash_cut, acute_cut) get warmer tones.
+  const palette = {
+    background_cut: { bg: 'rgba(94,234,212,0.06)',  border: 'rgba(94,234,212,0.35)',  accent: '#5eead4', label: 'Background cut' },
+    stalled_cut:    { bg: 'rgba(251,191,36,0.06)',  border: 'rgba(251,191,36,0.35)',  accent: '#fbbf24', label: 'Cut stalled' },
+    crash_cut:      { bg: 'rgba(248,113,113,0.06)', border: 'rgba(248,113,113,0.35)', accent: '#f87171', label: 'Cut too steep' },
+    acute_cut:      { bg: 'rgba(248,113,113,0.06)', border: 'rgba(248,113,113,0.35)', accent: '#f87171', label: 'Acute intake drop' },
+    under_fueled:   { bg: 'rgba(248,113,113,0.06)', border: 'rgba(248,113,113,0.35)', accent: '#f87171', label: 'Under-fueled' },
+    surplus:        { bg: 'rgba(96,165,250,0.06)',  border: 'rgba(96,165,250,0.35)',  accent: '#60a5fa', label: 'Surplus' },
+    maintenance:    { bg: 'rgba(148,163,184,0.06)', border: 'rgba(148,163,184,0.35)', accent: '#94a3b8', label: 'Maintenance' },
+    unknown:        { bg: 'rgba(148,163,184,0.06)', border: 'rgba(148,163,184,0.35)', accent: '#94a3b8', label: 'Unknown' },
+  };
+  const p = palette[cm.state] || palette.unknown;
+
+  const handleOverrideChange = (value) => {
+    setCutModeOverride(value === 'auto' ? null : value);
+    setOverrideState(value);
+    const fresh = refreshCutMode();
+    setCm(fresh);
+    showToast?.(value === 'auto' ? 'Cut mode auto-detection on' : `Cut mode forced: ${value.replace('_', ' ')}`);
+  };
+
+  return (
+    <div style={{
+      background: p.bg,
+      border: `0.5px solid ${p.border}`,
+      borderLeft: `3px solid ${p.accent}`,
+      borderRadius: 'var(--radius-md)',
+      padding: '10px 14px',
+      marginBottom: 10,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: p.accent, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+            Cut Mode
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+            {p.label}
+          </span>
+          {cm.confidence != null && !cm.isOverride && (
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', padding: '1px 6px', background: 'var(--bg-elevated)', borderRadius: 8 }}>
+              confidence {Math.round(cm.confidence * 100)}%
+            </span>
+          )}
+          {cm.isOverride && (
+            <span style={{ fontSize: 9, color: p.accent, padding: '1px 6px', background: 'var(--bg-elevated)', borderRadius: 8, border: `0.5px solid ${p.border}` }}>
+              manual
+            </span>
+          )}
+        </div>
+        {/* Segmented control instead of <select> — much tighter and lets
+            you see all four options at a glance. Active option uses the
+            state-accent color so the selection reads at the same hierarchy
+            as the rest of the badge. */}
+        <div style={{ display: 'flex', gap: 3, flexShrink: 0 }} title="Force a cut-mode state, or leave on Auto for classifier-driven detection.">
+          {[
+            { value: 'auto',            label: 'Auto'    },
+            { value: 'background_cut',  label: 'Cut'     },
+            { value: 'maintenance',     label: 'Maint'   },
+            { value: 'surplus',         label: 'Surplus' },
+          ].map(opt => {
+            const active = override === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => handleOverrideChange(opt.value)}
+                style={{
+                  fontSize: 9.5,
+                  padding: '3px 8px',
+                  background: active ? `${p.accent}1f` : 'var(--bg-elevated)',
+                  color: active ? p.accent : 'var(--text-secondary)',
+                  border: `0.5px solid ${active ? p.border : 'var(--border-default)'}`,
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontWeight: active ? 600 : 500,
+                  letterSpacing: '0.02em',
+                  transition: 'all 0.12s ease',
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {cm.reasoning && (
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: cm.recommendation ? 6 : 0 }}>
+          {cm.reasoning}
+        </div>
+      )}
+      {cm.recommendation && (
+        <div style={{ fontSize: 11, color: 'var(--text-primary)', lineHeight: 1.45, fontStyle: 'italic', opacity: 0.85 }}>
+          {cm.recommendation}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function GoalsHub({ showToast }) {
   const [goalsV2, setGoalsV2] = useState(loadGoalsV2);
   const [editingId, setEditingId] = useState(null);
@@ -1202,6 +1313,8 @@ export function GoalsHub({ showToast }) {
         optimizing for right now?" is on screen even when the form
         is collapsed. */}
     <PlanHeroRail goalsV2={goalsV2}/>
+    {/* Cut Mode badge — shows the classifier's verdict + manual override */}
+    <CutModeBadge showToast={showToast}/>
     <div style={{ background: 'var(--bg-surface)', border: '0.5px solid var(--border-default)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       {/* Collapsible header */}
       <div

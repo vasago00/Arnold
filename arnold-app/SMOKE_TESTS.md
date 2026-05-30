@@ -550,4 +550,189 @@ and any future Coach-flavored panel.
       green `✓` for ALIGNED
 - [ ] Evidence chips are monospace `key=value` pairs in subtle gray
       pills — never empty array (engine guarantees at least one)
-- [ ] Per-brief feedback bar
+- [ ] Per-brief feedback bar: 👍 / 👎 buttons; clicking lights up
+      the active one in semantic color
+- [ ] **Always-visible comment field** sits below the feedback bar
+      (Phase 4r.coach.v2.surface.feedback) — single-row textarea +
+      Send button, no click required to reveal. Send disabled when
+      empty; Cmd/Ctrl+Enter sends from the textarea
+- [ ] Submitting any feedback (👍, 👎, or comment-only) adds to
+      local storage under `coachFeedback`; the `fb total` counter in
+      the header increments within ~2 seconds
+- [ ] When a brief already has feedback recorded with a comment, the
+      "Feedback recorded · note: ..." line shows the first 60 chars
+      of the most recent comment so you can see what's on file
+- [ ] After sending a comment, the Send button briefly reads "Sent ✓"
+      then resets to "Send"; the textarea clears
+- [ ] When no briefs fire (engine returned empty), an empty-state
+      block renders with `window.coachBriefsDebug()` hint, not a
+      blank page
+- [ ] EdgeIQ tab is unchanged by Coach BETA shipping — the production
+      surface is frozen during the evaluation period
+- [ ] Mobile nav does NOT include Coach (web-only for this phase;
+      mobile lands once the voice is calibrated)
+- [ ] No console errors on tab switch into/out of Coach
+
+## Coach v2.5 HYROX patterns — Phase 4r.coach.v2.hyrox
+
+Run when a HYROX race is in storage (verify via Plan → Races) and
+within 28 days.
+
+- [ ] `window.coachBriefsDebug()` shows at least one brief whose id
+      begins with `hyrox-` when a HYROX race is upcoming
+- [ ] `patternRaceSequencing` does NOT fire for HYROX (gated). For
+      non-HYROX races (e.g. a generic running event) the generic
+      pattern still fires as before
+- [ ] **patternHyroxStationCoverage**: fires only when ≥1 of the 4
+      modality buckets (running, erg, strength, metcon) has gaps in
+      the last 14d AND race is in 1-21d window. Brief calls out
+      missing modalities by name
+- [ ] **patternHyroxStrengthReadiness**: fires as `aligned` when ≥2
+      strength sessions/wk over last 14d (positive recognition), or
+      `act/watch` when <1/wk with race ≤21d
+- [ ] **patternHyroxGlycogenWindow**: fires only in 0-7d race window.
+      Copy varies by days out (race today / race tomorrow / 2-3d /
+      4-7d). Mentions specific carb target (6-8 g/kg BW)
+- [ ] **patternHyroxPacingPrep**: fires in 4-21d window when <2
+      hard sessions detected in last 14d. Recommends one race-pace
+      simulation 4-5 days before race
+- [ ] No console errors from any HYROX pattern on fresh boot
+- [ ] When upcoming race exists but is not HYROX, no HYROX patterns
+      fire (verify by inspecting brief ids — none should start with
+      `hyrox-`)
+
+## Coach Engine v2 briefs (engine only) — Phase 4r.coach.v2.engine
+
+Run after any change to `src/core/coachBriefs.js`.
+
+- [ ] `window.coachBriefsDebug()` returns an array of brief objects
+      (could be 0–5) and prints each with its three parts in console
+- [ ] Each brief has all required fields: `id`, `priority`, `state`,
+      `acknowledge`, `mechanism`, `nextAction`, `evidence`,
+      `confidence`. No missing or undefined values
+- [ ] `state` is always one of `act` / `watch` / `aligned` — never any
+      other string
+- [ ] Briefs are ranked: any `act` brief comes before any `watch`
+      brief, which comes before any `aligned` brief. Within the same
+      state, lower `priority` number comes first
+- [ ] When the user has no concerning signals, the `aligned-baseline`
+      brief fires as a fallback so the list is never empty
+- [ ] `acknowledge` lines contain real numbers from the user's data
+      (e.g. "6.4h" not "X hours"); they're personalised, not generic
+- [ ] `nextAction` lines contain a timeline ("tonight", "in 7 days",
+      "before Day N") — not vague
+- [ ] No brief throws when run against thin data (e.g. user with no
+      sleep history). Patterns that can't compute return null silently;
+      composer logs `[coachBriefs:patternName] failed:` if any do throw
+- [ ] No console errors mentioning `coachBriefs` on fresh boot
+
+## Coach Engine v1 signals — Phase 4r.coach.v1
+
+Run after any change to `src/core/coachSignals.js` or any change to
+`computeUserState`'s coachSignals attachment.
+
+- [ ] `window.coachSignalsDebug()` in console returns an object with six
+      keys: `sleepDebt`, `hrvDepression`, `rhrDrift`, `energyAvailability`,
+      `monotonyStrain`, `sleepHrvCorrelation`. Console also shows a
+      formatted table of one-line status summaries
+- [ ] `window.intelligenceDebug()` includes a `COACH SIGNALS (v1)`
+      section in its output with all six signals printed
+- [ ] Each signal has a `status` field that is one of the documented
+      enums (see COACH.md). For users with thin data, the status should
+      be `insufficient-data` rather than throwing or returning null
+- [ ] `sleepDebt`: `debt7d` is non-negative, `nightsBelow7d` is 0–7,
+      `avgHours7d` is finite. With no sleep data, returns
+      `{ ..., n7d: 0, status: 'paid' }` (paid = zero debt = trivially true)
+- [ ] `hrvDepression`: when n < 5, returns `status: 'insufficient-data'`.
+      Otherwise `latest`, `baseline28d`, `depressionPct`,
+      `consecutiveDepressedDays` are all finite numbers
+- [ ] `rhrDrift`: when n < 7, returns `status: 'insufficient-data'`.
+      Otherwise `slopeBpmPerWeek` is finite (positive = rising, negative
+      = improving)
+- [ ] `energyAvailability`: requires `lbmLbs` from body comp. With no
+      body comp data, returns `status: 'insufficient-data'`. Otherwise
+      `eaKcalPerKgLBM` is finite
+- [ ] `monotonyStrain`: `dailyLoad` is an array of 7 numbers (kcal per day
+      across the last week). `monotony` is finite, `strain` is finite
+- [ ] `sleepHrvCorrelation`: `surfaceable` is `true` only when `n ≥ 30`
+      AND `|r| ≥ 0.3`. For most users in early data collection,
+      `status: 'building-baseline'` is expected
+- [ ] No console errors mentioning `computeCoachSignals` on fresh boot
+
+## Goals v1→v2 migration — Phase 4r.dataspine.7
+
+- [ ] On fresh boot of any user, check console for
+      `[arnold-migrate] goals v1→v2 applied` log. Should appear ONCE
+      per user (idempotent — second boot shouldn't re-log it).
+- [ ] After migration, `window.storage?.get('goals')?.schemaVersion`
+      should equal `2`
+- [ ] `storage.get('goals')` should contain BOTH v2 nested structures
+      (`body`, `recovery`, `performance`, `races`) AND legacy v1 flat
+      fields (`targetWeight`, `dailyCalorieTarget`) during compat
+      window — v1 fields deletion deferred to a follow-up phase
+- [ ] If user had a manual `dailyCalorieTarget` or `dailyProteinTarget`
+      in v1, the migration converts to an override. Check
+      `window.goalModelDebug()?.overrides` shows `dailyCalories` /
+      `dailyProtein` with the original value
+- [ ] `getOutcomeGoal()` reads v2 first (`goals.body.weight.targetLbs`)
+      with v1 fallback. Verify by manually setting only the v2 field
+      in storage and confirming `getOutcomeGoal().targetWeightLbs`
+      returns it
+
+## Macro pipeline — Phase 4r.dataspine.4 consolidation
+
+Run this section after any change to `goalModel.js`, `energyBalance.js`,
+or any UI surface that displays a calorie / protein / carbs / fat /
+fiber target.
+
+- [ ] `window.goalModelDebug()` returns five `daily*` blocks:
+      `dailyCalories`, `dailyProtein`, `dailyCarbs`, `dailyFat`,
+      `dailyFiber`. Each has `effective`, `derived`, `override`,
+      `source`, `explain` fields. If `dailyCarbs` etc. are missing,
+      the macro derivation broke.
+- [ ] The MobileHome **Today's Target** tile shows the same
+      `protein / carbs / fat / fiber` numbers as the web EdgeIQ
+      **TodaysTargetLine** for the same date. If they diverge,
+      one surface is still reading the legacy
+      `getDynamicMacroTarget` path (which now throws).
+- [ ] Calendar drawer macro readouts (protein bars, carb / fat
+      pills) match the same target numbers as the Nutrition tab
+      goal column for the same date.
+- [ ] **Deprecation guard:** in console, run
+      `import('./core/calorieTarget.js').then(m => m.resolveCalorieTarget())`
+      — should throw `[calorieTarget.js DEPRECATED — Phase
+      4r.dataspine.4]`. Same for `getDynamicCalorieTarget()` and
+      `getDynamicMacroTarget()` on energyBalance.js. If any of
+      these silently returns a number, a legacy export got
+      restored somewhere.
+- [ ] No console errors mentioning `getDynamicMacroTarget` or
+      `resolveCalorieTarget` on a fresh boot. If you see one,
+      a UI consumer still imports the deprecated symbol.
+
+## After any change to shared code, also verify:
+
+- [ ] mobile.css changes → run full Calendar mobile section above
+- [ ] intelligence.js / goalModel.js changes → EdgeIQ web + Daily web +
+      run `window.intelligenceDebug()` and `window.goalModelDebug()`,
+      confirm `state` matches expected
+- [ ] coachingPrompts.js / insights.js changes → EdgeIQ action grid
+      cards render with the new prompt/insight visible if conditions
+      should fire
+- [ ] energyBalance.js changes → `window.energyBalanceDebug()` in console
+      returns the new TDEE / RMR / calibration values
+- [ ] storage.js / migration changes → check `[arnold-state]` storage
+      counts on next boot match prior counts (no data loss)
+- [ ] swipe-related changes (Arnold.jsx mobileSwipe, MobileHome.jsx,
+      CalendarTab.jsx swipeHandlers) → run full Calendar mobile swipe
+      checks + MobileHome swipe checks
+
+---
+
+## Adding new checks
+
+When a bug ships to a user that smoke tests didn't catch:
+1. Add an entry to `POSTMORTEMS.md` describing the bug + cause.
+2. Add a check here to the relevant surface so the next regression
+   trips before reaching the user.
+
+The doc earns its keep by growing every time we miss something.

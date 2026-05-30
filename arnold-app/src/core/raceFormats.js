@@ -65,9 +65,17 @@ export const RACE_FORMATS = {
  * — race-aware patterns just skip that race rather than crashing).
  */
 export function getRaceFormat(race) {
-  if (!race?.type) return null;
-  const key = String(race.type).toLowerCase().trim();
-  return RACE_FORMATS[key] || null;
+  if (!race) return null;
+  // Primary: explicit `type` from the Add-race form.
+  const key = String(race.type || '').toLowerCase().trim();
+  if (RACE_FORMATS[key]) return RACE_FORMATS[key];
+  // Fallback: infer from the race name when `type` is missing or 'other'
+  // (e.g. races created before the type field existed, or imported). This
+  // keeps format-aware fueling/coaching working off "HYROX New York" alone.
+  const name = String(race.name || '').toLowerCase();
+  if (/\bhyrox\b/.test(name)) return RACE_FORMATS.hyrox;
+  if (/\bmarathon\b/.test(name) && !/\bhalf\b/.test(name)) return RACE_FORMATS.marathon;
+  return null;
 }
 
 /**

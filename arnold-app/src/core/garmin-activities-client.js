@@ -474,7 +474,7 @@ function isoDateOf(ts) {
 
 // ── Sync: pull list, dedupe, download new ones, parse, persist ──────────────
 
-export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgress } = {}) {
+export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgress, forceReplace = false } = {}) {
   if (!isGarminConfigured()) return { ok: false, error: 'not_configured' };
 
   // 1. Get the recent activity list
@@ -488,9 +488,12 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
     return t != null && t >= cutoff;
   });
 
-  // 2. Dedup
+  // 2. Dedup — unless forceReplace, in which case process every candidate and
+  //    replace the existing storage entry by activityId at save time. Used to
+  //    recover from parser bugs that corrupted past activities (see
+  //    Phase 4r.calendar.fix.6 — re-pull Fartlek runs to restore garminTypeKey).
   const existing = storage.get('activities') || [];
-  const newOnes = candidates.filter(a => !isAlreadyImported(existing, a));
+  const newOnes = forceReplace ? candidates : candidates.filter(a => !isAlreadyImported(existing, a));
 
   // Phase 4r.zones.3 — pass the user's cached bpm zone boundaries to
   // the FIT parser so raw HR records are re-binned against THEM rather
@@ -574,14 +577,15 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
         parsed.isRun = true;
         if (isHiit) parsed.isHIIT = true;
       }
-      // ALSO promote a plain "Run" with a HIIT-style name to HIIT — so
-      // Today's Plan matches a planned HIIT slot to a Fartlek/intervals run.
-      else if ((parsed.activityType === 'Run (outdoor)' || parsed.activityType === 'Run (treadmill)') &&
-          /\b(hiit|interval|fartlek|sprint)\b/.test(nameTokens)) {
-        parsed.activityType = 'HIIT';
-        parsed.isHIIT = true;
-        parsed.isRun = true;  // still counts toward run distance/pace
-      }
+      // Phase 4r.calendar.fix.5 — REMOVED auto-promotion of "Run (outdoor/
+      // treadmill)" → HIIT based on name tokens. User reported that Fartlek
+      // sessions logged via Garmin's RUN menu were getting rewritten to HIIT
+      // here because the name contained "fartlek" or "interval", which then
+      // propagated to the Calendar tile, Coach digest, and every downstream
+      // classifier. Garmin's menu choice is the source of truth: RUN menu =
+      // Run, HIIT menu = HIIT. Plan-matching for "Fartlek satisfies a HIIT
+      // slot" should happen at the planner layer with loose matching, NOT
+      // by mutating the activity's source-of-truth activityType.
       // Garmin's activity-list payload includes vO2MaxValue per qualifying
       // workout (typically runs/cycling, occasionally rowing). The FIT file
       // doesn't always carry this — it's calculated post-hoc by Garmin's
@@ -592,6 +596,14 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
       }
       // Also capture the activity name (less critical but useful for diagnostics)
       if (ga.activityName) parsed.activityName = ga.activityName;
+
+      // Phase 4r.calendar.fix.5 — preserve Garmin's structured typeKey so the
+      // classifier has access to the menu choice (running / hiit / strength
+      // / cycling …) independent of the local `activityType` field, which has
+      // been mutated by overrides in the past. New activities sync with these
+      // populated; old activities are missing them until re-synced.
+      if (ga.activityType?.typeKey)        parsed.garminTypeKey       = ga.activityType.typeKey;
+      if (ga.activityType?.parentTypeKey)  parsed.garminParentTypeKey = ga.activityType.parentTypeKey;
 
       // Phase 4r.intel.9 — Weather lookup at sync time.
       // Best-effort: skip outdoor-but-no-GPS, indoor sports, or Open-Meteo
@@ -623,8 +635,15 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
         console.warn(`[weather] activity ${ga.activityId} lookup failed:`, e?.message || e);
       }
 
-      // Push into activities collection
+      // Push into activities collection. Under forceReplace, remove the
+      // previous record with the same Garmin activityId first so the fresh
+      // parser output replaces the corrupted one instead of duplicating.
       const all = storage.get('activities') || [];
+      if (forceReplace) {
+        const id = String(ga.activityId);
+        const idx = all.findIndex(a => a?.source?.activityId && String(a.source.activityId) === id);
+        if (idx >= 0) all.splice(idx, 1);
+      }
       all.push(parsed);
       storage.set('activities', all, { skipValidation: true });
 
@@ -667,6 +686,28 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
     results,
   };
 }
+
+// ── Force re-sync past activities — Phase 4r.calendar.fix.6 ───────────────
+// One-shot recovery for activities corrupted by the retired Garmin parser
+// rule that rewrote Run-menu Fartlek/interval/sprint runs to HIIT. Pulls all
+// activities in the given window from Garmin, ignores the dedup check, and
+// replaces existing records by activityId so the fresh parser (which now
+// preserves garminTypeKey and no longer mutates Run→HIIT) repopulates them
+// correctly. Usage from console:
+//   await window.resyncPastActivities()       // default 14 days
+//   await window.resyncPastActivities(30)     // last 30 days
+//   await window.resyncPastActivities(7, 15)  // 7 days, fetch up to 15
+export async function resyncPastActivities(daysBack = 14, limit = 30) {
+  const r = await syncRecentActivities({ daysBack, limit, forceReplace: true });
+  if (r?.ok) {
+    console.log(`%c[resync] ✓ Re-synced ${r.successful}/${r.attempted} activities from the last ${daysBack} days`,
+      'color:#4ade80;font-weight:600');
+  } else {
+    console.warn(`[resync] failed:`, r?.error);
+  }
+  return r;
+}
+if (typeof window !== 'undefined') window.resyncPastActivities = resyncPastActivities;
 
 // ── Coords backfill (Phase 4r.intel.11-fix) ────────────────────────────────
 // Walks the recent Garmin activity listing and stamps startLatitude /

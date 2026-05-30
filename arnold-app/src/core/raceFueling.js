@@ -19,6 +19,8 @@
 // ("based on 25°C × 70% humidity → 1.32× baseline sweat rate") and edits
 // stay traceable to the science.
 
+import { getRaceFormat } from './raceFormats.js';
+
 // ─── Tunable constants (sport-nutrition consensus values) ───────────────────
 
 // Sweat-rate multipliers vs. temperature. Sigmoidal in reality; we step.
@@ -79,6 +81,25 @@ export const GEL_CARB_G = 30;
 // adjusted-sweat replacement target here so the schedule never recommends
 // physiologically impossible volumes — even when the math says otherwise.
 export const MAX_FLUID_ML_PER_HR = 750;
+
+// ─── HYROX fueling constants (Phase 4r.race.11) ─────────────────────────────
+// HYROX is a ~60–90 min max-effort hybrid race (8×1 km runs interleaved with 8
+// functional stations, ~900–1000 kcal). It is NOT a distance/pace event, so the
+// gels-every-25-min running model doesn't apply. These values reflect sport-
+// nutrition consensus for a glycogen-demanding sub-90-min effort: load in race
+// week, top up the morning of, and take in-race carbs on the RUN legs (the only
+// place you can realistically ingest — you can't drink mid-sled or mid-wall-ball).
+export const HYROX_CARBLOAD_G_PER_KG  = { lo: 6, hi: 8 };  // race-week daily carbs
+export const HYROX_CARBLOAD_DAYS      = 2;                 // 48h of elevated carbs
+export const HYROX_PRERACE_MEAL_G_PER_KG  = 1.5;           // ~3h out, carb-focused meal
+export const HYROX_PRERACE_TOPUP_G_PER_KG = 0.5;           // 30–45 min out, fast carb
+export const HYROX_DURING_G_PER_HR    = 60;                // mid-race carb target (g/hr)
+export const HYROX_RUN_COUNT          = 8;                 // 8 × 1 km runs = fuel windows
+// HYROX is indoors and venues run warm + stuffy (poor evaporative cooling), so
+// when we have no forecast we assume a warm-indoor default rather than neutral
+// — otherwise hydration gets under-planned.
+export const HYROX_INDOOR_DEFAULT_TEMP_C  = 24;
+export const HYROX_INDOOR_DEFAULT_HUMID   = 55;
 
 // ─── Parsing helpers ───────────────────────────────────────────────────────
 
@@ -214,6 +235,158 @@ function buildSchedule({ finishMin, totalFluidDuringMl }) {
 
 // ─── Public: full race fueling plan ─────────────────────────────────────────
 
+// ─── HYROX in-race schedule ──────────────────────────────────────────────────
+// Build fuel windows on the 8 run legs (the only places you can ingest). Carbs
+// land on two run legs (≈25% and ≈60% through), electrolyte sips on every run.
+// `fmt.stations` lets each window name the station it follows ("after Rowing").
+function buildHyroxSchedule({ durationMin, duringCarbG, duringFluidMl, fmt }) {
+  const runs = HYROX_RUN_COUNT;
+  const stations = fmt?.stations || [];
+  const sipMl = Math.max(50, Math.round((duringFluidMl / runs) / 25) * 25);
+  // Two carb hits, split evenly, placed on run legs 2 and 5 (0-indexed 1, 4).
+  const carbRuns = new Set([1, 4]);
+  const perCarbG = Math.round(duringCarbG / carbRuns.size);
+  const out = [];
+  for (let i = 0; i < runs; i++) {
+    const atMin = Math.round((durationMin * i) / runs);
+    const isCarb = carbRuns.has(i);
+    out.push({
+      runIndex: i + 1,
+      atMin,
+      label: `Run ${i + 1}`,
+      // Run 1 opens the race; every later run follows station i (0-indexed i-1).
+      afterStation: i === 0 ? null : (stations[i - 1]?.name || null),
+      fuelG: isCarb ? perCarbG : 0,
+      fluidMl: sipMl,
+      note: i === 0 ? 'settle in — small sip'
+          : isCarb ? 'carb gel + sip on the run'
+          : 'electrolyte sip',
+    });
+  }
+  return out;
+}
+
+// ─── Public: HYROX fueling plan ──────────────────────────────────────────────
+// A dedicated, format-aware plan (race-week load → morning → in-race cadence →
+// hydration). Returned with `format: 'hyrox'` so the UI renders the HYROX layout
+// instead of the run-race pace/finish/gel-schedule layout.
+export function buildHyroxFuelingPlan({
+  race,
+  profile,
+  weatherForecast,
+  sweatRateLbsPerHr,
+  goalTimeStr,
+  division,
+} = {}) {
+  const fmt = getRaceFormat(race);
+  if (!fmt || fmt.id !== 'hyrox') return null;
+
+  // ── Division + duration ──
+  const div = String(division || profile?.hyroxDivision || race?.division || 'mens-open').toLowerCase();
+  const isPro = /pro/.test(div);
+  const estDur = isPro
+    ? (fmt.estimatedDurationMinutes?.pro  ?? 65)
+    : (fmt.estimatedDurationMinutes?.open ?? 75);
+  const goalMin = parseFinishMin(goalTimeStr) || parseFinishMin(race?.goalTime);
+  const durationMin = goalMin && goalMin > 0 ? goalMin : estDur;
+
+  // ── Bodyweight ──
+  const weightLbs = Number(profile?.weightLbs) || Number(profile?.weight) || 175;
+  const weightKg = weightLbs * KG_PER_LB;
+
+  // ── Sweat / weather (indoor default when no forecast) ──
+  const hasWeather = weatherForecast?.tempC != null || weatherForecast?.tempMaxC != null;
+  const tempC = weatherForecast?.tempC ?? weatherForecast?.tempMaxC ?? HYROX_INDOOR_DEFAULT_TEMP_C;
+  const humidPct = weatherForecast?.humidityPct ?? weatherForecast?.humidity ?? HYROX_INDOOR_DEFAULT_HUMID;
+  const tMult = tempSweatMult(tempC);
+  const hMult = humiditySweatMult(humidPct);
+  const baseSweat = Number.isFinite(sweatRateLbsPerHr) && sweatRateLbsPerHr > 0 ? sweatRateLbsPerHr : 1.5;
+  const adjustedSweatLbsPerHr = +(baseSweat * tMult * hMult).toFixed(2);
+  const adjustedSweatMlPerHr = Math.round(adjustedSweatLbsPerHr * 453.592);
+  const sweatTotalMl = Math.round((adjustedSweatMlPerHr * durationMin) / 60);
+
+  // ── Carb load (race week) ──
+  const carbLoadLoG = Math.round(weightKg * HYROX_CARBLOAD_G_PER_KG.lo);
+  const carbLoadHiG = Math.round(weightKg * HYROX_CARBLOAD_G_PER_KG.hi);
+
+  // ── Race morning ──
+  const preMealG  = Math.round(weightKg * HYROX_PRERACE_MEAL_G_PER_KG);
+  const preTopupG = Math.round(weightKg * HYROX_PRERACE_TOPUP_G_PER_KG);
+
+  // ── During-race carbs + fluid ──
+  const duringCarbG = Math.round((HYROX_DURING_G_PER_HR * durationMin) / 60);
+  const duringFluidMl = Math.min(
+    Math.round((adjustedSweatMlPerHr * HYDRATION_REPLACE_FRACTION * durationMin) / 60),
+    Math.round((MAX_FLUID_ML_PER_HR * durationMin) / 60),
+  );
+
+  const schedule = buildHyroxSchedule({ durationMin, duringCarbG, duringFluidMl, fmt });
+  const schedCarbG  = schedule.reduce((s, r) => s + r.fuelG, 0);
+  const schedFluidMl = schedule.reduce((s, r) => s + r.fluidMl, 0);
+  const carbStops = schedule.filter(r => r.fuelG > 0).length;
+
+  return {
+    format: 'hyrox',
+    inputs: {
+      durationMin,
+      durationStr: minToTimeStr(durationMin),
+      // alias so RaceFocusCard's shared pre-fill (which reads finishStr) works
+      finishStr:   minToTimeStr(durationMin),
+      goalProvided: !!(goalMin && goalMin > 0),
+      estDurationMin: estDur,
+      division: div,
+      isPro,
+      weightLbs,
+      weightKg: +weightKg.toFixed(1),
+    },
+    weather: {
+      tempC,
+      humidityPct: humidPct,
+      tempMult: tMult,
+      humidityMult: hMult,
+      combinedMult: +(tMult * hMult).toFixed(2),
+      hasData: hasWeather,
+      indoorAssumed: !hasWeather,
+    },
+    sweat: {
+      baseLbsPerHr: baseSweat,
+      adjustedLbsPerHr: adjustedSweatLbsPerHr,
+      adjustedMlPerHr: adjustedSweatMlPerHr,
+      totalLossMl: sweatTotalMl,
+    },
+    carbLoad: {
+      perKgLo: HYROX_CARBLOAD_G_PER_KG.lo,
+      perKgHi: HYROX_CARBLOAD_G_PER_KG.hi,
+      gPerDayLo: carbLoadLoG,
+      gPerDayHi: carbLoadHiG,
+      daysOut: HYROX_CARBLOAD_DAYS,
+    },
+    preRace: {
+      meal3hG: preMealG,
+      topup45minG: preTopupG,
+      totalG: preMealG + preTopupG,
+      hydrationMl: 500,
+    },
+    during: {
+      gPerHr: HYROX_DURING_G_PER_HR,
+      totalCarbG: schedCarbG,
+      carbStops,
+      totalFluidMl: schedFluidMl,
+      electrolyte: true,
+    },
+    hydration: {
+      preRaceMl: 500,
+      duringMl: schedFluidMl,
+      totalLossMl: sweatTotalMl,
+      replaceFraction: HYDRATION_REPLACE_FRACTION,
+    },
+    estKcalBurn: isPro ? (fmt.estimatedKcalBurn?.pro ?? null) : (fmt.estimatedKcalBurn?.open ?? null),
+    stationCount: fmt.stationCount,
+    runKm: fmt.totalRunKm,
+    schedule,
+  };
+}
+
 export function buildRaceFuelingPlan({
   race,
   profile,
@@ -222,6 +395,20 @@ export function buildRaceFuelingPlan({
   pace,
   finishTime,
 } = {}) {
+  // ── Format-aware branch ──
+  // HYROX (and any future non-distance format) gets its own plan builder. The
+  // race object carries `type` from the Add-race form, which getRaceFormat()
+  // maps to a known format. Distance-based fueling below only runs for races
+  // that are actually about covering a distance.
+  const fmt = getRaceFormat(race);
+  if (fmt?.id === 'hyrox') {
+    return buildHyroxFuelingPlan({
+      race, profile, weatherForecast, sweatRateLbsPerHr,
+      goalTimeStr: finishTime || race?.goalTime,
+      division: profile?.hyroxDivision || race?.division,
+    });
+  }
+
   // ── Distance ──
   // Three sources: explicit distanceMi, explicit distanceKm, inferred from
   // race name ("Half" → 13.1, "Marathon" → 26.2, "10K" → 6.2, etc.).

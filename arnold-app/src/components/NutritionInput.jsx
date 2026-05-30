@@ -1342,7 +1342,7 @@ function LogFoodPanel({ dateStr, onSaved, onCancel }) {
 // MAIN COMPONENT
 // ═════════════════════════════════════════════════════════════════════════════
 
-export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
+export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coachSlot }) {
   const dateStr = date || localDate();
   const [entries, setEntries] = useState(() => getEntriesForDate(dateStr));
   const [totals, setTotals] = useState(() => dailyTotals(dateStr));
@@ -1493,6 +1493,16 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot }) {
             </div>
           );
         })()}
+
+        {/* Phase 4r.race.12 — Coach line lives INSIDE the Nutrition card on
+            mobile Fuel (caller passes coachSlot only on mobile). Rendered
+            below the header + target line so it reads as a margin note from
+            the card itself, not a banner floating above it. */}
+        {coachSlot && (
+          <div style={{ marginBottom: hasAnyData ? 8 : 0, marginTop: -2 }}>
+            {coachSlot}
+          </div>
+        )}
 
         {hasAnyData && (
           <>

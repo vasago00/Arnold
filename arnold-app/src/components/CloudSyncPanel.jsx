@@ -967,6 +967,19 @@ function GarminAuthSection() {
                   title="For each activity in the last 30 days that's missing HR zones or training load, fetch Garmin's server-computed details. Unlocks Z2 Weekly / EPOC / Pace:HR tiles when FIT files don't include zone data.">
             {busy === 'enrich' ? 'Enriching…' : 'Enrich activity data'}
           </button>
+          {/* Credential management — keep these next to the action buttons so
+              "Edit" is obviously the way to re-enter the Garmin password when
+              the session ticket expires, not buried below the VO₂Max card. */}
+          <button style={btnSec} type="button"
+                  title="Re-enter your Garmin password. Use this when Garmin returns 'ticket_not_found' / 401 errors — the worker session expired and needs fresh credentials."
+                  onClick={() => { setEditing(true); setForm({ user: existing.user, pass: '' }); setMsg(null); }}>
+            Edit credentials
+          </button>
+          <button style={btnDanger} type="button"
+                  title="Clear stored Garmin credentials. You'll need to re-enter them to sync."
+                  onClick={handleClear}>
+            Clear
+          </button>
           {/* Watch VO2Max manual override — Garmin's API doesn't return vO2MaxValue
               for all accounts (confirmed via 5 endpoints + activity DTO). Until/if
               that changes, the user types the value their watch shows here. */}
@@ -1012,10 +1025,6 @@ function GarminAuthSection() {
               )}
             </div>
           </div>
-          <button style={btnSec} type="button" onClick={() => { setEditing(true); setForm({ user: existing.user, pass: '' }); setMsg(null); }}>
-            Edit
-          </button>
-          <button style={btnDanger} type="button" onClick={handleClear}>Clear</button>
         </div>
       )}
 

@@ -44,6 +44,9 @@ import { todayPlanned, DAY_TYPES } from './planner.js';
 // Phase 4r.coach.v1 (2026-05-24) — pattern-detection signals beyond
 // today's snapshot. See COACH.md for the full v1/v2/v3 spec.
 import { computeCoachSignals } from './coachSignals.js';
+// Cut Mode classifier — task #218. Adds chronic fuel-state context so
+// Coach signals can distinguish intentional cuts from RED-S under-fueling.
+import { classifyCutMode } from './cutMode.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LAYER 3 — computeUserState
@@ -703,6 +706,15 @@ export function computeUserState(data = {}) {
     tdeeBaseline4w = empiricalTDEE({ weeks: 4, endDate: baselineEnd });
   } catch (e) { /* leave null */ }
 
+  // Cut Mode classification (task #218). Computed BEFORE coachSignals so
+  // affected signals (energyAvailability, tdeeDrift) can consult it and
+  // demote alarm severity when the user is in an intentional cut.
+  let cutMode = null;
+  try { cutMode = classifyCutMode(); }
+  catch (e) {
+    if (typeof console !== 'undefined') console.warn('[computeUserState] classifyCutMode threw:', e?.message || e);
+  }
+
   const coachSignals = (() => {
     try {
       return computeCoachSignals({
@@ -748,6 +760,23 @@ export function computeUserState(data = {}) {
             return Number(t?.kcal || t?.tdee || 0) || 0;
           } catch { return 0; }
         },
+        // Task #218 — pass cutMode so energyAvailability + tdeeDrift can
+        // demote alarms when the user is in an intentional background cut.
+        cutMode,
+        // Prefuel signal — needs today's carbs in grams + body weight in kg.
+        todayCarbsG: (() => {
+          try { return Number(nutDailyTotals(today)?.carbs) || 0; } catch { return 0; }
+        })(),
+        bodyWeightKg: (() => {
+          // Use cut-mode's recent weight median (morning-fasted, 7d) when
+          // available — it's the cleanest current-weight estimate we have.
+          // Fall back to most-recent weight row in lbs / 2.20462.
+          if (cutMode?.weight?.current) return cutMode.weight.current / 2.20462;
+          const w = (data.weight || storage.get('weight') || []);
+          const recent = [...w].sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+            .find(r => Number(r?.weightLbs) > 0);
+          return recent ? Number(recent.weightLbs) / 2.20462 : null;
+        })(),
       });
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -773,6 +802,7 @@ export function computeUserState(data = {}) {
     },
     numbers,
     coachSignals,
+    cutMode,                              // task #218 — chronic fuel state
   };
 }
 

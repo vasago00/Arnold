@@ -7,6 +7,11 @@
 // already has a more sophisticated local isHardSession (TSS / TE / duration
 // thresholds at lines 510+) that we use instead.
 import { activityKind } from './activityClass.js';
+// Phase 4r.utc.2 — local-timezone day string. Replaces the ad-hoc
+// `new Date().toISOString().slice(0,10)` fallback defaults across this file,
+// which silently used UTC and rolled the date forward for users west of UTC
+// in the evening (and backward for users east of UTC early in the morning).
+import { localDate } from './time.js';
 //
 // Six derived signals that extend Arnold's view from "snapshot of today"
 // to "multi-horizon pattern analysis." Each signal is a pure function
@@ -102,7 +107,7 @@ function approxPValueForR(r, n) {
 // ─── 1. Sleep debt ─────────────────────────────────────────────────────────
 
 export function computeSleepDebt(sleepArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const target = opts.targetHours || 7.5;
 
   const nights = (sleepArr || [])
@@ -157,7 +162,7 @@ export function computeSleepDebt(sleepArr, opts = {}) {
 // ─── 2. HRV depression ─────────────────────────────────────────────────────
 
 export function computeHrvDepression(hrvArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
 
   const desc = (hrvArr || [])
     .filter(h => h?.date && Number.isFinite(Number(h.value)) && Number(h.value) > 0)
@@ -210,7 +215,7 @@ export function computeHrvDepression(hrvArr, opts = {}) {
 // ─── 3. RHR drift ──────────────────────────────────────────────────────────
 
 export function computeRhrDrift(rhrArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
 
   const desc = (rhrArr || [])
     .filter(r => r?.date && Number.isFinite(Number(r.value)) && Number(r.value) > 0)
@@ -258,10 +263,11 @@ export function computeRhrDrift(rhrArr, opts = {}) {
 //   < 30              → deficient (endocrine impact threshold)
 
 export function computeEnergyAvailability(opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const intakeKcal = Number(opts.intakeKcal) || 0;
   const exerciseKcal = Number(opts.exerciseKcal) || 0;
   const lbmLbs = Number(opts.lbmLbs);
+  const cutMode = opts.cutMode || null;
 
   if (!Number.isFinite(lbmLbs) || lbmLbs <= 0) {
     return { intakeKcal, exerciseKcal, netKcal: null, lbmKg: null,
@@ -272,9 +278,21 @@ export function computeEnergyAvailability(opts = {}) {
   const netKcal = intakeKcal - exerciseKcal;
   const ea = +(netKcal / lbmKg).toFixed(1);
 
-  let status = 'sufficient';
-  if (ea < 30)      status = 'deficient';
-  else if (ea < 40) status = 'low';
+  let baseStatus = 'sufficient';
+  if (ea < 30)      baseStatus = 'deficient';
+  else if (ea < 40) baseStatus = 'low';
+
+  // Task #218 — cut-mode-aware severity demotion.
+  // In `background_cut` the user is intentionally restricting; low EA is the
+  // mechanism. Don't escalate to alarm — surface as 'expected'. In every
+  // other state (including under_fueled, acute_cut, crash_cut), keep the
+  // raw status so the alarm fires when it should.
+  let status = baseStatus;
+  let contextDemoted = false;
+  if (cutMode?.state === 'background_cut' && (baseStatus === 'low' || baseStatus === 'deficient')) {
+    status = 'expected';
+    contextDemoted = true;
+  }
 
   return {
     intakeKcal: Math.round(intakeKcal),
@@ -283,6 +301,9 @@ export function computeEnergyAvailability(opts = {}) {
     lbmKg: +lbmKg.toFixed(1),
     eaKcalPerKgLBM: ea,
     status,
+    baseStatus,              // raw status without cut-context
+    contextDemoted,          // true when cut-mode lowered alarm severity
+    cutModeContext: cutMode?.state || null,
     asOf: today,
   };
 }
@@ -305,7 +326,7 @@ export function computeEnergyAvailability(opts = {}) {
 const MIN_WORKOUT_KCAL = 150;
 
 export function computeTrainingMonotonyStrain(activities, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const days = 7;
   const minKcal = opts.minWorkoutKcal ?? MIN_WORKOUT_KCAL;
 
@@ -349,7 +370,7 @@ export function computeTrainingMonotonyStrain(activities, opts = {}) {
 // last 60 days. Only surfaceable when n ≥ 30 AND |r| ≥ 0.3.
 
 export function computeSleepHrvCorrelation(sleepArr, hrvArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 60;
 
   const sleepByDate = new Map();
@@ -435,7 +456,8 @@ export function computeSleepHrvCorrelation(sleepArr, hrvArr, opts = {}) {
 export function computeTdeeDrift(input = {}) {
   const recent   = input.recent || null;     // shape: { empiricalTDEE, confidence, avgIntake, ... } or null
   const baseline = input.baseline || null;
-  const today    = input.today || new Date().toISOString().slice(0, 10);
+  const today    = input.today || localDate();
+  const cutMode  = input.cutMode || null;
 
   const recentTdee   = recent?.empiricalTDEE;
   const baselineTdee = baseline?.empiricalTDEE;
@@ -462,11 +484,25 @@ export function computeTdeeDrift(input = {}) {
   const driftKcal = recentTdee - baselineTdee;
   const driftPct  = driftKcal / baselineTdee;
 
-  let status;
-  if      (driftPct <= -0.15) status = 'starvation';
-  else if (driftPct <= -0.05) status = 'adapting';
-  else if (driftPct >=  0.05) status = 'rebounding';
-  else                        status = 'stable';
+  let baseStatus;
+  if      (driftPct <= -0.15) baseStatus = 'starvation';
+  else if (driftPct <= -0.05) baseStatus = 'adapting';
+  else if (driftPct >=  0.05) baseStatus = 'rebounding';
+  else                        baseStatus = 'stable';
+
+  // Task #218 — cut-mode-aware severity demotion.
+  // TDEE adaptive downregulation (`adapting`) is expected physiology during
+  // an intentional cut — it's not an alarm, it's the normal response. In
+  // `background_cut`, demote 'adapting' to 'expected' so the Coach doesn't
+  // nag about it. `starvation` (≥15% drop) still surfaces even in cuts
+  // because that magnitude IS concerning — adaptive thermogenesis crossed
+  // a threshold worth attention.
+  let status = baseStatus;
+  let contextDemoted = false;
+  if (cutMode?.state === 'background_cut' && baseStatus === 'adapting') {
+    status = 'expected';
+    contextDemoted = true;
+  }
 
   // Lowest-confidence of the two windows is the overall confidence
   const confRank = { low: 1, medium: 2, high: 3 };
@@ -476,6 +512,9 @@ export function computeTdeeDrift(input = {}) {
 
   return {
     status,
+    baseStatus,                   // raw status without cut-context
+    contextDemoted,               // true when cut-mode lowered alarm severity
+    cutModeContext: cutMode?.state || null,
     recentTdee,
     baselineTdee,
     driftKcal: Math.round(driftKcal),
@@ -539,7 +578,7 @@ function addDays(dateStr, n) {
 }
 
 export function computeRecoveryVelocity(hardSessions, hrvByDate, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const baseline = Number(opts.baselineHrv);
   if (!Number.isFinite(baseline) || baseline <= 0) {
     return {
@@ -701,7 +740,7 @@ const GLYCOGEN_BASELINE_G      = 150;
 const GLYCOGEN_BURN = { z2: 0.3, z3: 0.5, z45: 1.0 }; // g/min
 
 export function computeGlycogenEstimate(activities, nutritionLog, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const nowMs = opts.nowMs || Date.now();
   const windowMs = nowMs - 24 * 60 * 60 * 1000;
 
@@ -898,7 +937,7 @@ function isEnduranceActivity(a) {
 }
 
 export function computePolarizationIndex(activities, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const windowDays = opts.windowDays || 28;
   const startDate = (() => {
     const d = new Date(today + 'T00:00:00');
@@ -997,7 +1036,7 @@ export function computePolarizationIndex(activities, opts = {}) {
 const DOW_LABEL = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function computeDowPatterns(hrvArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const samples = (hrvArr || [])
     .filter(h => h?.date && Number.isFinite(Number(h.value)) && Number(h.value) > 0)
     .map(h => ({ date: h.date, value: Number(h.value) }));
@@ -1129,7 +1168,7 @@ function correlationStats(pairs, opts = {}) {
 // 12. Sleep ↔ next-day RHR. Lower RHR = better recovery; expect NEGATIVE
 // slope (more sleep → lower next-day RHR).
 export function computeSleepRhrCorrelation(sleepArr, rhrArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 60;
 
   const sleepByDate = new Map();
@@ -1172,7 +1211,7 @@ export function computeSleepRhrCorrelation(sleepArr, rhrArr, opts = {}) {
 // run). EF rises as fitness improves; insufficient sleep should depress
 // next-day EF (slower at same HR). Expect POSITIVE slope.
 export function computeSleepRunQualityCorrelation(sleepArr, activities, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 90;
 
   const sleepByDate = new Map();
@@ -1224,7 +1263,7 @@ export function computeSleepRunQualityCorrelation(sleepArr, activities, opts = {
 // correlate with depressed HRV next day. Expect POSITIVE slope (less
 // deficit → higher HRV).
 export function computeDeficitHrvCorrelation(opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 60;
   const intakeByDate = opts.intakeByDate;
   const tdeeByDate   = opts.tdeeByDate;     // function (date) => tdee, or Map
@@ -1275,7 +1314,7 @@ export function computeDeficitHrvCorrelation(opts = {}) {
 // no effect (well-recovered) or reduced sleep quality (overreaching).
 // Bucket by week (Mon-Sun), require ≥8 weeks.
 export function computeLoadSleepCorrelation(activities, sleepArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 90;
   const cutoff = daysAgo(today, lookbackDays - 1);
 
@@ -1356,7 +1395,7 @@ export function computeLoadSleepCorrelation(activities, sleepArr, opts = {}) {
 //   insufficient — < 5 nights of stage data in the window
 
 export function computeSleepQuality(sleepArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 7;
 
   const recent = (sleepArr || [])
@@ -1467,7 +1506,7 @@ export function computeSleepQuality(sleepArr, opts = {}) {
 // it points at which axis Garmin thinks is dragging the score down.
 
 export function computeGarminReadiness(wellnessArr, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const lookbackDays = opts.lookbackDays || 3; // most recent within 3 days
 
   const recent = (wellnessArr || [])
@@ -1591,7 +1630,7 @@ function _activityMatchesPlanType(activity, plannedType) {
 }
 
 export function computeUpcomingPlan(plannerData, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const horizonDays = opts.horizonDays || 7;
   // Phase 4r.narrative.5.fix.18 — activities provide completion awareness.
   // Optional; when absent, `done` stays null and the composer falls back to
@@ -1738,7 +1777,7 @@ export function computeUpcomingPlan(plannerData, opts = {}) {
 //     (i.e., "holding steady" tolerance).
 
 export function computeGoalProgress(weightArr, outcomeGoal, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const weeksWindow = opts.weeksWindow || 4;
   const baseShape = {
     asOf: today,
@@ -1915,7 +1954,7 @@ function phaseForWeeksOut(weeksOut) {
 }
 
 export function computeRaceHorizon(outcomeGoal, opts = {}) {
-  const today = opts.today || new Date().toISOString().slice(0, 10);
+  const today = opts.today || localDate();
   const baseShape = {
     asOf: today,
     narrativeThreads: ['race-prep', 'long-term-arc'],
@@ -2005,7 +2044,7 @@ export function computeRaceHorizon(outcomeGoal, opts = {}) {
 // into one block attached to userState as `coachSignals`.
 
 export function computeCoachSignals(input = {}) {
-  const today = input.today || new Date().toISOString().slice(0, 10);
+  const today = input.today || localDate();
 
   // Sleep array — accepts the same shape as intelligence.js sleepRowsAll.
   const sleepArr = input.sleep || [];
@@ -2038,6 +2077,7 @@ export function computeCoachSignals(input = {}) {
     intakeKcal:   input.todayIntakeKcal,
     exerciseKcal: input.todayExerciseKcal,
     lbmLbs:       input.lbmLbs,
+    cutMode:      input.cutMode,    // task #218
   });
   const monotonyStrain = computeTrainingMonotonyStrain(input.activities || [], { today });
   const sleepHrvCorr   = computeSleepHrvCorrelation(sleepArr, hrvArr, { today });
@@ -2047,6 +2087,7 @@ export function computeCoachSignals(input = {}) {
     today,
     recent:   input.tdeeRecent4w   || null,
     baseline: input.tdeeBaseline4w || null,
+    cutMode:  input.cutMode,        // task #218
   });
 
   // Phase 4r.signals.3 — Recovery velocity. Build the inputs here so the
@@ -2136,6 +2177,19 @@ export function computeCoachSignals(input = {}) {
     activities: input.activities || [],
   });
 
+  // Phase 4r.signals.prefuel — acute carb adequacy for tomorrow's hard work.
+  // The chronic cut layer (cutMode) says "you can run the cut as long as
+  // you fuel the sessions." This signal is the per-session enforcement.
+  // Reads today's carb intake against the demand of the most-relevant
+  // upcoming session (today's incomplete plan, or tomorrow's planned
+  // session if today is done/rest).
+  const prefuel = computePrefuel({
+    today,
+    upcomingPlan,
+    todayCarbsG: input.todayCarbsG,
+    bodyWeightKg: input.bodyWeightKg,
+  });
+
   // Phase 4r.narrative.2.3 — Long-arc goal progress for the macro narrative
   // slot. Reads weight history + the resolved outcome goal.
   const goalProgress = computeGoalProgress(
@@ -2174,5 +2228,121 @@ export function computeCoachSignals(input = {}) {
     upcomingPlan,
     goalProgress,
     raceHorizon,
+    // acute fueling layer (task #218 follow-up)
+    prefuel,
+  };
+}
+
+// ─── Prefuel signal ────────────────────────────────────────────────────────
+// Pre-workout fueling adequacy. Asks "given today's carb intake, will
+// today's remaining session (or tomorrow's planned session) be properly
+// fueled?" Fires regardless of chronic cut state — even in background_cut,
+// hard sessions need real carbs. The most common cut-failure mode is
+// athletes "saving" calories around hard sessions and tanking the workout.
+//
+// Carb-need ranges follow standard sports-nutrition literature (Burke et
+// al. 2011):
+//   easy / aerobic:   3-5 g/kg body weight
+//   moderate / mixed: 5-7 g/kg
+//   hard / long:      7-10 g/kg
+// We use the LOWER bound of each range as the daily target — hitting this
+// before training is the floor; exceeding it during/after the session is
+// expected. Lower bound = "are you fueled enough TO START."
+//
+// Returns: { status: 'sufficient'|'low'|'inadequate'|'rest-day'|'no-data',
+//   intensity, sessionLabel, sessionDayPart, todayCarbsG, targetCarbsG,
+//   gapG, pctOfTarget, note, asOf }
+
+export function computePrefuel(opts = {}) {
+  const today = opts.today || localDate();
+  const upcomingPlan = opts.upcomingPlan;
+  const todayCarbsG = Number(opts.todayCarbsG);
+  const bodyWeightKg = Number(opts.bodyWeightKg);
+
+  if (!upcomingPlan?.next7Days?.length) {
+    return { status: 'no-data', note: 'No plan available — fuel by intent.', asOf: today };
+  }
+  if (!Number.isFinite(bodyWeightKg) || bodyWeightKg <= 0) {
+    return { status: 'no-data', note: 'Need body weight to compute carb target.', asOf: today };
+  }
+  if (!Number.isFinite(todayCarbsG) || todayCarbsG < 0) {
+    return { status: 'no-data', note: 'Need today\'s carb intake to evaluate prefuel.', asOf: today };
+  }
+
+  // Decide which session matters most for current fueling decisions.
+  // Priority:
+  //   1. Today's planned non-rest session if NOT yet done → must fuel for today
+  //   2. Tomorrow's planned non-rest session → must fuel today for tomorrow
+  //   3. Neither → rest-day, fuel as preferred
+  const todayPlan = upcomingPlan.todayPlanned;
+  const todayIncomplete = todayPlan
+    && todayPlan.intensityClass
+    && todayPlan.intensityClass !== 'rest'
+    && !todayPlan.done;
+  const tomorrow = upcomingPlan.next7Days.find(d => d.daysOut === 1);
+  const tomorrowDemands = tomorrow
+    && tomorrow.intensityClass
+    && tomorrow.intensityClass !== 'rest';
+
+  let targetSession = null;
+  if (todayIncomplete)        targetSession = todayPlan;
+  else if (tomorrowDemands)   targetSession = tomorrow;
+
+  if (!targetSession) {
+    return {
+      status: 'rest-day',
+      note: 'No demanding session ahead — fuel as preferred.',
+      todayCarbsG: Math.round(todayCarbsG),
+      asOf: today,
+    };
+  }
+
+  // Carb need per kg by intensity — lower bound of standard recommended range.
+  const intensity = targetSession.intensityClass;
+  const carbTargetPerKg =
+    intensity === 'hard'    ? 7 :
+    intensity === 'long'    ? 7 :
+    intensity === 'medium'  ? 5 :
+    intensity === 'mixed'   ? 5 :
+    intensity === 'easy'    ? 3 :
+    intensity === 'aerobic' ? 3 : 0;
+
+  if (carbTargetPerKg === 0) {
+    return {
+      status: 'rest-day',
+      note: `Session ahead is ${intensity || 'low-demand'} — fuel as preferred.`,
+      todayCarbsG: Math.round(todayCarbsG),
+      asOf: today,
+    };
+  }
+
+  const targetCarbsG = Math.round(bodyWeightKg * carbTargetPerKg);
+  const gapG = Math.max(0, targetCarbsG - todayCarbsG);
+  const pctOfTarget = todayCarbsG / targetCarbsG;
+
+  let status;
+  if      (pctOfTarget >= 0.9) status = 'sufficient';
+  else if (pctOfTarget >= 0.6) status = 'low';
+  else                          status = 'inadequate';
+
+  const dayPart = targetSession.daysOut === 0 ? 'today' : 'tomorrow';
+  const sessionLabel = targetSession.label || intensity;
+  const labelDisplay = /^[A-Z0-9]+$/.test(String(sessionLabel)) ? sessionLabel : String(sessionLabel).toLowerCase();
+
+  return {
+    status,
+    intensity,
+    sessionLabel,
+    sessionDayPart: dayPart,
+    todayCarbsG: Math.round(todayCarbsG),
+    targetCarbsG,
+    gapG: Math.round(gapG),
+    pctOfTarget: +pctOfTarget.toFixed(2),
+    note: status === 'sufficient'
+      ? `Carbs on track for ${labelDisplay} ${dayPart} — ${Math.round(todayCarbsG)}g of ${targetCarbsG}g.`
+      : status === 'low'
+      ? `${labelDisplay} ${dayPart} needs ~${targetCarbsG}g carbs today; you're at ${Math.round(todayCarbsG)}g (${Math.round(gapG)}g to go).`
+      : `${labelDisplay} ${dayPart} undersupplied — ${Math.round(todayCarbsG)}g vs ${targetCarbsG}g target. Add ~${Math.round(gapG)}g before the session to protect performance.`,
+    asOf: today,
   };
 }

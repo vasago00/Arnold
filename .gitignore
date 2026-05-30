@@ -15,6 +15,10 @@ arnold-app/dist/
 arnold-memory/
 Garmin.env.txt
 *.env.txt
+# Personal health-data CSV imports — NEVER commit (weight/HRV/sleep/nutrition).
+# Untracked 2026-05-27; the app reads from public/data-imports/ (also
+# gitignored) and live Garmin sync, never from this root copy.
+data-imports/
 
 # Python runtime
 __pycache__/

@@ -23,6 +23,7 @@ import { tileForSignal } from '../core/narrativeGraph.js';
 import { buildTileContext, getMetric, evaluate } from '../core/derive/tileMetrics.js';
 import { useStorageVersion } from '../hooks/useStorageVersion.js';
 import { safeCompute } from '../core/safeCompute.js';
+import { CoachSigil } from './CoachSigil.jsx';
 
 const FEEDBACK_KEY = 'coachFeedback';
 
@@ -849,17 +850,22 @@ export function CoachBeta({ setTab } = {}) {
         borderRadius: 8, marginBottom: 18,
       }}>
         <div>
+          {/* Phase 4r.narrative.5.fix.23 — Convergent Wedge sigil leads the
+              Coach header. This is the Coach's signature mark; it appears
+              here, on the EdgeIQ summary line, and (future) the mobile
+              CoachLine so the identity is consistent across every surface. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <CoachSigil size={24} />
+            <span style={{
+              fontSize: 16, fontWeight: 600,
+              color: 'var(--text-primary)',
+            }}>Coach</span>
             <span style={{
               fontSize: 9, fontWeight: 800,
               color: '#5eead4', letterSpacing: '0.16em',
               padding: '2px 8px', borderRadius: 3,
               background: 'rgba(94,234,212,0.12)',
             }}>BETA</span>
-            <span style={{
-              fontSize: 16, fontWeight: 600,
-              color: 'var(--text-primary)',
-            }}>Coach</span>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
             {today}. Arnold reads your sleep, HRV, RHR, energy availability,

@@ -402,6 +402,11 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
     });
   }, [race, weather, profile, sweatRateLbsPerHr, paceInput, finishInput, lastEdited]);
 
+  // Phase 4r.race.11 — HYROX gets a dedicated, format-aware body (no run
+  // pace/finish/gel-schedule). buildRaceFuelingPlan tags its output with
+  // format:'hyrox' when the race type resolves to the HYROX format.
+  const isHyrox = plan?.format === 'hyrox';
+
   // Pre-fill inputs once the plan resolves so user sees the active values.
   useEffect(() => {
     if (didInitialFill || !plan?.inputs) return;
@@ -517,8 +522,8 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
         </div>
       )}
 
-      {/* EXPANDED BODY — two-column layout */}
-      {expanded && plan && (
+      {/* EXPANDED BODY — run-race two-column layout (HYROX uses its own body) */}
+      {expanded && plan && !isHyrox && (
         <div style={{
           display:'grid',
           gridTemplateColumns: mobile ? 'minmax(0, 1fr) minmax(0, 1.05fr)' : '180px 1fr',
@@ -658,6 +663,130 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
                 on the race tile, single source of truth for nutrition). */}
             {/* Phase 4r.viz.17 — "Plan items in Fuel" link removed per
                 user request. Race card stands alone on the Play tab. */}
+          </div>
+        </div>
+      )}
+
+      {/* EXPANDED BODY — HYROX (format-aware): race-week load → morning →
+          in-race cadence on the 8 runs → hydration. No pace/distance/gels. */}
+      {expanded && plan && isHyrox && (
+        <div style={{
+          display:'grid',
+          gridTemplateColumns: mobile ? 'minmax(0, 1fr) minmax(0, 1.15fr)' : '170px 1fr',
+          gap: mobile ? 10 : 16,
+          paddingTop: 4,
+        }}>
+          {/* ── LEFT: Goal time + summary ── */}
+          <div style={{display:'flex',flexDirection:'column',gap:6,minWidth:0}}>
+            <label style={{display:'flex',alignItems:'center',gap:8,fontSize:SZ.inputLbl,color:'var(--text-secondary, #94a3b8)'}}>
+              <span style={{minWidth:38,flexShrink:0,fontWeight:500}}>
+                Goal
+                {flashField === 'finish' && <span style={{color:'#22c55e',marginLeft:3}}>✓</span>}
+              </span>
+              <input
+                type="text"
+                inputMode="numeric"
+                enterKeyHint="done"
+                placeholder="1:15:00"
+                className="arnold-compact-input"
+                value={finishInput}
+                onFocus={() => {
+                  finishBeforeFocusRef.current = finishInput;
+                  setFinishInput('');
+                  setFinishUncommitted(true);
+                }}
+                onChange={e => { setFinishInput(e.target.value); setFinishUncommitted(true); }}
+                onBlur={() => {
+                  if (!finishInput.trim()) {
+                    setFinishInput(finishBeforeFocusRef.current || '');
+                    setFinishUncommitted(false);
+                    finishBeforeFocusRef.current = null;
+                    return;
+                  }
+                  commitFinish();
+                  finishBeforeFocusRef.current = null;
+                }}
+                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                style={inputStyle(finishUncommitted, flashField === 'finish', SZ.inputWFinish)}
+              />
+            </label>
+            <div style={{fontSize:SZ.note,color:'var(--text-muted)',lineHeight:1.45}}>
+              {plan.inputs.goalProvided
+                ? 'Your goal time'
+                : `Est. ${plan.inputs.isPro ? 'Pro' : 'Open'} ~${plan.inputs.durationStr}`}
+              {plan.estKcalBurn ? ` · ~${plan.estKcalBurn} kcal` : ''}
+            </div>
+            <div style={{fontSize:SZ.note,color:'var(--text-muted)',lineHeight:1.45,marginTop:-2}}>
+              {plan.runKm}km run · {plan.stationCount} stations
+            </div>
+            <div style={{fontSize:SZ.note,color:'var(--text-muted)',lineHeight:1.45,marginTop:-2}}>
+              Sweat {plan.sweat.adjustedLbsPerHr} lb/hr
+              {plan.weather.indoorAssumed
+                ? ' · indoor est.'
+                : (plan.weather.combinedMult !== 1 ? ` · ×${plan.weather.combinedMult.toFixed(2)}` : '')}
+            </div>
+          </div>
+
+          {/* ── RIGHT: Fueling rows ── */}
+          <div style={{display:'flex',flexDirection:'column',gap:8,minWidth:0}}>
+            {/* Race week — carb load */}
+            <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
+              <BowlIcon size={20} color="#fb923c"/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:SZ.rowVal,fontWeight:500,color:'var(--text-primary)'}}>Race week</div>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)'}}>
+                  {plan.carbLoad.gPerDayLo}–{plan.carbLoad.gPerDayHi}g carbs/day
+                </div>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-muted)',marginTop:1}}>
+                  {plan.carbLoad.daysOut} days out · {plan.carbLoad.perKgLo}–{plan.carbLoad.perKgHi} g/kg
+                </div>
+              </div>
+            </div>
+            {/* Race morning */}
+            <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
+              <BowlIcon size={20} color="#fbbf24"/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:SZ.rowVal,fontWeight:500,color:'var(--text-primary)'}}>Race morning</div>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)'}}>
+                  {plan.preRace.meal3hG}g meal · {plan.preRace.topup45minG}g top-up
+                </div>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-muted)',marginTop:1}}>
+                  3h out + 30–45 min before · {plan.preRace.hydrationMl} mL
+                </div>
+              </div>
+            </div>
+            {/* In-race cadence on the 8 runs */}
+            <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
+              <GelIcon size={20} color="#22d3ee"/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:SZ.rowVal,fontWeight:500,color:'var(--text-primary)',display:'flex',alignItems:'baseline',gap:6}}>
+                  <span>In-race</span>
+                  <span style={{fontSize:SZ.rowSub,color:'var(--text-muted)',fontWeight:400}}>× {plan.during.carbStops} carbs</span>
+                </div>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-secondary)',display:'flex',alignItems:'center',gap:3}}>
+                  {plan.during.totalCarbG}g · {plan.during.totalFluidMl}<DropIcon size={11} color="#60a5fa"/> · ~{plan.during.gPerHr}g/hr
+                </div>
+                {/* Run chips — highlighted legs are where you take a carb gel;
+                    the rest are an electrolyte sip. Hover for the station. */}
+                <div style={{display:'flex',flexWrap:'wrap',gap:3,marginTop:3}}>
+                  {plan.schedule.map(r => (
+                    <span key={r.runIndex}
+                      title={`${r.label}${r.afterStation ? ` · after ${r.afterStation}` : ''} — ${r.fuelG > 0 ? `${r.fuelG}g gel + ` : ''}${r.fluidMl} mL`}
+                      style={{
+                        fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:4, cursor:'help',
+                        background: r.fuelG > 0 ? 'rgba(34,211,238,0.16)' : 'var(--bg-elevated)',
+                        color:      r.fuelG > 0 ? '#22d3ee' : 'var(--text-muted)',
+                        border:     `0.5px solid ${r.fuelG > 0 ? 'rgba(34,211,238,0.35)' : 'var(--border-subtle)'}`,
+                      }}>
+                      R{r.runIndex}
+                    </span>
+                  ))}
+                </div>
+                <div style={{fontSize:SZ.rowSub,color:'var(--text-muted)',marginTop:2}}>
+                  carbs on the highlighted runs · sip every leg
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

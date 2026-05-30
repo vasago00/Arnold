@@ -133,9 +133,9 @@ export const NARRATIVE_NODES = {
       const sd = cs?.sleepDebt;
       if (!sd) return null;
       const { status, debt7d, avgHours7d, targetHours, nightsBelow7d } = sd;
-      if (status === 'severe')   return `Sleep debt is severe — ${fmt1(debt7d)}h cumulative over 7 nights (averaging ${fmt1(avgHours7d)}h against a ${targetHours}h target, ${nightsBelow7d}/7 short).`;
-      if (status === 'moderate') return `Sleep debt is moderate — ${fmt1(debt7d)}h cumulative this week, averaging ${fmt1(avgHours7d)}h vs a ${targetHours}h target.`;
-      if (status === 'mild')     return `Sleep debt is mild — ${fmt1(debt7d)}h cumulative this week.`;
+      if (status === 'severe')   return `Sleep debt is severe — ${fmt1(debt7d)}h short of target across the last 7 nights (averaging ${fmt1(avgHours7d)}h vs ${targetHours}h target, ${nightsBelow7d}/7 nights short).`;
+      if (status === 'moderate') return `Sleep debt is moderate — ${fmt1(debt7d)}h short across the last 7 nights (averaging ${fmt1(avgHours7d)}h vs ${targetHours}h target).`;
+      if (status === 'mild')     return `Sleep debt is mild — ${fmt1(debt7d)}h short across the last 7 nights.`;
       if (status === 'paid')     return `Sleep is paid — averaging ${fmt1(avgHours7d)}h, only ${nightsBelow7d}/7 nights below target.`;
       return null;
     },

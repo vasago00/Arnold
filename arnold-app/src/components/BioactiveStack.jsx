@@ -14,7 +14,7 @@ const GROUP_ICON = {
   'adaptive':     Leaf,
 };
 
-const GROUP_COLOR = {
+export const GROUP_COLOR = {
   'neural':       '#a78bfa',
   'longevity':    '#5eead4',
   'defense':      '#fb7185',
@@ -51,7 +51,7 @@ const GROUP_LABEL = {
 
 const GROUP_ORDER = ['neural', 'longevity', 'defense', 'performance', 'adaptive', 'other'];
 
-const COMPOUND_OVERRIDE = {
+export const COMPOUND_OVERRIDE = {
   'Mg Threonate': 'neural',
   'Creatine':     'neural',
   'Fisetin':      'neural',
@@ -60,7 +60,15 @@ const COMPOUND_OVERRIDE = {
   'Shilajit':     'adaptive',
 };
 
-const SHORT_CODE = {
+export const MECHANISM_TO_SYSTEM_MAP = {
+  'nad':                'longevity',
+  'senolytic':          'defense',
+  'anti-inflammatory':  'defense',
+  'performance':        'performance',
+  'other':              'other',
+};
+
+export const SHORT_CODE = {
   'NMN': 'NMN',
   'Resveratrol': 'Rv',
   'Spermidine': 'Sp',
