@@ -38,6 +38,7 @@ import {
   BatteryLow, BatteryMedium,
 } from "@phosphor-icons/react";
 import { getPredictedBands } from "../core/predictedBands.js";
+import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
 import { fetchWeatherForDate } from "../core/pdfParser.js";
 import { isRun, isStrength, isHIIT, isMobility } from "../core/activityClass.js";
@@ -419,7 +420,7 @@ function sessionContext({ planned, family, allActivities }) {
   const monStr = ymd(isoMonday);
   const weekRuns = (allActivities || []).filter(a => isRun(a) && (a.date || '') >= monStr);
   const weekMi = weekRuns.reduce((s, a) => s + (Number(a.distanceMi) || 0), 0);
-  const goalMi = 25;  // TODO: pull from getGoals().weeklyRunDistanceTarget
+  const goalMi = parseFloat(getGoals()?.weeklyRunDistanceTarget) || 30;
   const planMi = Number(planned?.distanceMi) || 0;
   if (planMi <= 0) return null;
   const afterMi = weekMi + planMi;
@@ -636,20 +637,74 @@ function fuelTargets({ minutes }) {
   };
 }
 
-function plannedMinutes({ planned, profile }) {
+// Phase 4r.run.expectedtime.2 — derive a personalized pace (secs/mi) for a
+// given run type from the user's OWN recent logged runs, rather than the
+// configured targetRacePace + a fixed offset. This is the data-driven path:
+// the predictor that was unreliable forecasts RACE FINISH TIMES from fitness
+// extrapolation; this is just the median of what the user actually runs at
+// for that run type. Falls back to null (caller uses configured pace) when
+// there isn't enough history. Long-run boundary mirrors CalendarTab (>10 mi).
+function historicalPaceSecs(planType, lookbackDays = 90) {
+  try {
+    const acts = getUnifiedActivities() || [];
+    const cutoffMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+    const paceOf = (a) => {
+      if (a.avgPaceRaw) {
+        const [m, s] = String(a.avgPaceRaw).split(':').map(Number);
+        const secs = m * 60 + (s || 0);
+        if (Number.isFinite(secs) && secs > 0) return secs;
+      }
+      const dur = Number(a.durationSecs) || 0, mi = Number(a.distanceMi) || 0;
+      return (dur > 0 && mi > 0) ? dur / mi : null;
+    };
+    // Bucket a logged run to easy_run / long_run / tempo / intervals using
+    // the same heuristics the app uses elsewhere (distance for long; pace is
+    // not used to bucket, to avoid circularity).
+    const bucket = (a) => {
+      const mi = Number(a.distanceMi) || 0;
+      if (mi > 10) return 'long_run';
+      if (isHIIT(a)) return 'intervals';
+      return 'easy_run';  // default steady run
+    };
+    const samples = acts
+      .filter(a => isRun(a) && (Number(a.distanceMi) || 0) > 0)
+      .filter(a => { const d = a.date && new Date(a.date + 'T12:00:00').getTime(); return d && d >= cutoffMs; })
+      .filter(a => {
+        // tempo/intervals: match explicit type when planning a quality session;
+        // for easy/long, accept the distance/HIIT bucket above.
+        if (planType === 'tempo' || planType === 'intervals') return bucket(a) === 'intervals';
+        return bucket(a) === planType;
+      })
+      .map(paceOf)
+      .filter(v => Number.isFinite(v) && v > 0)
+      .sort((x, y) => x - y);
+    if (samples.length < 3) return null;  // not enough history to trust
+    const mid = Math.floor(samples.length / 2);
+    return samples.length % 2 ? samples[mid] : (samples[mid - 1] + samples[mid]) / 2;
+  } catch { return null; }
+}
+
+export function plannedMinutes({ planned, profile }) {
   if (!planned) return null;
   if (Number(planned.minutes) > 0) return Number(planned.minutes);
   const family = PLAN_TYPE_FAMILY[planned.type];
   if (family === 'run' && Number(planned.distanceMi) > 0) {
-    const targetPace = profile?.targetRacePace || '9:30';
-    const [m, s] = String(targetPace).split(':').map(Number);
-    const paceSecs = m * 60 + (s || 0);
-    const off = planned.type === 'easy_run' ? 75
-              : planned.type === 'long_run' ? 60
-              : planned.type === 'tempo'    ? 0
-              : planned.type === 'intervals' ? -30
-              : 60;
-    return Math.round((paceSecs + off) * Number(planned.distanceMi) / 60);
+    // Prefer the user's own historical pace for this run type; fall back to
+    // configured targetRacePace + per-type offset when history is thin.
+    const histPace = historicalPaceSecs(planned.type);
+    let effPaceSecs = histPace;
+    if (effPaceSecs == null) {
+      const targetPace = profile?.targetRacePace || '9:30';
+      const [m, s] = String(targetPace).split(':').map(Number);
+      const paceSecs = m * 60 + (s || 0);
+      const off = planned.type === 'easy_run' ? 75
+                : planned.type === 'long_run' ? 60
+                : planned.type === 'tempo'    ? 0
+                : planned.type === 'intervals' ? -30
+                : 60;
+      effPaceSecs = paceSecs + off;
+    }
+    return Math.round(effPaceSecs * Number(planned.distanceMi) / 60);
   }
   if (family === 'strength') return 45;
   if (family === 'hiit')     return 30;
@@ -1350,6 +1405,13 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
     const isMob      = planType === 'mobility' || (planMins != null && planMins < 20);
 
     const targetPace = (() => {
+      // Phase 4r.run.easypace — easy + long runs DO show a suggested pace as
+      // informational guidance, but it is never graded pass/fail (the
+      // achieved-pace chip post-run carries no status color). Quality
+      // sessions (tempo/intervals) keep their prescriptive pace. The
+      // "improving / not improving" trend grade for easy pace is handled
+      // separately in the expected-vs-achieved effort work (#17), comparing
+      // achieved easy pace at a given HR against recent easy runs.
       if (!isEasy && !isHard) return null;
       const base = profile?.targetRacePace || '9:30';
       const [m, s] = String(base).split(':').map(Number);
@@ -1775,6 +1837,64 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
   const recovery = recoveryPrescription({ summary, profile });
   const isRace = state.kind === 'race-complete';
 
+  // Phase 4r.run.expectedVsAchieved (#17) — compare what was planned vs what
+  // was actually done, and (for easy runs) whether aerobic pace is trending.
+  // Two distinct readouts:
+  //   1. DURATION delta vs plan — "planned ~52 min, ran 48 min" (informational,
+  //      not graded good/bad; longer/shorter isn't inherently better).
+  //   2. EASY-PACE TREND — for easy runs, is today's pace-at-HR improving vs
+  //      recent easy runs at similar effort? "improving / steady / off" —
+  //      NEVER pass/fail (per user: easy pace shown, not graded good/bad).
+  const effortCompare = (() => {
+    const act = state.activity || todayActivities[0] || {};
+    if (!isRun(act)) return null;
+    const planType = plannedToday?.type;
+    const out = {};
+
+    // (1) Duration vs plan (only when a planned distance/duration existed).
+    const expMin = plannedToday ? (() => {
+      try { return plannedMinutes({ planned: plannedToday, profile }); } catch { return null; }
+    })() : null;
+    if (expMin && summary.minutes > 0) {
+      const deltaMin = Math.round(summary.minutes - expMin);
+      out.duration = { expMin, gotMin: Math.round(summary.minutes), deltaMin };
+    }
+
+    // (2) Easy-pace trend — only for easy/long runs with a usable pace + HR.
+    if ((planType === 'easy_run' || planType === 'long_run' || planType == null)
+        && isRun(act) && act.avgPaceRaw && Number(act.avgHR) > 0) {
+      const paceToSecs = (raw) => {
+        if (!raw) return null;
+        const [m, s] = String(raw).split(':').map(Number);
+        const v = m * 60 + (s || 0);
+        return Number.isFinite(v) && v > 0 ? v : null;
+      };
+      const todayPace = paceToSecs(act.avgPaceRaw);
+      const todayHR = Number(act.avgHR);
+      // Baseline: recent easy/steady runs (excl. today), last 60d, ≥3 mi,
+      // with pace + HR. Compare pace-per-HR (efficiency) — faster pace at the
+      // same or lower HR = improving aerobic fitness.
+      const cutoffMs = Date.now() - 60 * 24 * 60 * 60 * 1000;
+      const baseline = (allActivities || [])
+        .filter(a => a !== act && isRun(a) && a.avgPaceRaw && Number(a.avgHR) > 0)
+        .filter(a => (Number(a.distanceMi) || 0) >= 3)
+        .filter(a => { const d = a.date && new Date(a.date + 'T12:00:00').getTime(); return d && d >= cutoffMs; })
+        .map(a => { const p = paceToSecs(a.avgPaceRaw); return p ? p / Number(a.avgHR) : null; })
+        .filter(Boolean);
+      if (todayPace && todayHR && baseline.length >= 3) {
+        const todayEff = todayPace / todayHR;                    // secs/mi per bpm
+        const sorted = [...baseline].sort((x, y) => x - y);
+        const medEff = sorted[Math.floor(sorted.length / 2)];
+        // Lower secs-per-mi-per-bpm = faster at same HR = improving.
+        const pct = (todayEff - medEff) / medEff;
+        out.paceTrend = pct <= -0.03 ? 'improving'
+                      : pct >=  0.03 ? 'off'
+                      :                'steady';
+      }
+    }
+    return (out.duration || out.paceTrend) ? out : null;
+  })();
+
   // Phase 4r.recover.1 — detect if a Mobility activity was logged today
   // so the mobility chip can render in green with a check. Counts ALL
   // mobility-tagged activities for the day, not just the focal activity.
@@ -1826,7 +1946,29 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
   // then universal session metrics (TE, calories, max HR) so the row is
   // never empty for HIIT/treadmill/non-Garmin imports. We slice(0,5) so
   // the chip row matches the 4-5 chip count on the pre-workout card.
+  // Phase 4r.run.expectedVsAchieved — lead chips: easy-pace trend (never
+  // graded pass/fail — neutral/teal phrasing) + duration-vs-plan delta.
+  const compareChips = [
+    effortCompare?.paceTrend ? {
+      value: effortCompare.paceTrend === 'improving' ? '↑ improving'
+           : effortCompare.paceTrend === 'off'       ? '↑ effort'
+           :                                            'steady',
+      post: 'pace/HR',
+      // Improving = teal (good but not "pass"); steady neutral; 'off' (slower
+      // at same HR) is amber-ish info, NOT red — easy pace is never failed.
+      color: effortCompare.paceTrend === 'improving' ? '#22d3ee'
+           : effortCompare.paceTrend === 'off'       ? '#fbbf24'
+           :                                           T2,
+    } : null,
+    effortCompare?.duration ? {
+      value: `${effortCompare.duration.gotMin}/${effortCompare.duration.expMin}`,
+      post: 'min vs plan',
+      color: T2,  // informational — over/under plan isn't good/bad
+    } : null,
+  ].filter(Boolean);
+
   const qualityChips = [
+    ...compareChips,
     summary.load != null       ? { value: `${summary.load}`,           post: 'load',   color: summary.effortColor                  } : null,
     summary.decoupling != null ? { value: `${summary.decoupling}%`,    post: 'drift',  color: decouplingColor(summary.decoupling)  } : null,
     summary.cadence       != null && summary.cadence       > 0 ? { value: `${summary.cadence}`,        post: 'cad',    color: cadenceColor(summary.cadence, paceSecsPerMi) } : null,

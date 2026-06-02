@@ -131,6 +131,7 @@ import {
   computeRolling7d, computeRolling30d, getEffectiveMaxHR,
   RTSS_BANDS, rtssBand,
 } from "./core/trainingStress.js";
+import { computeGlycogenEstimate } from "./core/coachSignals.js";
 
 // ─── Unified Activities: merge CSV imports + daily FIT uploads ───────────────
 // Single source of truth — used everywhere that needs activity data.
@@ -2984,7 +2985,7 @@ function HomeCockpit({data,setTab}){
   // ── Targets ──
   const annualRunTarget=parseFloat(profile?.annualRunDistanceTarget)||800;
   const annualWorkoutTarget=parseFloat(profile?.annualWorkoutsTarget)||200;
-  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||20;
+  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||30;
   const targetWeight=parseFloat(profile?.targetWeight)||175;
   const targetBF=parseFloat(profile?.targetBodyFat)||16.7;
   const goalPaceSecs=(()=>{const p=profile?.targetRacePace||'9:30';const[m,s]=p.split(':').map(Number);return m*60+(s||0);})();
@@ -3669,7 +3670,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   const longRun=Math.max(...yearRuns2.slice(-12).map(a=>a.distanceMi||0),0);
   const annualRunTarget=parseFloat(profile?.annualRunDistanceTarget)||800;
   const annualWorkoutTarget=parseFloat(profile?.annualWorkoutsTarget)||200;
-  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||20;
+  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||30;
   const strTarget=parseFloat(profile?.weeklyStrengthTarget)||2;
   const aeroPct=yearWorkouts>0?Math.round((yearRuns2.length/yearWorkouts)*100):62;
   const anaPct=100-aeroPct;
@@ -6963,9 +6964,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                               pct={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)}/>
                           )}
                           <MiniBar label="Weekly miles"
-                            displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||20} mi`}
-                            goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||20} mi/week`}
-                            pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||20)}/>
+                            displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||30} mi`}
+                            goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||30} mi/week`}
+                            pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||30)}/>
                         </>;
                       })()}
                     </>
@@ -9763,7 +9764,7 @@ Structure:
   }
 
   // ── Targets / goals ──
-  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||20;
+  const weeklyRunTarget=parseFloat(profile?.weeklyRunDistanceTarget)||30;
   const annualRunTarget=parseFloat(profile?.annualRunDistanceTarget)||800;
   const annualWorkoutTarget=parseFloat(profile?.annualWorkoutsTarget)||200;
   const strTarget=parseFloat(profile?.weeklyStrengthTarget)||2;
@@ -10205,6 +10206,10 @@ Structure:
           if (type === 'hrv')    { if (val >= 40) return '#4ade80'; if (val >= 30) return '#fbbf24'; return '#f87171'; }
           if (type === 'fuel')   return val > 0 ? '#fbbf24' : '#4ade80';  // remaining > 0 = needs action
           if (type === 'race')   return val != null ? '#a78bfa' : 'var(--text-muted)';
+          // Phase 4r.edgeiq.2 — added driver tiles (Weekly load, Weight).
+          if (type === 'load' || type === 'weight') return '#cbd5e1'; // neutral — context metric, not pass/fail
+          // Phase 4r.edgeiq.5 — glycogen adequacy band. val = adequacyRatio×100.
+          if (type === 'glycogen') { if (val >= 80) return '#4ade80'; if (val >= 50) return '#fbbf24'; return '#f87171'; }
           // Phase 4r.narrative.5.fix.11 — rTSS uses the canonical RTSS_BANDS
           // table so the EdgeIQ MiniStat color matches the Daily gauge color
           // for the same value. Without this, the generic "high = good" rule
@@ -10220,9 +10225,11 @@ Structure:
         // `tier` controls visual hierarchy: 'domain' (bold/larger) for the
         // 3 composite scores; 'driver' (smaller) for the 6 contributors;
         // 'action' (medium) for Today/Race.
-        const MiniStat = ({ label, value, sub, history, type, fmt, tier = 'driver' }) => {
+        const MiniStat = ({ label, value, sub, history, type, fmt, tier = 'driver', valuePx }) => {
           const color = statusFor(typeof value === 'number' ? value : null, type);
-          const valueSize = tier === 'domain' ? 19 : tier === 'action' ? 15 : 15;
+          // valuePx overrides the tier default — used for text-status tiles
+          // (e.g. Glycogen "Moderate") whose words are wider than a number.
+          const valueSize = valuePx != null ? valuePx : (tier === 'domain' ? 19 : tier === 'action' ? 15 : 15);
           const valueWeight = tier === 'domain' ? 600 : 600;
           const tileMinW = tier === 'domain' ? 62 : 58;
 
@@ -10286,7 +10293,7 @@ Structure:
         // in the bracket's color above the children. When null, the row
         // is empty but still occupies its 14px so the tiles below stay
         // aligned with bracketed pairs.
-        const RailColumn = ({ bracket, color, children, gap = 'clamp(6px,0.7vw,10px)', flexWeight = 1 }) => (
+        const RailColumn = ({ bracket, color, children, gap = 'clamp(6px,0.7vw,10px)', flexWeight = 1, vertical = false }) => (
           <div style={{
             display: 'flex', flexDirection: 'column', minWidth: 0,
             // flexWeight=0 → fixed natural width (used by the speedometer);
@@ -10309,7 +10316,7 @@ Structure:
                 </>
               ) : null}
             </div>
-            <div style={{ display: 'flex', gap, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', flexDirection: vertical ? 'column' : 'row', gap: vertical ? 6 : gap, alignItems: 'flex-start' }}>
               {children}
             </div>
           </div>
@@ -10421,6 +10428,77 @@ Structure:
                   return sleepRow?.durationMinutes ? +(sleepRow.durationMinutes / 60).toFixed(1) : null;
                 }).reverse();
 
+                // ── Phase 4r.edgeiq.2 — third driver tile per domain ──
+                // Activity: 7-day acute training load (the volume ACWR is built
+                // from). Nutrition: glycogen fuel-tank status. Body: weight.
+                const weeklyLoadVal = (acwrToday?.acuteLoad != null && acwrToday.acuteLoad > 0)
+                  ? acwrToday.acuteLoad : null;
+                // Phase 4r.edgeiq.5 — Nutrition 3rd tile = Glycogen (Coach
+                // signal). "Am I fueled to train?" — adequacyRatio of carbs
+                // supplied vs 24h training burn. Replaced Carbs left (which
+                // itself replaced the broken intake−TDEE "Balance"). Point-in-
+                // time status, so no daily sparkline.
+                const glyco = (() => {
+                  try {
+                    const log = storage.get('nutritionLog') || [];
+                    return computeGlycogenEstimate(activities || [], log, { today });
+                  } catch { return null; }
+                })();
+                // Map status → a 0-100-ish value for color (reuse score bands).
+                const glycoPct = (glyco && Number.isFinite(glyco.adequacyRatio))
+                  ? Math.round(Math.min(glyco.adequacyRatio, 1.5) * 100 / 1.2) : null;
+                const weightRowsEdge = (() => { try { return storage.get('weight') || []; } catch { return []; } })();
+                const curWeight = (() => {
+                  const r = [...weightRowsEdge]
+                    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+                    .find(w => Number(w?.weightLbs) > 0);
+                  return r ? Number(r.weightLbs) : null;
+                })();
+                const weightHist = days.map(d => {
+                  const r = weightRowsEdge.find(w => w?.date === d && Number(w?.weightLbs) > 0);
+                  return r ? Number(r.weightLbs) : null;
+                }).reverse();
+
+                // ── Phase 4r.edgeiq.3 — 7-day sparkline series so every
+                // driver tile carries a trend line (oldest→newest). ──
+                const acwrSeries = days.map(d => {
+                  try { return computeAcuteChronicRatio(activities, d, ftpPace, maxHREdge); } catch { return null; }
+                });
+                const acwrHist = acwrSeries.map(r => (r?.ratio != null ? r.ratio : null)).reverse();
+                const loadHist = acwrSeries.map(r => (r?.acuteLoad ? r.acuteLoad : null)).reverse();
+                const rtssHist = days.map(d => {
+                  const acts = (activities || []).filter(a => a.date === d);
+                  if (!acts.length) return null;
+                  let total = 0;
+                  for (const a of acts) {
+                    try {
+                      if (isRunAct(a) || isStrengthAct(a)) {
+                        const { hrTSS } = computeHrTSS({
+                          durationSecs: a.durationSecs,
+                          avgHR: a.avgHR || a.avgHeartRate,
+                          maxHR: maxHREdge, thresholdHR: thresholdHREdge,
+                        });
+                        total += hrTSS || 0;
+                      }
+                    } catch {}
+                  }
+                  return total > 0 ? Math.round(total) : null;
+                }).reverse();
+                const calLeftHist = days.map(d => {
+                  try {
+                    const t = nutDailyTotals(d);
+                    const tgt = getDerivedTargets({ date: d })?.dailyCalories?.effective || 0;
+                    return tgt ? Math.round(tgt - (t.calories || 0)) : null;
+                  } catch { return null; }
+                }).reverse();
+                const proLeftHist = days.map(d => {
+                  try {
+                    const t = nutDailyTotals(d);
+                    const tgt = getDerivedTargets({ date: d })?.dailyProtein?.effective || 0;
+                    return tgt ? Math.round(tgt - (t.protein || 0)) : null;
+                  } catch { return null; }
+                }).reverse();
+
                 // Vertical divider between rail groups
                 const Sep = () => (
                   <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-subtle)', flexShrink: 0, marginTop: 18 }}/>
@@ -10438,26 +10516,34 @@ Structure:
                     <Sep/>
 
                     {/* ── Activity drivers (bracket: Activity / blue) ── */}
-                    <RailColumn bracket="Activity" color="#60a5fa" flexWeight={2}>
-                      <MiniStat label="ACWR" value={acwrToday?.ratio} type="acwr"
+                    <RailColumn bracket="Activity" color="#60a5fa" flexWeight={3}>
+                      <MiniStat label="ACWR" value={acwrToday?.ratio} history={acwrHist} type="acwr"
                         fmt={v => v.toFixed(2)}
                         sub={acwrToday?.ratio != null ? (acwrToday.ratio > 1.5 ? 'high risk' : acwrToday.ratio > 1.3 ? 'over-reach' : acwrToday.ratio < 0.8 ? 'under-load' : 'in zone') : 'no data'}/>
-                      <MiniStat label="rTSS today" value={todayRTSS} type="rtss"
+                      <MiniStat label="rTSS today" value={todayRTSS} history={rtssHist} type="rtss"
                         sub={rtssBand(todayRTSS).label}/>
+                      <MiniStat label="Weekly load" value={weeklyLoadVal} history={loadHist} type="load"
+                        fmt={v => `${v}`}
+                        sub={acwrToday?.chronicLoad ? `vs ${acwrToday.chronicLoad} avg` : '7-day rTSS'}/>
                     </RailColumn>
 
                     {/* ── Nutrition drivers (bracket: Nutrition / green) ── */}
-                    <RailColumn bracket="Nutrition" color="#4ade80" flexWeight={2}>
-                      <MiniStat label="Cal left"  value={calRemaining} type="fuel"
+                    <RailColumn bracket="Nutrition" color="#4ade80" flexWeight={3}>
+                      <MiniStat label="Cal left"  value={calRemaining} history={calLeftHist} type="fuel"
                         fmt={v => `${v}`}
                         sub={`/${calTarget}`}/>
-                      <MiniStat label="Protein left" value={proRemaining} type="fuel"
+                      <MiniStat label="Protein left" value={proRemaining} history={proLeftHist} type="fuel"
                         fmt={v => `${v}g`}
                         sub={`/${proTarget}g`}/>
+                      <MiniStat label="Glycogen" value={glycoPct} type="glycogen" valuePx={12}
+                        fmt={() => glyco?.status ? glyco.status.charAt(0).toUpperCase() + glyco.status.slice(1) : '—'}
+                        sub={glyco && glyco.need24h > 0
+                          ? `${glyco.supplied24h}/${glyco.need24h}g carbs`
+                          : (glyco?.status === 'insufficient' ? 'no training load' : 'no data')}/>
                     </RailColumn>
 
                     {/* ── Body drivers (bracket: Body / cyan) ── */}
-                    <RailColumn bracket="Body" color="#22d3ee" flexWeight={2}>
+                    <RailColumn bracket="Body" color="#22d3ee" flexWeight={3}>
                       <MiniStat label="HRV" value={latestHrv} history={hrvHist} type="hrv"
                         fmt={v => `${v}ms`}
                         sub={latestHrv != null ? (latestHrv >= 40 ? 'recovered' : latestHrv >= 30 ? 'borderline' : 'strained') : 'no data'}/>
@@ -10472,12 +10558,18 @@ Structure:
                              : sleepHrs != null ? 'hours slept'
                              : sleepScore != null ? 'sleep score'
                              : 'no data'}/>
+                      <MiniStat label="Weight" value={curWeight} history={weightHist} type="weight"
+                        fmt={v => `${v.toFixed(1)}`}
+                        sub={curWeight != null ? `${(curWeight - targetWt) > 0 ? '+' : ''}${(curWeight - targetWt).toFixed(1)} vs ${targetWt}` : 'no data'}/>
                     </RailColumn>
 
                     <Sep/>
 
-                    {/* ── Action + Race (2 tiles → weight 2) ── */}
-                    <RailColumn flexWeight={2}>
+                    {/* ── Action + Race (2 tiles, single row) ──
+                        Widened (flexWeight 3, matching the driver columns) so
+                        the 2 tiles get enough share for "Long run ✓" to fit
+                        inline without squashing — no stacking, no dead space. */}
+                    <RailColumn flexWeight={3}>
                       <MiniStat
                         tier="action"
                         label="Today"

@@ -104,14 +104,42 @@ export function detectIntermittentFasting(daysBack = DAYS_ANALYZED) {
 // ─── Cached accessor (most callers use this, not detectIntermittentFasting) ──
 
 /**
+ * Manual override from Goals → `intermittentFastingOverride` ('auto'|'on'|'off').
+ * Goals take precedence over profile. Anything else falls back to 'auto'.
+ */
+function readIFOverride() {
+  try {
+    const g = storage.get('goals') || {};
+    const p = storage.get('profile') || {};
+    const v = (g.intermittentFastingOverride ?? p.intermittentFastingOverride);
+    return (v === 'on' || v === 'off') ? v : 'auto';
+  } catch { return 'auto'; }
+}
+
+/**
+ * Apply the manual override on top of a (detected or cached) profile.
+ * 'on' forces IF awareness (keeps detected window, defaults to noon);
+ * 'off' disables it; 'auto' leaves detection untouched.
+ */
+function applyIFOverride(profile) {
+  if (!profile) return profile;
+  const ov = readIFOverride();
+  if (ov === 'auto') return profile;
+  if (ov === 'off') return { ...profile, isIF: false, typicalEatingWindowStart: null, overridden: 'off' };
+  return { ...profile, isIF: true, typicalEatingWindowStart: profile.typicalEatingWindowStart ?? 12, overridden: 'on' };
+}
+
+/**
  * Returns the cached IF profile. Recomputes if stale (> 24h old) or absent.
- * Caches under storage key `ifProfile`.
+ * Caches under storage key `ifProfile`. The manual override is applied at
+ * read time so a Goals change takes effect immediately, without waiting for
+ * the 24h cache to expire.
  */
 export function getIFProfile() {
   const cached = storage.get('ifProfile');
   const age = cached?.computedAt ? Date.now() - cached.computedAt : Infinity;
-  if (cached && age < RECOMPUTE_MAX_AGE_MS) return cached;
-  return refreshIFProfile();
+  if (cached && age < RECOMPUTE_MAX_AGE_MS) return applyIFOverride(cached);
+  return applyIFOverride(refreshIFProfile());
 }
 
 /**
@@ -127,11 +155,29 @@ export function refreshIFProfile() {
 // ─── Consumer helpers ──────────────────────────────────────────────────────
 
 /**
+ * True if today is a scheduled race day. On race days the user breaks the
+ * fast early (pre-race fuel / early gun time), so the fasting-window gate
+ * must NOT treat the morning as fasted — otherwise we'd suppress legitimate
+ * fuel guidance and mis-handle early intake. Detection (median over 14d)
+ * already shrugs off the occasional early-eating day; this is the runtime
+ * exception for the race day itself.
+ */
+export function isRaceDayToday() {
+  try {
+    const races = storage.get('races') || [];
+    const t = localDate();
+    return races.some(r => r?.date === t);
+  } catch { return false; }
+}
+
+/**
  * True if the user is an IF user AND `nowHour` (defaults to current local
  * clock) is before their typical eating-window start. Use this to gate
- * "morning fuel" Coach copy and Nutrition-component penalties.
+ * "morning fuel" Coach copy and Nutrition-component penalties. Returns false
+ * on race days (eating window opens early — see isRaceDayToday).
  */
 export function isInFastingWindow(nowHour = null) {
+  if (isRaceDayToday()) return false;
   const p = getIFProfile();
   if (!p?.isIF || p.typicalEatingWindowStart == null) return false;
   const h = nowHour != null ? nowHour : new Date().getHours();
@@ -193,6 +239,9 @@ if (typeof window !== 'undefined') {
     console.log('━━ IF Detection ━━');
     console.log('detected (fresh compute):', detected);
     console.log('cached profile:', cached);
+    console.log('manual override (goals):', readIFOverride());
+    console.log('effective profile (override applied):', getIFProfile());
+    console.log('is race day today:', isRaceDayToday());
     console.log('isInFastingWindow() right now:', isInFastingWindow());
     console.log('rolling 3d intake baseline:', rolling3);
     return { detected, cached, rolling3 };

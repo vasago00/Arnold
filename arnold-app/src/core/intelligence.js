@@ -47,6 +47,8 @@ import { computeCoachSignals } from './coachSignals.js';
 // Cut Mode classifier — task #218. Adds chronic fuel-state context so
 // Coach signals can distinguish intentional cuts from RED-S under-fueling.
 import { classifyCutMode } from './cutMode.js';
+// IF awareness — fasted-morning fallback for intake-driven coach signals.
+import { isInFastingWindow, rollingIntakeForIF } from './intermittentFasting.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LAYER 3 — computeUserState
@@ -715,6 +717,26 @@ export function computeUserState(data = {}) {
     if (typeof console !== 'undefined') console.warn('[computeUserState] classifyCutMode threw:', e?.message || e);
   }
 
+  // Fasted-morning fallback (IF). When the user is inside their fasting
+  // window and today's intake is still sparse (< 200 kcal), today's near-zero
+  // numbers crash intake-driven coach signals — energyAvailability reads a
+  // false RED-S deficit, glycogen reads false "depleted". Substitute the
+  // 3-day rolling intake so the signals reflect actual fueling. Mirrors the
+  // HS Nutrition fallback trigger (healthSystems.js: todayCal<200 && IF).
+  let effTodayIntakeKcal = numbers.todayIntake || 0;
+  let effTodayCarbsG = (() => { try { return Number(nutDailyTotals(today)?.carbs) || 0; } catch { return 0; } })();
+  let ifFastedFallbackApplied = false;
+  try {
+    if (effTodayIntakeKcal < 200 && isInFastingWindow()) {
+      const rolling = rollingIntakeForIF(3);
+      if (rolling && rolling.calories > 0) {
+        effTodayIntakeKcal = Math.round(rolling.calories);
+        if (rolling.carbs > 0) effTodayCarbsG = Math.round(rolling.carbs);
+        ifFastedFallbackApplied = true;
+      }
+    }
+  } catch (e) { /* leave raw values on any failure */ }
+
   const coachSignals = (() => {
     try {
       return computeCoachSignals({
@@ -741,8 +763,10 @@ export function computeUserState(data = {}) {
         weight:   data.weight   || storage.get('weight')   || [],
         outcomeGoal: outcome || null,
         sleepGoalHrs,
-        todayIntakeKcal:   numbers.todayIntake || 0,
+        todayIntakeKcal:   effTodayIntakeKcal,
         todayExerciseKcal: numbers.todayBurnReported || 0,
+        // True when the IF fasted-morning fallback substituted rolling intake.
+        ifFastedFallback:  ifFastedFallbackApplied,
         lbmLbs: comp?.leanMassLbs || null,
         tdeeRecent4w,
         tdeeBaseline4w,
@@ -764,9 +788,7 @@ export function computeUserState(data = {}) {
         // demote alarms when the user is in an intentional background cut.
         cutMode,
         // Prefuel signal — needs today's carbs in grams + body weight in kg.
-        todayCarbsG: (() => {
-          try { return Number(nutDailyTotals(today)?.carbs) || 0; } catch { return 0; }
-        })(),
+        todayCarbsG: effTodayCarbsG,
         bodyWeightKg: (() => {
           // Use cut-mode's recent weight median (morning-fasted, 7d) when
           // available — it's the cleanest current-weight estimate we have.

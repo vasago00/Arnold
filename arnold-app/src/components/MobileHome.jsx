@@ -1504,7 +1504,7 @@ function ThisWeekCard({ headline, miles, sessions, runs, time, weeklyMiPct, week
 
 // ─── ANNUAL TIMELINE ────────────────────────────────────────────────────────
 // Elegant horizontal year bar with race markers and goal progress
-function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsActual, totalSessions }) {
+function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsActual, totalSessions, projected = false }) {
   const now = new Date();
   const yearStart = new Date(now.getFullYear(), 0, 1);
   const yearEnd = new Date(now.getFullYear(), 11, 31);
@@ -1594,7 +1594,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
             <span style={{ fontSize: 7, fontWeight: 600, color: C.blue, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Run Miles</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: T2 }}>{runMiActual} <span style={{ fontSize: 7, color: T4 }}>/ {runMiGoal}</span></span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: T2 }}>{runMiActual} <span style={{ fontSize: 7, color: T4 }}>/ {runMiGoal}{projected ? ' proj' : ''}</span></span>
           </div>
           <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
             <div style={{ width: `${runPct * 100}%`, height: '100%', borderRadius: 2, background: C.blue, opacity: 0.7 }} />
@@ -1604,7 +1604,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
             <span style={{ fontSize: 7, fontWeight: 600, color: C.purple, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Workouts</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: T2 }}>{workoutsActual} <span style={{ fontSize: 7, color: T4 }}>/ {workoutsGoal}</span></span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: T2 }}>{workoutsActual} <span style={{ fontSize: 7, color: T4 }}>/ {workoutsGoal}{projected ? ' proj' : ''}</span></span>
           </div>
           <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
             <div style={{ width: `${wkPct * 100}%`, height: '100%', borderRadius: 2, background: C.purple, opacity: 0.7 }} />
@@ -2396,7 +2396,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   });
 
   // ── This Week — all from hook, no props ──
-  const weeklyMiPct = twMi / (G.weeklyRunDistanceTarget || 50);
+  const weeklyMiPct = twMi / (G.weeklyRunDistanceTarget || 30);
 
   // ── Phase 4b · registry-driven Start tiles ──────────────────────────────
   // Pull the user's per-category metric selections from storage; fall back
@@ -2628,9 +2628,28 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   const weeklyHeadline = weeklyMiPct > 0.8 ? 'Strong week' : weeklyMiPct > 0.6 ? 'Building momentum' : 'Light week';
   const weeklyTime = `${Math.floor(twHrs)}h ${Math.round((twHrs % 1) * 60)}m`;
 
-  // ── Annual goals from Goals system ──
-  const annualRunMiGoal = G.annualRunDistanceTarget || 800;
-  const annualWorkoutsGoal = G.annualWorkoutsTarget || 200;
+  // ── Annual goals — PROJECTION model (Phase 4r.goals.annualproj) ──
+  // The yearly target is no longer a static number; it's a live projection:
+  //   projected year-end = done-to-date + (weekly target × weeks left).
+  // So raising a weekly target (run miles, sessions) immediately raises the
+  // projected annual total — "the miles I'd run this year IF I keep this
+  // weekly volume." Pro-rated for the remainder of the calendar year.
+  const weeksLeftThisYear = (() => {
+    const now = new Date();
+    const end = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
+    return Math.max(0, (end - now) / (7 * 24 * 60 * 60 * 1000));
+  })();
+  const weeklyMiTarget   = parseFloat(G.weeklyRunDistanceTarget) || 30;
+  // Workouts/wk = runs + strength + other sessions (excludes mobility per user).
+  // No explicit "runs per week" goal exists; derive a run-frequency from the
+  // weekly mile target ÷ a nominal 5 mi/run, floored at 3, so the projection
+  // tracks the run-volume goal the user actually sets.
+  const weeklyRunsTarget = Math.max(3, Math.round(weeklyMiTarget / 5));
+  const weeklyWorkoutsTarget = weeklyRunsTarget
+    + (parseFloat(G.weeklyStrengthTarget) || 2)
+    + (parseFloat(G.weeklyOtherSessionsTarget) || 1);
+  const annualRunMiGoal    = Math.round((totalMi || 0)       + weeklyMiTarget       * weeksLeftThisYear);
+  const annualWorkoutsGoal = Math.round((totalSessions || 0) + weeklyWorkoutsTarget * weeksLeftThisYear);
 
   // ── Races from localStorage ──
   const allRaces = (() => {
@@ -3004,7 +3023,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         runs={twSessions - twStrSessions}
         time={weeklyTime}
         weeklyMiPct={weeklyMiPct}
-        weeklyTarget={G.weeklyRunDistanceTarget || 50}
+        weeklyTarget={G.weeklyRunDistanceTarget || 30}
       />
 
       {/* Annual Timeline */}
@@ -3016,6 +3035,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         workoutsGoal={annualWorkoutsGoal}
         workoutsActual={totalSessions || 0}
         totalSessions={totalSessions || 0}
+        projected
       />
 
       {/* Today's Plan — Phase 4p.plan.6: hidden when the PlannedWorkoutTile
@@ -3221,21 +3241,23 @@ function MobileSystemTile({ sys, isActive, onTap }) {
             ? <img src={pngSrc} alt={sys.name} width={36} height={36} style={{ display: 'block' }} />
             : svgIcon}
         </div>
-        {/* Tile name — sized to fit "Energy/Strength" + "Brain/Cognition"
-            without clipping on narrow mobile widths. 10.5px lets the longest
-            names render whole; whiteSpace:nowrap + overflow:hidden prevents
-            mid-word truncation when a name still pushes past the tile edge
-            (instead, an ellipsis appears — graceful rather than alarming).
-            minHeight:30 reserves two text-lines of space so tiles align
-            even when one name wraps and another doesn't. */}
+        {/* Tile name — wraps to 2 lines on narrow mobile widths so the full
+            name renders (Brain/Cognition, Energy/Strength, etc.) instead of
+            ellipsis-truncating. The zero-width space (​) after the slash
+            gives the browser an explicit break opportunity at the slash —
+            without it the browser treats "Brain/Cognition" as a single
+            unbreakable word. minHeight reserves two text-lines so tiles stay
+            aligned whether the name wraps or not. */}
         <div style={{
-          fontSize: 10.5, fontWeight: 700, color: T2,
-          lineHeight: 1.2, marginBottom: 3,
-          minHeight: 26,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          fontSize: 11, fontWeight: 700, color: T2,
+          lineHeight: 1.15, marginBottom: 3,
+          minHeight: 28,
+          whiteSpace: 'normal',
+          overflowWrap: 'break-word',
           padding: '0 2px',
+          textAlign: 'center',
         }}>
-          {sys.name.replace(' & ', '/')}
+          {sys.name.replace(' & ', '/​')}
         </div>
         <div style={{ fontSize: 15, fontWeight: 800, color: statusColor }}>{sys.pct}%</div>
       </div>

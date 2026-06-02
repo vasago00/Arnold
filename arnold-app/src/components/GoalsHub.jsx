@@ -43,6 +43,9 @@ import {
   setOverride,
   clearOverride,
 } from "../core/goalModel.js";
+import { getGoals, setGoals } from "../core/goals.js";
+import { predictRaceFinish } from "../core/derive/tileMetrics.js";
+import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STORAGE ADAPTER — read/write v2 with v1 compat
@@ -241,6 +244,13 @@ function fmtDate(d) {
   try { return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
   catch { return '—'; }
 }
+// Abbreviate common long city names for the dense Races table. Clear in
+// context (the race name already carries the full identity).
+const _CITY_ABBREV = { 'New York': 'NY', 'Los Angeles': 'LA', 'San Francisco': 'SF', 'Washington DC': 'DC' };
+function abbrevCity(city) {
+  if (!city) return city;
+  return _CITY_ABBREV[city] || city;
+}
 function daysFromNow(dateStr) {
   if (!dateStr) return null;
   const iso = normalizeDate(dateStr);
@@ -351,7 +361,7 @@ const styles = {
 // tile dimensions (grid-auto-rows: 360px); this component just lives
 // inside the cell and scrolls its overflow.
 
-function Tile({ accent, title, hint, children, headerExtra = null }) {
+function Tile({ accent, title, hint, children, headerExtra = null, fillHeight = false }) {
   return (
     <div style={{
       background: 'var(--bg-elevated)',
@@ -366,7 +376,11 @@ function Tile({ accent, title, hint, children, headerExtra = null }) {
       // to fit instead of forcing 280-360px of empty space below content.
       // Tall tiles (Performance with 9 rows, Races with 13+) hit the
       // cap and scroll internally.
-      maxHeight: 360,
+      // fillHeight (Phase 4r.goals.training.2) — grow to fill the grid cell
+      // so a column-spanning neighbor (Performance + Training targets stack)
+      // stays aligned; lifts the maxHeight cap for that case.
+      maxHeight: fillHeight ? 'none' : 360,
+      height: fillHeight ? '100%' : undefined,
       minHeight: 0,
       overflow: 'hidden',
     }}>
@@ -1255,12 +1269,126 @@ function CutModeBadge({ showToast }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// TRAINING TARGETS TILE — weekly cadence (miles / sessions / hours)
+// Phase 4r.goals.training — these flat goal keys (weeklyRunDistanceTarget,
+// weeklyStrengthTarget, weeklyOtherSessionsTarget, weeklyTimeTargetHrs) were
+// dropped from the editor when Goals moved to the v2 nested schema, leaving
+// no in-app way to set them. This tile restores that. It reads/writes the
+// flat keys directly via getGoals/setGoals (which coexist with v2), and
+// auto-derives an annual target pro-rated for the REMAINDER of the calendar
+// year so the yearly reminders stay realistic mid-year.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TRAINING_TARGET_DEFS = [
+  { id: 'weeklyRunDistanceTarget',   label: 'Run distance',    unit: 'mi/wk',  annualUnit: 'mi',       fallback: 30 },
+  { id: 'weeklyStrengthTarget',      label: 'Strength',        unit: '/wk',    annualUnit: 'sessions', fallback: 2  },
+  { id: 'weeklyOtherSessionsTarget', label: 'Other sessions',  unit: '/wk',    annualUnit: 'sessions', fallback: 1  },
+  { id: 'weeklyTimeTargetHrs',       label: 'Activity time',   unit: 'hrs/wk', annualUnit: 'hrs',      fallback: 5  },
+];
+
+// Whole weeks left in the current calendar year, counting from today.
+function weeksLeftInYear(now = new Date()) {
+  const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
+  const ms = endOfYear - now;
+  return Math.max(0, ms / (7 * 24 * 60 * 60 * 1000));
+}
+
+function TrainingTargetsTile({ showToast }) {
+  const [vals, setVals] = useState(() => {
+    const g = (() => { try { return getGoals(); } catch { return {}; } })();
+    const out = {};
+    for (const d of TRAINING_TARGET_DEFS) {
+      const v = parseFloat(g?.[d.id]);
+      out[d.id] = Number.isFinite(v) ? v : d.fallback;
+    }
+    return out;
+  });
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState('');
+
+  const weeksLeft = weeksLeftInYear();
+
+  const commit = (id) => {
+    const num = parseFloat(draft);
+    if (Number.isFinite(num) && num >= 0) {
+      const next = { ...vals, [id]: num };
+      setVals(next);
+      try { setGoals({ [id]: num }); showToast?.('Target saved'); } catch {}
+    }
+    setEditingId(null);
+    setDraft('');
+  };
+
+  return (
+    <Tile accent="#60a5fa" title="Training targets" hint="Weekly cadence → annual pace">
+      {TRAINING_TARGET_DEFS.map(def => {
+        const weekly = vals[def.id];
+        const annualRemaining = Math.round((weekly || 0) * weeksLeft);
+        const isEditing = editingId === def.id;
+        return (
+          <div key={def.id} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 8, padding: '5px 0', borderBottom: '0.5px solid var(--border-subtle)',
+          }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-primary)' }}>{def.label}</div>
+              <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>
+                ~{annualRemaining} {def.annualUnit} left this year
+              </div>
+            </div>
+            {isEditing ? (
+              <input
+                autoFocus
+                type="number"
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                onBlur={() => commit(def.id)}
+                onKeyDown={e => { if (e.key === 'Enter') commit(def.id); if (e.key === 'Escape') { setEditingId(null); setDraft(''); } }}
+                style={{
+                  width: 64, textAlign: 'right', fontSize: 12,
+                  background: 'var(--bg-surface)', color: 'var(--text-primary)',
+                  border: '0.5px solid var(--border-default)', borderRadius: 4, padding: '2px 6px',
+                }}
+              />
+            ) : (
+              <button
+                onClick={() => { setEditingId(def.id); setDraft(String(weekly ?? '')); }}
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 600, color: '#60a5fa', whiteSpace: 'nowrap',
+                }}
+              >
+                {weekly} <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>{def.unit}</span>
+              </button>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.4, fontStyle: 'italic' }}>
+        Annual figures are pro-rated for the {weeksLeft.toFixed(0)} weeks left in {new Date().getFullYear()} — tap a value to edit.
+      </div>
+    </Tile>
+  );
+}
+
 export function GoalsHub({ showToast }) {
   const [goalsV2, setGoalsV2] = useState(loadGoalsV2);
   const [editingId, setEditingId] = useState(null);
   const [raceModal, setRaceModal] = useState(null);  // null | 'new' | raceId
   const [overrides, setOverridesState] = useState(() => { try { return getOverrides(); } catch { return {}; } });
   const [expanded, setExpanded] = useState(true);
+  // Activities for per-race finish-time predictions (Phase 4r.race.allraces).
+  const raceActivities = useMemo(() => {
+    try { return getUnifiedActivities() || []; } catch { return []; }
+  }, []);
+  // Format predicted seconds → H:MM:SS / MM:SS.
+  const fmtPredicted = (s) => {
+    if (s == null || !Number.isFinite(s) || s <= 0) return null;
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60);
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+                 : `${m}:${String(sec).padStart(2, '0')}`;
+  };
 
   // Refresh overrides whenever a save happens
   const refreshOverrides = () => {
@@ -1417,12 +1545,16 @@ export function GoalsHub({ showToast }) {
 
           </div>{/* end TOP row */}
 
-          {/* ── Bottom row: 2 equal-width tiles ── */}
+          {/* ── Bottom row: 2 equal-width columns. Right column stacks
+              Performance + Training targets; Races (left) stretches to
+              match that combined height. Phase 4r.goals.training.2 — moved
+              Training targets out of a full-width band into the right column
+              under Performance per user direction. */}
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
             gap: 10,
-            alignItems: 'start',
+            alignItems: 'stretch',
           }}>
 
           {/* ── Races tile (bottom-left, future-only, sorted soonest-first) ── */}
@@ -1438,6 +1570,7 @@ export function GoalsHub({ showToast }) {
               <Tile
                 accent={SECTION_COLOR.races}
                 title="Races"
+                fillHeight
                 hint={`${futureRaces.length} upcoming${pastCount ? ` · ${pastCount} past hidden` : ''} · ≤4wk auto-P1`}
                 headerExtra={
                   <button
@@ -1451,34 +1584,74 @@ export function GoalsHub({ showToast }) {
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '8px 0' }}>
                     No upcoming races. Tap + Add to enable race-prep fueling.
                   </div>
-                ) : (
-                  futureRaces.map(r => {
-                    const days = daysFromNow(r.date);
-                    const autoP1 = days != null && days <= 28;
-                    return (
-                      <div key={r.id} style={styles.row}>
-                        <div style={styles.rowLabel}>
-                          {r.name}{r.city ? <span style={{ color: 'var(--text-muted)' }}> · {r.city}</span> : ''}
-                        </div>
-                        <div style={styles.rowValue}>{fmtDate(r.date)}</div>
-                        <div style={styles.rowDate}>
-                          {days != null ? `${days}d` : ''}
-                        </div>
-                        <span style={styles.raceChip(r.priority)}>
-                          {r.priority}{autoP1 ? '·auto' : ''}
-                        </span>
-                        <button
-                          className="arnold-compact-btn"
-                          style={styles.editBtn}
-                          onClick={() => setRaceModal(r.id)}
-                        >edit</button>
+                ) : (() => {
+                  // Phase 4r.race.allraces.col2 — ONE shared grid template for
+                  // the header + every row so columns align exactly. Fixed
+                  // widths on the right-side columns (were `auto`, which sized
+                  // per-row and caused the misalignment); name flexes.
+                  // Cols: name | date | predicted | days | priority | edit
+                  const RACE_GRID = {
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) 92px 84px 44px 60px 40px',
+                    gap: 8, alignItems: 'center',
+                  };
+                  const headCell = {
+                    fontSize: 8, fontWeight: 700, letterSpacing: '0.06em',
+                    textTransform: 'uppercase', color: 'var(--text-muted)',
+                    whiteSpace: 'nowrap',
+                  };
+                  return (
+                    <>
+                      {/* Column headers */}
+                      <div style={{ ...RACE_GRID, padding: '0 0 4px', borderBottom: '0.5px solid var(--border-default)' }}>
+                        <span style={headCell}>Race</span>
+                        <span style={headCell}>Date</span>
+                        <span style={{ ...headCell, textAlign: 'right' }}>Predicted</span>
+                        <span style={{ ...headCell, textAlign: 'right' }}>Out</span>
+                        <span style={{ ...headCell, textAlign: 'center' }}>Pri</span>
+                        <span/>
                       </div>
-                    );
-                  })
-                )}
+                      {futureRaces.map(r => {
+                        const days = daysFromNow(r.date);
+                        const autoP1 = days != null && days <= 28;
+                        const pred = (() => {
+                          try { return predictRaceFinish(r, raceActivities); } catch { return null; }
+                        })();
+                        const predStr = pred ? fmtPredicted(pred.seconds) : null;
+                        return (
+                          <div key={r.id} style={{ ...RACE_GRID, padding: '6px 0', borderBottom: '0.5px dashed var(--border-subtle)' }}>
+                            <div style={{ ...styles.rowLabel, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {r.name}{r.city ? <span style={{ color: 'var(--text-muted)' }}> · {abbrevCity(r.city)}</span> : ''}
+                            </div>
+                            <div style={{ ...styles.rowValue, whiteSpace: 'nowrap' }}>{fmtDate(r.date)}</div>
+                            {/* Predicted finish — right-aligned, tabular for clean stacking. */}
+                            <div style={{ fontSize: 11, color: predStr ? '#60a5fa' : 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', textAlign: 'right' }}
+                                 title={predStr ? 'Predicted finish (Riegel, from your recent runs)' : (pred === null ? 'No run prediction for this race type' : '')}>
+                              {predStr ? `⏱ ${predStr}` : '—'}
+                            </div>
+                            <div style={{ ...styles.rowDate, textAlign: 'right' }}>
+                              {days != null ? `${days}d` : ''}
+                            </div>
+                            <span style={{ ...styles.raceChip(r.priority), justifySelf: 'center' }}>
+                              {r.priority}{autoP1 ? '·auto' : ''}
+                            </span>
+                            <button
+                              className="arnold-compact-btn"
+                              style={{ ...styles.editBtn, justifySelf: 'end' }}
+                              onClick={() => setRaceModal(r.id)}
+                            >edit</button>
+                          </div>
+                        );
+                      })}
+                    </>
+                  );
+                })()}
               </Tile>
             );
           })()}
+
+          {/* ── Right column: Performance + Training targets stacked ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
 
           {/* ── Performance tile — Endurance (fixed) + Custom Strength PRs ── */}
           <Tile
@@ -1598,6 +1771,12 @@ export function GoalsHub({ showToast }) {
               )}
             </div>
           </Tile>
+
+          {/* ── Training targets — weekly cadence + auto annual pace, under
+              Performance per user direction (Phase 4r.goals.training.2). ── */}
+          <TrainingTargetsTile showToast={showToast}/>
+
+          </div>{/* end right column */}
 
           </div>{/* end BOTTOM row */}
         </div>

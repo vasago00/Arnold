@@ -26,6 +26,23 @@ the most important field — it's how the doc earns its keep.
 
 ---
 
+## 2026-05-31 — Coach Play wrap-up said "Tomorrow: race" when tomorrow was mobility
+
+**Symptom**
+On the mobile Play screen, the Coach wrap-up read "Day winding down. Tomorrow: race. Sleep is the lever." — but the user had Mobility scheduled for tomorrow (Mon) and Tuesday; the race (HYROX) was 3 days out (Jun 3), and the EdgeIQ race tile correctly showed "3d". So the line was wrong on both the session type AND the day.
+
+**Root cause**
+`CoachComment.jsx` → `nextPlannedAfterToday()` filtered with `d.intensityClass !== 'rest'`. Mobility maps to `intensityClass: 'rest'` in `coachSignals.js` PLAN_INTENSITY (line ~1595, because it's low-load). So the loop skipped both mobility days and returned the next genuinely non-rest day — the race, 3 days out. Separately, the `evening_done` template hardcoded the word "Tomorrow" regardless of the matched day's `daysOut`.
+
+**Fix** (Phase 4r.coach.playfix.1)
+- `nextPlannedAfterToday` now selects the next day with an actual planned session (`d.planned && d.planned !== 'rest'`), so scheduled mobility counts; only blank rest days are skipped.
+- Added `relativeDayWord(daysOut, dow)` and used it in both `evening_done` and `rest_day_planned` so the phrasing matches the real offset ("Tomorrow" only for daysOut 1; weekday name otherwise).
+
+**What would have prevented it**
+A unit test over `classifyPlayState`/`composePlayLine` with a fixture plan where tomorrow is mobility and a race sits 3 days out, asserting the wrap-up names mobility + "Tomorrow". More broadly: any consumer that says "tomorrow" should read the matched item's `daysOut`, never assume it.
+
+---
+
 ## 2026-05-23 — Calendar taps absorbed by Today button's invisible overlay
 
 **Symptom**

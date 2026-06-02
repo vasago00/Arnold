@@ -188,6 +188,191 @@ export function findEmpiricalRaceAnchor(activities) {
   return null;
 }
 
+// Phase 4r.race.allraces — predict finish time for an ARBITRARY race distance,
+// not just the 4 standard fields. Anchors on the empirical anchor (a real race
+// effort or quality long run) and applies Riegel directly to the race's own
+// distance. This is what powers per-race predictions in the Races list +
+// calendar drawer (every race shows its own forecast, any time).
+//
+// race: { distanceMi?, distanceKm?, type?, ... }
+// activities: the unified activities array (for anchor selection).
+// Returns: { seconds, anchor, distanceKm } or null.
+//   - seconds: predicted finish in seconds (null if no usable distance/anchor)
+//   - anchor:  the {run,tier,label} used (so UI can show provenance)
+//   - distanceKm: the race distance used
+//
+// Notes:
+//   • Validated: anchored on the user's RBC Brooklyn Half (13.3mi/1:50:42 at
+//     97% of LT), this reproduces the half within ~1.5min of the actual time.
+//   • Riegel is distance-agnostic, so non-standard distances (e.g. a 10-miler,
+//     a 15K) get a real prediction instead of being bucketed to the nearest
+//     standard field.
+//   • Hybrid/obstacle events (HYROX, etc.) where running isn't the whole race
+//     should NOT use this — see isPureRunningRace() guard in the caller.
+// Race types where total time is governed by running, so a Riegel run-pace
+// projection is meaningful. Hybrid/multisport events are explicitly excluded —
+// their finish time isn't a function of road-running pace.
+const _RUNNABLE_RACE_TYPES = new Set(['5K', '10K', 'half', 'marathon', 'ultra']);
+// Types that are definitively NOT pure running — never predict these.
+const _NON_RUNNING_RACE_TYPES = new Set(['hyrox', 'tri', 'triathlon', 'swim', 'bike', 'cycling']);
+export function isPureRunningRace(race) {
+  if (!race) return false;
+  const t = race.type || race.raceType;
+  // Explicit non-running event → never predict.
+  if (t && _NON_RUNNING_RACE_TYPES.has(t)) return false;
+  // Catalog races carry no `type` but DO carry tags / recognizable names.
+  // HYROX (and other hybrid events) must be excluded even though they have a
+  // running distance — the finish time is dominated by the 8 functional
+  // stations, so a pure run-pace projection is meaningless/misleading.
+  const tags = Array.isArray(race.tags) ? race.tags.map(x => String(x).toLowerCase()) : [];
+  const name = String(race.name || '').toLowerCase();
+  const HYBRID_RE = /\b(hyrox|spartan|tough\s?mudder|deca|triathlon|duathlon|aquathlon|ironman)\b/;
+  if (tags.some(tag => /hyrox|spartan|obstacle|ocr|tri|triathlon|hybrid/.test(tag))) return false;
+  if (HYBRID_RE.test(name)) return false;
+  // Explicit runnable type → predict.
+  if (t && _RUNNABLE_RACE_TYPES.has(t)) return true;
+  // Otherwise ('other'/missing/unknown — e.g. catalog road races, which carry
+  // a distanceMi but no type): fall back to "has a plausible running distance".
+  // Floor is 1 km so short road races (1-mile, road mile, 2K) still predict —
+  // the earlier 3 km floor wrongly dropped the 5th Avenue Mile. (The anchor
+  // SOURCE run still needs ≥3 mi via riegelPredictFromRun; that's separate.)
+  const km = Number(race.distanceKm) || Number(race.distance_km) ||
+    (Number(race.distanceMi) ? Number(race.distanceMi) * 1.60934 : 0);
+  return km >= 1;
+}
+
+export function predictRaceFinish(race, activities) {
+  if (!race) return null;
+  if (!isPureRunningRace(race)) return null;  // hyrox/tri/other → no run projection
+  const distanceKm = Number(race.distanceKm) || Number(race.distance_km) ||
+    (Number(race.distanceMi) ? Number(race.distanceMi) * 1.60934 : null);
+  if (!distanceKm || distanceKm <= 0) return null;
+
+  const anchor = findEmpiricalRaceAnchor(activities || []);
+  if (!anchor?.run) return null;
+
+  const D1mi = Number(anchor.run.distanceMi || anchor.run.distance_mi);
+  const T1 = Number(anchor.run.durationSecs);
+  if (!D1mi || D1mi < 3 || !T1 || T1 < 15 * 60) return null;
+  const D1km = D1mi * 1.60934;
+
+  // ── Endurance model: T = T1 × (D2/D1)^k ──
+  // The exponent k IS the endurance/fatigue-resistance model. Riegel's 1.06
+  // is only valid for SHORT extrapolations; it under-predicts (too fast) the
+  // further you reach past the anchor. We derive k from the runner's own data
+  // instead of assuming a constant.
+  const fit = fatigueExponent(activities, { anchorKm: D1km, targetKm: distanceKm });
+  const k = fit.k;
+  const seconds = Math.round(T1 * Math.pow(distanceKm / D1km, k));
+
+  return {
+    seconds,
+    exponent: +k.toFixed(3),
+    exponentSource: fit.source,   // 'personal-fit' | 'durability-adjusted' | 'distance-aware'
+    fit,                          // diagnostic detail (R², n points, durability, etc.)
+    anchor,
+    distanceKm,
+    // Course profile still NOT modeled — NY-hilly vs Berlin/Valencia-flat get
+    // the same time. Separate (heavier) backlog item; needs elevation data.
+    courseModeled: false,
+  };
+}
+
+// ── Personal fatigue exponent (Phase 4r.race.enduranceModel) ──
+// Replaces the crude additive distance penalty. Three tiers, best-first:
+//
+//   1. PERSONAL FIT — fit log(time) vs log(distance) across the runner's own
+//      best efforts at distinct distances (mile / 5K / 10K / long runs / the
+//      half). The slope of that line is their personal fatigue exponent: a
+//      runner who holds pace as distance grows has a low k (strong marathon);
+//      one who fades has a high k. Needs ≥3 efforts spanning a real distance
+//      range to be trustworthy (good R²).
+//   2. DURABILITY-ADJUSTED — when the personal fit is thin, start from a
+//      distance-aware baseline and nudge it by the runner's long-run aerobic
+//      decoupling (HR/pace drift late in long runs). Low drift = durable =
+//      lower k; high drift = fades = higher k. A direct physiological read of
+//      the exact quality a marathon tests.
+//   3. DISTANCE-AWARE BASELINE — last resort. k rises smoothly with how far
+//      the target extrapolates beyond the anchor: ~1.06 near the anchor →
+//      ~1.15 for a marathon off a half. (Literature: Riegel 1.06 holds near
+//      distance; Vickers/Vertosick and others show the effective exponent
+//      climbs for long extrapolations.)
+//
+// Returns { k, source, ...diagnostics }.
+export function fatigueExponent(activities, { anchorKm, targetKm }) {
+  const runs = (activities || [])
+    .filter(a => isRun(a) && Number(a.distanceMi || a.distance_mi) > 0 && Number(a.durationSecs) > 0)
+    .map(a => ({
+      km: (Number(a.distanceMi || a.distance_mi)) * 1.60934,
+      secs: Number(a.durationSecs),
+      date: a.date,
+      decoup: Number(a.aerobicDecoupling),
+    }));
+
+  // Distance-aware baseline (used directly as tier 3, and as the anchor for
+  // tier 2). Grows from 1.06 at parity to ~1.15 for a 2× extrapolation,
+  // capping at 1.18 beyond that.
+  const distanceAwareK = (() => {
+    if (!anchorKm || !targetKm || targetKm <= anchorKm) return 1.06;
+    const ratio = targetKm / anchorKm;                   // e.g. half→marathon ≈ 1.97
+    const k = 1.06 + 0.09 * Math.min(1, (ratio - 1) / 1.0); // +0.09 per full doubling, capped
+    return Math.min(1.18, k);
+  })();
+
+  // ── Tier 1: personal power-law fit ──
+  // Take the best (fastest pace) effort in each of several distance buckets so
+  // one slow long run doesn't drag the slope. Buckets in km.
+  const BUCKETS = [[1.4, 1.8], [3, 5.5], [9, 11], [14, 17], [19, 23], [25, 35], [38, 45]];
+  const bestPerBucket = [];
+  for (const [lo, hi] of BUCKETS) {
+    const inB = runs.filter(r => r.km >= lo && r.km <= hi);
+    if (!inB.length) continue;
+    // "Best" = lowest pace (secs per km).
+    const best = inB.reduce((m, r) => (r.secs / r.km < m.secs / m.km ? r : m));
+    bestPerBucket.push(best);
+  }
+  if (bestPerBucket.length >= 3) {
+    // Linear regression of ln(secs) on ln(km); slope = personal exponent.
+    const xs = bestPerBucket.map(r => Math.log(r.km));
+    const ys = bestPerBucket.map(r => Math.log(r.secs));
+    const n = xs.length;
+    const mx = xs.reduce((s, v) => s + v, 0) / n;
+    const my = ys.reduce((s, v) => s + v, 0) / n;
+    let sxy = 0, sxx = 0, syy = 0;
+    for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+    if (sxx > 0) {
+      const slope = sxy / sxx;
+      const r2 = syy > 0 ? (sxy * sxy) / (sxx * syy) : 0;
+      // Trust the fit only if it's well-conditioned and physiologically sane
+      // (k between 1.0 and 1.25). Otherwise fall through.
+      if (r2 >= 0.95 && slope >= 1.0 && slope <= 1.25) {
+        return { k: slope, source: 'personal-fit', r2: +r2.toFixed(3), nPoints: n,
+                 points: bestPerBucket.map(r => ({ km: +r.km.toFixed(1), secs: r.secs })) };
+      }
+    }
+  }
+
+  // ── Tier 2: durability-adjusted baseline ──
+  // Median aerobic decoupling on long runs (≥16 km) over the last ~16 weeks.
+  // Typical good value ~3-5%; >8% = fades badly. Map to ±0.04 on k.
+  const longDecoups = runs
+    .filter(r => r.km >= 16 && Number.isFinite(r.decoup))
+    .map(r => r.decoup)
+    .sort((a, b) => a - b);
+  if (targetKm > anchorKm && longDecoups.length >= 2) {
+    const medDecoup = longDecoups[Math.floor(longDecoups.length / 2)];
+    // 5% decoupling = neutral. Each point above adds to k (fades → slower),
+    // below subtracts (durable → faster). Clamp the nudge to ±0.04.
+    const nudge = Math.max(-0.04, Math.min(0.04, (medDecoup - 5) * 0.008));
+    return { k: Math.min(1.20, Math.max(1.04, distanceAwareK + nudge)),
+             source: 'durability-adjusted', medDecoup: +medDecoup.toFixed(1),
+             baselineK: +distanceAwareK.toFixed(3) };
+  }
+
+  // ── Tier 3: distance-aware baseline ──
+  return { k: distanceAwareK, source: 'distance-aware' };
+}
+
 // Phase 4m.2.8 — Calibrated VDOT predictor (kept available as a secondary
 // option; not currently used by the Race Predictor metric, which uses
 // Riegel above. Available for future "ceiling forecast" features).

@@ -9,7 +9,7 @@ import { storage } from "./storage.js";
 // entry. Add new goals here and they'll automatically appear in the editor.
 export const GOAL_DEFS = [
   // ─── Run ──────────────────────────────────────────────────────────────────
-  { id: 'weeklyRunDistanceTarget', group: 'Run', label: 'Weekly run distance', unit: 'mi',  type: 'number', default: 20  },
+  { id: 'weeklyRunDistanceTarget', group: 'Run', label: 'Weekly run distance', unit: 'mi',  type: 'number', default: 30  },
   { id: 'weeklyTimeTargetHrs',     group: 'Run', label: 'Weekly run time',     unit: 'hrs', type: 'number', default: 5 },
   { id: 'weeklySpeedSessions',     group: 'Run', label: 'Weekly speed work',   unit: '/wk', type: 'number', default: 1 },
   { id: 'zone2Pct',                group: 'Run', label: 'Zone 2 training',     unit: '%',   type: 'number', default: 80 },
@@ -20,6 +20,7 @@ export const GOAL_DEFS = [
 
   // ─── Strength ─────────────────────────────────────────────────────────────
   { id: 'weeklyStrengthTarget',    group: 'Strength', label: 'Weekly strength sessions', unit: '/wk', type: 'number', default: 2 },
+  { id: 'weeklyOtherSessionsTarget', group: 'Strength', label: 'Weekly other sessions', unit: '/wk', type: 'number', default: 1 },
   { id: 'weeklyStrengthMinutesTarget', group: 'Strength', label: 'Weekly strength minutes', unit: 'min', type: 'number', default: 60 },
   { id: 'weeklyMobilitySessions',  group: 'Strength', label: 'Weekly mobility',     unit: '/wk', type: 'number', default: 2 },
   { id: 'pullUpsTarget',           group: 'Strength', label: 'Pull-ups',            unit: 'reps', type: 'number', default: 10 },
@@ -47,6 +48,10 @@ export const GOAL_DEFS = [
   { id: 'dailyFatTarget',          group: 'Nutrition', label: 'Daily fat',          unit: 'g',   type: 'number', default: 65,  derived: true },
   { id: 'dailyFiberTarget',        group: 'Nutrition', label: 'Daily fiber',        unit: 'g',   type: 'number', default: 35  },
   { id: 'dailyWaterTarget',        group: 'Nutrition', label: 'Daily water',        unit: 'L',   type: 'number', default: 3   },
+  // IF detection override. 'auto' = detect from meal timestamps (default);
+  // 'on' = force intermittent-fasting awareness; 'off' = disable it (e.g.
+  // off-season or a race block where you eat earlier).
+  { id: 'intermittentFastingOverride', group: 'Nutrition', label: 'IF detection', unit: '', type: 'string', default: 'auto', placeholder: 'auto | on | off' },
 
   // ─── Recovery ────────────────────────────────────────────────────────────
   { id: 'targetSleepHours',        group: 'Recovery', label: 'Target sleep',        unit: 'hrs', type: 'number', default: 7.5 },

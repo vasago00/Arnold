@@ -1274,10 +1274,19 @@ const _OUTCOME_RESOLVERS = {
     else if (drift <= 0.05) base = _lerpClip(drift, 0.02, 100, 0.05, 80);
     else if (drift <= 0.10) base = _lerpClip(drift, 0.05, 80, 0.10, 40);
     else base = _lerpClip(drift, 0.10, 40, 0.20, 0);
+    // Phase 4r.hs.trajPenalty (#19) — ASYMMETRIC trajectory adjustment.
+    // trajPerWk is direction-signed: + = moving toward target, − = away.
+    // Reward moving the right way (up to +15) AND penalize moving the wrong
+    // way, but GENTLER (down to −8). Rationale: a wrong-way trend is real
+    // negative signal (so we penalize), but the base `drift` ramp already
+    // drops as you move away from target — a full symmetric penalty would
+    // double-count and over-react to noisy scale/BIA weeks. Smaller downside
+    // acknowledges backsliding without amplifying noise.
     const trajPerWk = _trajectoryTowardTarget(ctx.weight, target, (r) => Number(r?.weightLbs), 28);
-    if (trajPerWk != null && trajPerWk > 0) {
-      const lift = Math.min(15, trajPerWk * 10); // 0.5 lb/wk → +5, 1.5+ → +15
-      base = Math.min(100, base + lift);
+    if (trajPerWk != null && trajPerWk !== 0) {
+      const raw = trajPerWk * 10;                          // ±0.5 lb/wk → ±5, 1.5 → 15
+      const adj = Math.max(-8, Math.min(15, raw));         // reward to +15, penalize to −8
+      base = Math.max(0, Math.min(100, base + adj));
     }
     return base;
   },
@@ -1298,10 +1307,14 @@ const _OUTCOME_RESOLVERS = {
     else if (drift <= 0.15) base = _lerpClip(drift, 0.05, 100, 0.15, 80);
     else if (drift <= 0.30) base = _lerpClip(drift, 0.15, 80, 0.30, 40);
     else base = _lerpClip(drift, 0.30, 40, 0.50, 0);
+    // Phase 4r.hs.trajPenalty (#19) — asymmetric (see weightVsTarget).
+    // Body fat (BIA) is the noisiest signal, so the gentler downside matters
+    // most here. Reward to +15, penalize only to −8.
     const trajPerWk = _trajectoryTowardTarget(ctx.weight, target, (r) => Number(r?.bodyFatPct), 28);
-    if (trajPerWk != null && trajPerWk > 0) {
-      const lift = Math.min(15, trajPerWk * 20); // 0.25%/wk → +5, 0.75%+ → +15
-      base = Math.min(100, base + lift);
+    if (trajPerWk != null && trajPerWk !== 0) {
+      const raw = trajPerWk * 20;                          // ±0.25%/wk → ±5, 0.75 → 15
+      const adj = Math.max(-8, Math.min(15, raw));         // reward to +15, penalize to −8
+      base = Math.max(0, Math.min(100, base + adj));
     }
     return base;
   },

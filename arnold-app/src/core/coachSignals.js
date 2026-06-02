@@ -2230,6 +2230,10 @@ export function computeCoachSignals(input = {}) {
     raceHorizon,
     // acute fueling layer (task #218 follow-up)
     prefuel,
+    // True when the orchestrator substituted 3-day rolling intake for a
+    // sparse fasted-morning today (IF). Lets UI/debug explain why
+    // energyAvailability isn't reading a fasted-morning RED-S crash.
+    ifFastedFallback: input.ifFastedFallback || false,
   };
 }
 

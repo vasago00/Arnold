@@ -317,7 +317,7 @@ The harness produces:
 
 **Skipped**: Loosening the 5-10% drift ramp from 80→40 to 80→60. That would inflate stationary-state scores back toward v1's flattery. The trajectory mechanism is the *honest* fix because it rewards motion, not static proximity.
 
-**Open question**: Should trajectory penalize too? Currently trajectory adds when moving correct way, does nothing when moving wrong way. Could subtract up to -10 for negative trajectory. Deferred until we see how the additive form lands.
+**Open question** → **RESOLVED 2026-06-01 (Phase 4r.hs.trajPenalty):** Trajectory now penalizes wrong-way movement, but ASYMMETRICALLY — reward toward target up to **+15**, penalize away from target up to **−8** (per-week formula weight ×10, body fat ×20; clamped [0,100]). Why asymmetric and not symmetric: the base `drift` ramp ALREADY drops as you move away from target, so a full ±15 symmetric penalty double-counts and over-reacts to noisy scale/BIA weeks. The smaller downside acknowledges backsliding (user wanted real negative signal) without amplifying noise. Applies to `weightVsTarget` + `bodyFatVsTarget`. (Considered: symmetric ±15 — rejected as too jumpy on BIA.)
 
 ### 2026-05-29 — Body fat ramp softening + skeletal-muscle target fix
 

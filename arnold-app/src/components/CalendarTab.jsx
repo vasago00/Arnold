@@ -28,6 +28,8 @@ import { getPlannerWeek, savePlannerWeek, weekKey } from "../core/planner.js";
 import { fetchAndParseICS } from "../core/parsers/icsParser.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
 import { PredictedBandsCard } from "./PredictedBandsCard.jsx";
+import { plannedMinutes } from "./PlannedWorkoutTile.jsx";
+import { predictRaceFinish } from "../core/derive/tileMetrics.js";
 // Phase 4r.dataspine.4 — calorie/macro target reads route through
 // goalModel.js (the canonical Layer 3 surface). resolveCalorieTarget
 // import removed; all consumers in this file migrated.
@@ -83,6 +85,10 @@ const WEEKDAY_SHORT = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 // Intervals after the first fix because they also pass isRun() (running
 // distance present) AND isHIIT() (the 'hyrox' keyword is in HIIT_RE).
 // The hybrid check at the top resolves the ambiguity in favor of HIIT.
+// Long-run threshold (miles). A run longer than this auto-classifies as a
+// long run. Phase 4r.run.longrun — lowered from 13 to 10 per user.
+const LONG_RUN_MIN_MI = 10;
+
 function activityFamily(a) {
   if (!a) return 'rest';
   if (isMobility(a)) return 'mobility';
@@ -101,7 +107,9 @@ function activityFamily(a) {
   // get easy-run.png. Long runs split off.
   if (isRun(a) && (Number(a.distanceMi) || 0) > 0) {
     const mi = Number(a.distanceMi) || 0;
-    if (mi >= 13) return 'long_run';
+    // Phase 4r.run.longrun — auto-classify any run > 10 mi as a long run
+    // (was >= 13). Per user: 10 mi is the long-run boundary for this athlete.
+    if (mi > LONG_RUN_MIN_MI) return 'long_run';
     if (isHIIT(a)) return 'intervals';
     return 'run';
   }
@@ -511,7 +519,7 @@ export function CalendarTab({ showToast }) {
         <PlanPickerModal
           dateStr={selectedDate}
           onClose={() => setPlanPickerOpen(false)}
-          onPick={(type) => {
+          onPick={(type, distanceMi) => {
             try {
               const wk = weekKey(new Date(selectedDate + 'T12:00:00'));
               const week = getPlannerWeek(wk);
@@ -522,13 +530,18 @@ export function CalendarTab({ showToast }) {
               if (idx >= 0 && idx < 7) {
                 const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
                 while (days.length < 7) days.push({ type: 'rest' });
-                days[idx] = { ...(days[idx] || {}), type };
+                // Phase 4r.plan.distance — persist optional planned distance.
+                // Clear any stale distance when none given or type isn't a run.
+                const entry = { ...(days[idx] || {}), type };
+                if (Number(distanceMi) > 0) entry.distanceMi = Number(distanceMi);
+                else delete entry.distanceMi;
+                days[idx] = entry;
                 savePlannerWeek(wk, { ...week, days });
               }
             } catch (e) { console.warn('[calendar] plan save failed:', e); }
             setPlanPickerOpen(false);
             setTick(t => t + 1);
-            showToast?.(`Planned ${prettyFamily(type)}`);
+            showToast?.(`Planned ${prettyFamily(type)}${Number(distanceMi) > 0 ? ` · ${distanceMi} mi` : ''}`);
           }}
         />
       )}
@@ -1497,10 +1510,42 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
             const hasPlan = planned?.type && planned.type !== 'rest';
             const hasRace = races.length > 0 && races[0].distanceMi;
             if (isMobile && hasPlan && !hasRace && !isPast) return null;
+            // Phase 4r.run.expectedtime — for a planned EASY or LONG run,
+            // append expected distance + predicted duration (e.g.
+            // "Planned: Easy run · 6 mi · ~52 min"). Predicted time is shown
+            // ONLY for easy/long runs: for intervals/tempo/HIIT, time is not
+            // the goal (the work is the reps/effort), so a duration would
+            // misrepresent the session. Duration via shared plannedMinutes()
+            // (now history-derived). Distance always shown when present.
+            const TIMED_RUN_TYPES = new Set(['easy_run', 'long_run']);
+            const planExtra = (() => {
+              if (!hasPlan) return '';
+              const mi = Number(planned.distanceMi) || 0;
+              const mins = TIMED_RUN_TYPES.has(planned.type)
+                ? (() => { try { return plannedMinutes({ planned, profile: storage.get('profile') || {} }); } catch { return null; } })()
+                : null;
+              const parts = [];
+              if (mi > 0) parts.push(`${mi} mi`);
+              if (mins) parts.push(`~${mins} min`);
+              return parts.length ? ` · ${parts.join(' · ')}` : '';
+            })();
+            // Phase 4r.race.allraces — predicted finish for a pure-running
+            // race on this day (null for hyrox/tri/other). Anchored on the
+            // user's empirical race/long-run anchor via Riegel.
+            const racePred = hasRace
+              ? (() => { try { return predictRaceFinish(races[0], getUnifiedActivities() || []); } catch { return null; } })()
+              : null;
+            const racePredStr = (() => {
+              const s = racePred?.seconds;
+              if (s == null || !Number.isFinite(s) || s <= 0) return null;
+              const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60);
+              return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+                           : `${m}:${String(sec).padStart(2, '0')}`;
+            })();
             const text = hasRace
-              ? `${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}`
+              ? `${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}${racePredStr ? ` · ⏱ ~${racePredStr} predicted` : ''}`
               : hasPlan
-                ? `Planned: ${prettyFamily(planned.type)}`
+                ? `Planned: ${prettyFamily(planned.type)}${planExtra}`
                 : 'No plan';
             return (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
@@ -1996,6 +2041,24 @@ function PlanPickerModal({ dateStr, onClose, onPick }) {
     { type: 'cross',     label: 'Cross',     color: '#22d3ee', desc: 'Cycle / swim' },
     { type: 'rest',      label: 'Rest',      color: '#94a3b8', desc: 'Recovery day' },
   ];
+  // Phase 4r.plan.distance — run-family plans accept an optional distance so
+  // the calendar can show expected time + so weekly/annual mileage projections
+  // can count planned miles. Selecting a run type reveals a distance field;
+  // non-run types commit immediately on tap (no distance to capture).
+  const RUN_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals']);
+  const [selType, setSelType] = useState(null);
+  const [dist, setDist] = useState('');
+  const handlePick = (type) => {
+    if (RUN_TYPES.has(type)) {
+      setSelType(type);            // stage it; show the distance field
+    } else {
+      onPick(type, null);          // commit non-run plans immediately
+    }
+  };
+  const confirmRun = () => {
+    const mi = parseFloat(dist);
+    onPick(selType, Number.isFinite(mi) && mi > 0 ? mi : null);
+  };
   const dateLabel = (() => {
     try {
       const d = new Date(dateStr + 'T12:00:00');
@@ -2031,12 +2094,12 @@ function PlanPickerModal({ dateStr, onClose, onPick }) {
           {OPTIONS.map(o => (
             <button
               key={o.type}
-              onClick={() => onPick(o.type)}
+              onClick={() => handlePick(o.type)}
               style={{
                 all: 'unset', cursor: 'pointer',
                 padding: '8px 10px', borderRadius: 6,
-                background: `${o.color}1a`,
-                border: `0.5px solid ${o.color}44`,
+                background: selType === o.type ? `${o.color}33` : `${o.color}1a`,
+                border: `${selType === o.type ? 1.5 : 0.5}px solid ${o.color}${selType === o.type ? 'cc' : '44'}`,
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}
             >
@@ -2045,6 +2108,42 @@ function PlanPickerModal({ dateStr, onClose, onPick }) {
             </button>
           ))}
         </div>
+
+        {/* Distance + confirm — shown once a run type is staged. Optional:
+            confirm with a blank distance to plan the run without one. */}
+        {selType && (
+          <div style={{
+            marginTop: 12, paddingTop: 12,
+            borderTop: '0.5px solid var(--border-subtle, rgba(148,163,184,0.20))',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <label style={{ fontSize: 11, color: 'var(--text-muted, #94a3b8)', whiteSpace: 'nowrap' }}>
+              Distance
+            </label>
+            <input
+              autoFocus
+              type="number"
+              inputMode="decimal"
+              value={dist}
+              onChange={e => setDist(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') confirmRun(); }}
+              placeholder="mi (optional)"
+              style={{
+                flex: 1, minWidth: 0, fontSize: 13,
+                background: 'var(--bg-surface, #0b0f14)', color: 'var(--text-primary, #e2e8f0)',
+                border: '0.5px solid var(--border-default, rgba(148,163,184,0.30))',
+                borderRadius: 6, padding: '6px 8px',
+              }}
+            />
+            <button onClick={confirmRun} style={{
+              all: 'unset', cursor: 'pointer',
+              fontSize: 12, fontWeight: 600, color: '#60a5fa',
+              padding: '6px 12px', borderRadius: 6,
+              background: 'rgba(96,165,250,0.15)', border: '0.5px solid rgba(96,165,250,0.4)',
+              whiteSpace: 'nowrap',
+            }}>Plan it</button>
+          </div>
+        )}
       </div>
     </div>
   );

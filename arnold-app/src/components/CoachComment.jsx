@@ -264,9 +264,27 @@ function nextPlannedAfterToday(upcomingPlan) {
   const arr = upcomingPlan?.next7Days || [];
   for (let i = 1; i < arr.length; i++) {
     const d = arr[i];
-    if (d?.intensityClass && d.intensityClass !== 'rest') return d;
+    // Return the next day that has an actual planned session. Mobility maps
+    // to intensityClass 'rest' (it's low-load), so we can't filter on
+    // intensityClass alone — that skipped scheduled mobility days and made
+    // the wrap-up jump to the next hard day (e.g. a race) while still saying
+    // "Tomorrow." A genuine rest day has no `planned` type; a mobility day
+    // does. Treat "has a planned type" as the real signal.
+    if (d?.planned && d.planned !== 'rest') return d;
   }
   return null;
+}
+
+// Phrase a day relative to today by its daysOut (1 = tomorrow). Avoids the
+// old bug where the wrap-up hardcoded "Tomorrow" for any upcoming session
+// regardless of how many days away it actually was.
+function relativeDayWord(daysOut, dow) {
+  if (daysOut === 1) return 'Tomorrow';
+  const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const name = (typeof dow === 'number' && DOW[dow]) ? DOW[dow] : null;
+  if (daysOut >= 2 && daysOut <= 6 && name) return name;       // within the week → weekday name
+  if (daysOut === 7) return `Next ${name || 'week'}`;
+  return name || `in ${daysOut} days`;
 }
 
 function planLabel(plan) {
@@ -347,12 +365,16 @@ function composePlayLine({ kind, ctx }) {
     }
     case 'rest_day_planned': {
       const nxt = ctx.nextPlanned;
-      const nxtLine = nxt ? ` Tomorrow's ${planLabel(nxt).toLowerCase()} will need you fresh.` : '';
+      const nxtLine = nxt
+        ? ` ${relativeDayWord(nxt.daysOut, nxt.dow)}'s ${planLabel(nxt)} will need you fresh.`
+        : '';
       return { tag: 'Rest day', body: `Rest day — let recovery do its job.${nxtLine}`, tone: 'positive' };
     }
     case 'evening_done': {
       const nxt = ctx.nextPlanned;
-      const nxtLine = nxt ? `Tomorrow: ${planLabel(nxt).toLowerCase()}.` : `Tomorrow is open.`;
+      const nxtLine = nxt
+        ? `${relativeDayWord(nxt.daysOut, nxt.dow)}: ${planLabel(nxt)}.`
+        : `Tomorrow is open.`;
       return { tag: 'Wrap-up', body: `Day winding down. ${nxtLine} Sleep is the lever.`, tone: 'neutral' };
     }
     case 'open_morning':

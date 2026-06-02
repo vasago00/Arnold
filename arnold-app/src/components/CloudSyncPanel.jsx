@@ -941,6 +941,37 @@ function GarminAuthSection() {
         </form>
       ) : (
         <div style={{ fontSize: 13 }}>
+          {/* Phase 4r.garmin.2faBanner (#20) — Garmin's 2FA periodically
+              re-enables itself on the account; once it does, the worker
+              session can't refresh and every pull returns 401 /
+              'ticket_not_found'. Rather than leave the user staring at a
+              cryptic error, detect that signature and surface the exact
+              recovery steps. (Postmortem: Garmin 2FA self-flips; recovery is
+              connect.garmin.com → Security → disable 2FA.) */}
+          {(() => {
+            const e = String(meta.lastError || '').toLowerCase();
+            const looks2FA = e.includes('ticket_not_found') || e.includes('401')
+              || e.includes('unauthor') || e.includes('mfa') || e.includes('2fa');
+            if (!looks2FA) return null;
+            return (
+              <div style={{
+                background: 'rgba(239,68,68,0.12)',
+                border: '0.5px solid rgba(239,68,68,0.4)',
+                borderLeft: '3px solid #ef4444',
+                borderRadius: 8, padding: '8px 10px', marginBottom: 10,
+                fontSize: 12, lineHeight: 1.45,
+              }}>
+                <div style={{ fontWeight: 600, color: '#fca5a5', marginBottom: 3 }}>
+                  ⚠ Garmin sign-in is failing (session expired)
+                </div>
+                <div style={{ opacity: 0.9 }}>
+                  Garmin's two-factor auth may have re-enabled itself on your account —
+                  it does this periodically. To fix: go to <strong>connect.garmin.com → Account → Security → disable 2-Step Verification</strong>,
+                  then tap <strong>Edit credentials</strong> below and re-enter your password.
+                </div>
+              </div>
+            );
+          })()}
           <div style={{ marginBottom: 6 }}>
             Signed in as <code>{existing.user}</code>
           </div>

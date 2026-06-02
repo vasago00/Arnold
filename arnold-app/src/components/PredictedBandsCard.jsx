@@ -198,15 +198,22 @@ export function PredictedBandsCard({ family, dateStr, maxHR, conditions, planLab
       padding: isMobile ? '5px 8px' : '8px 10px',
     }}>
       <div style={{
+        // Phase 4r.run.expectedtime.fix2 — keep the whole header on ONE row.
+        // Shortened the title from "Expected today" → "Expected" so the
+        // title + plan label + weather all fit inline even in a narrow
+        // drawer (was fracturing "EXPECTED TODAY"/"MOBILITY" onto two lines).
+        // nowrap on both groups guarantees a single-line header.
         display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        gap: 8, flexWrap: 'nowrap',
         marginBottom: isMobile ? 4 : 6,
       }}>
         <span style={{
           display: 'inline-flex', alignItems: 'baseline', gap: 6,
           fontSize: 10, fontWeight: 700, color, letterSpacing: '0.08em',
           textTransform: 'uppercase',
+          whiteSpace: 'nowrap', flexShrink: 0,
         }}>
-          Expected today
+          Expected
           {planLabel && (
             <span style={{
               fontSize: 9, fontWeight: 600, opacity: 0.85,
