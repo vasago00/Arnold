@@ -1,9 +1,10 @@
 # Plan Generator — reverse-periodized training plans
 
-> Status: **DESIGN** (2026-06-01). Not yet built. This is the spec the
-> implementation should follow. Centerpiece of Coach v3 (programming, not
-> just signals). See COACH.md (v3 dialogue/programming) and RACES.md
-> (per-race prep metrics + `patternMarathon*`).
+> Status: **DESIGN** (2026-06-01). Not yet built. An APPLICATION of the
+> Intelligence Hub (INTELLIGENCE_HUB.md), NOT the centerpiece — it is
+> downstream. It asks the hub for current fitness/readiness/gap and writes a
+> plan; the hub does the reasoning. Build the hub first. See COACH.md (v3
+> programming) and RACES.md (per-race prep metrics + `patternMarathon*`).
 
 ## What it is
 Given a target race + goal time, work **backwards** to a week-by-week

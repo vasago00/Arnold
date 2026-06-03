@@ -1,9 +1,12 @@
 # The Coaching Team — panel of experts, one voice
 
 > Status: **VISION / DESIGN** (2026-06-01). Not yet built. This is the
-> product's soul. Builds ON TOP OF the v2.6 narrative layer (COACH.md) and the
-> Plan Generator (PLAN_GENERATOR.md). Read those first — this doc is the layer
-> that turns their outputs into expert guidance.
+> product's soul — but it is the VOICE of a deeper core, not the core itself.
+> Sits ON TOP OF the **Intelligence Hub** (INTELLIGENCE_HUB.md — the reasoning
+> core; build that first), the v2.6 narrative layer (COACH.md), and the Plan
+> Generator (PLAN_GENERATOR.md, which is itself a hub application, downstream).
+> The experts here are the hub's sub-models given a voice; the arbiter reasons
+> over the hub's whole state + confidence. Read INTELLIGENCE_HUB.md first.
 
 ## The vision (user's words)
 A professional team of coaches advising Emil — a **run coach**, a **strength
@@ -40,19 +43,82 @@ Three layers. The bottom already exists; the middle and top are the build.
      constrains the day, decides what to keep / cut / move and protects the
      week's key sessions. "Only 30 min today" → the team's compromise.
 
-2. **THE ARBITER (the head coach).** Experts conflict by design — the
-   nutritionist wants a deficit, the run coach wants glycogen for tomorrow's
-   long run; the strength coach wants legs fresh, the run coach wants a
-   tempo. The arbiter resolves conflicts against the CURRENT priority (the
-   race goal + phase from the Plan Generator), produces ONE coherent plan,
-   and surfaces the key trade-off it made so the athlete sees the reasoning.
-   This is the v2.6 narrative composer, promoted: leverage point → connected
-   threads across domains → the trade-off → ONE action → ONE metric to watch.
+2. **THE ARBITER (the head coach).** Experts conflict by design. The arbiter
+   resolves conflicts, produces ONE coherent plan, and surfaces the key
+   trade-off. It is the v2.6 narrative composer promoted to a decision-maker.
+   See "## Arbiter — conflict resolution model" below for the actual logic.
 
 3. **ONE VOICE (presentation).** The athlete never sees five cards arguing.
    They see one briefing in the team's voice, with the option to "ask a
    specific coach" (drill into a domain's full reasoning) — the brief cards
    become the evidence/drill-down layer, exactly as v2.6 intends.
+
+## Arbiter — conflict resolution model (the hard part)
+The arbiter is the real IP. Most "AI coaches" are thin here because they never
+make the experts genuinely disagree and then resolve it transparently. Design:
+
+### Each expert returns a structured RECOMMENDATION, not prose
+So the arbiter can reason over it, every expert emits:
+```
+{ domain, action,                 // what it wants ("fuel +60g carbs tonight")
+  rationale, principle,           // why + which methodology (cites knowledge base)
+  urgency: 0..1,                  // how time-sensitive (today vs this week)
+  confidence: 0..1,               // from the hub's confidence on its inputs
+  protects: [goalThread...],      // which goal-threads this serves
+  costs: [{thread, severity}],    // what it spends/risks
+  flexibility: 0..1 }             // can it move/shrink without losing its point?
+```
+
+### Resolution is PHASE-PRIORITIZED, not fixed
+There is no static ranking of domains — the priority order is a function of the
+**current training phase** (from the Plan Generator / hub) and **proximity to a
+key race or checkpoint**. The arbiter loads a priority vector per phase:
+- **Base phase:** aerobic volume > strength > freshness > nutrition-cut.
+  (Build the engine; a deficit that costs an easy run is fine.)
+- **Build phase:** key quality session > volume > strength > cut.
+- **Peak phase:** race-pace specificity + the key long run > everything;
+  strength demotes to maintenance; no cut.
+- **Race / checkpoint week:** FRESHNESS + fueling > all; intensity preserved
+  but volume slashed; strength minimal; absolutely no deficit.
+- **Recovery / post-race:** recovery > everything; suppress all push.
+The same conflict (deficit vs glycogen) resolves OPPOSITE ways in base vs race
+week — and that's correct. The phase vector is the arbiter's backbone.
+
+### The resolution algorithm
+1. **Hard constraints first (non-negotiable gates).** Injury-risk flags
+   (mobility), ACWR over ceiling, illness signals, and the athlete's fixed
+   constraints (days/week, non-negotiable strength) are GATES — they remove
+   options before any scoring. Safety never loses a trade-off.
+2. **Score remaining options** by: phase-priority weight × urgency × confidence
+   − Σ(costs × severity). Low-confidence recommendations carry less weight
+   (the hub's confidence directly damps an over-eager expert).
+3. **Seek the non-conflicting compromise BEFORE choosing a winner.** Use
+   `flexibility`: if the run coach's long run can move a day, or the
+   nutritionist's deficit can wait 24h, the arbiter reschedules to satisfy
+   both rather than declaring a loser. Most "conflicts" dissolve here — this
+   is what a good human coach actually does.
+4. **When a true trade-off remains, the phase vector decides** — and the
+   arbiter records the loser + the cost, because that becomes the surfaced
+   "trade-off" and the metric to watch.
+5. **Emit:** ONE coherent day/week + the single most important trade-off in
+   plain language ("holding the deficit so tomorrow's long run has fuel —
+   watch weight trend, we'll make it up midweek").
+
+### Worked example (base phase)
+Nutrition wants −500 kcal (cut on track). Run wants glycogen for tomorrow's
+16mi long run (urgency 0.9, protects race-readiness). Strength wants legs
+(flexibility 0.8). → Gate check passes. Compromise search: strength moves to
+the day after the long run (flexibility high). Deficit vs glycogen is a real
+trade-off; base-phase vector ranks the long run's quality above the cut's
+daily progress → hold the deficit tonight, resume tomorrow. Surfaced: "Fuel
+normal tonight for the 16 — the cut resumes Sunday; net week stays in deficit."
+
+### Openness / control hooks
+- Every resolution is explainable down to the phase vector + the gate that
+  fired + the trade-off taken. (Powers "ask a coach".)
+- When the arbiter overrides the athlete's stated philosophy (e.g. proposing a
+  threshold block against the 80/20 default), it MUST present benefits / costs
+  / challenges and leave the choice to the athlete — never silently.
 
 ## Athlete's training philosophy (Emil — the default lens)
 **Primary methodology: ~80% Zone 2 / aerobic-base training.** Emil is a
@@ -68,6 +134,23 @@ challenges every time** an alternative is proposed. The team may surface, e.g.,
 "a threshold block here could buy X, but costs Y and risks Z" — never silently
 switch philosophies. Honor the 80/20 default; pitch deviations with the full
 ledger and let the athlete decide (ties to "always in control").
+
+## Tune-up races as calibration checkpoints (user principle — first-class)
+The small races between now and a goal race (e.g. the NYRR series before
+Berlin) are NOT just predictions to display — they are **closed-loop
+calibration checkpoints**. Each one is a real-world fitness measurement that:
+- **Validates or corrects the model.** Compare predicted vs actual finish →
+  the error re-tunes the personal fatigue exponent, threshold pace, and the
+  durability estimate. A new race effort also becomes a stronger anchor.
+- **Re-grades the remaining plan.** A faster-than-predicted tune-up may make
+  the goal "comfortably in range" (the coach can dial back risk); a slower one
+  triggers an honest replan or a goal-time conversation.
+- **Tests coaching proficiency.** Each checkpoint is a chance to show the
+  guidance worked — "we targeted X for this 10K, you ran X−; here's what that
+  says about Berlin." This is how the athlete builds trust in the team.
+The whole point of the tune-up calendar is to use races as checkpoints on the
+journey. The plan must be designed AROUND them (taper-lite into a key tune-up,
+absorb after), and the adaptive-replan loop fires on every result.
 
 ## The knowledge base (what makes the advice expert, not generic)
 Encode the training philosophies of leading coaches as structured, attributed
@@ -89,9 +172,50 @@ Each expert cites which principle it's applying so guidance is explainable
 ("threshold emphasis now, per Daniels' T-pace zone, because…"). When two
 philosophies disagree (e.g. Hanson's 16-mi long-run cap vs Pfitzinger's 20–22),
 the coach presents the trade-off rather than picking silently.
-Open question: how to represent this — rules/heuristics vs a curated knowledge
-file vs LLM-with-citations. Likely a blend: structured rules for the math,
-curated principles for the philosophy.
+### Representation (the hard part) — a structured, attributed principle store
+NOT free-text fed to an LLM (unattributable, unverifiable, drifts). NOT pure
+hardcoded rules (can't explain or compare philosophies). A **curated principle
+store** the experts query — each principle is a structured, cited unit:
+```
+{ id: 'seiler-polarized-8020',
+  coach: 'Seiler',  source: 'Polarized training literature',
+  domain: 'run', phase: ['base','build'],
+  claim: '~80% of sessions easy (Z1-Z2), ~20% hard (Z4-Z5); avoid the Z3 grey zone.',
+  prescribes: { easyPct: 0.80, hardPct: 0.20, greyZone: 'minimize' },
+  conditions: 'endurance events; high total volume',
+  benefits: ['sustainable aerobic dev','low injury/burnout risk'],
+  costs: ['less race-pace specificity late'],
+  conflictsWith: ['canova-racepace-heavy'],
+  strength: 'strong (well-replicated)' }
+```
+- The **prescribes** block is machine-usable (the run coach reads numbers).
+- The **benefits/costs/conflictsWith** power the openness clause: when two
+  principles disagree (Hanson 16mi cap vs Pfitzinger 20-22mi), the coach
+  surfaces both with their trade-offs instead of silently picking.
+- **claim/coach/source** make every recommendation attributable ("per Seiler's
+  80/20, because you're in base").
+
+### How experts use it (retrieval, not generation)
+An expert selects principles by `domain` + current `phase` + `conditions`, then
+applies the `prescribes` math to the athlete's own numbers. The LLM/narrative
+layer only renders the cited result into the team's voice — it never invents
+the methodology. So advice is: athlete's data (primary) → principle as lens
+(cited) → one-voice phrasing. Three separable, auditable steps.
+
+### Conflict between principles = a feature
+When selected principles disagree, that's not a bug to resolve silently — it's
+exactly what the arbiter surfaces as a trade-off for the athlete to decide.
+The `conflictsWith` edges make these visible. Emil's 80/20 default biases
+selection toward Maffetone/Lydiard/Seiler; deviations get pitched with the full
+ledger (benefits/costs/challenges) per the control principle.
+
+### Seeding + growth
+Start with a curated core (Maffetone, Lydiard, Seiler, Hanson, Higdon,
+Daniels, Pfitzinger, Canova). The store is data, not code — new principles
+(or refinements as research evolves) are added without touching the engine.
+Long-term, the athlete's OWN validated response (from the hub's response model)
+becomes personal principles that can override generic ones ("for YOU, heat
+costs 1.5%/°C — overrides the generic taper assumption").
 
 ## Why Arnold can do this when others can't
 The whole metrics stack we've built IS the differentiator: personal fatigue

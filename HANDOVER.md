@@ -10,13 +10,19 @@
 ---
 
 ## Last updated
-2026-05-31 — by Cowork session (EdgeIQ hero rail: +3 driver tiles)
+2026-06-01 — Intelligence Hub stage 1 (attribution + real-zones engine)
 
 ## Commit status
-- GitHub backup is **manual** (the `arnold-auto-backup` scheduled task is disabled and not used).
-- Daily Google Drive snapshot task added: `arnold-drive-backup` (9 PM), uploads to Drive "Arnold Backups" folder.
-- Last known push: HS Scoring v2 + Cut Mode + IF awareness + Coach/UI polish (tasks ~198–225) — reported pushed.
-- **Uncommitted/local-ahead — push these:**
+- GitHub backup is **manual**. Daily Google Drive snapshot task `arnold-drive-backup` (9 PM).
+- The big run-coaching batch + design docs were pushed at end of 2026-05-31 (per user).
+- **Uncommitted since then (2026-06-01) — push these:**
+  - `arnold-app/src/core/attribution.js` (NEW — Intelligence Hub stage 1)
+  - `arnold-app/src/core/zones.js` (NEW — zone resolver + lab-test anchor/decay)
+  - `arnold-app/src/core/zonesDebug.js` (NEW — window.zonesDebug)
+  - `arnold-app/src/Arnold.jsx` (3 side-effect imports for the above)
+  - `arnold-app/docs/INTELLIGENCE_HUB.md`, `docs/COACHING_TEAM.md`, `docs/PLAN_GENERATOR.md` (design — deepened: arbiter/calibration/knowledge-base + viz stack + session-type expectations + lab-anchor)
+  - `HANDOVER.md`
+- **Older uncommitted list (verify these went up in the 05-31 push; if not, include):**
   - `HANDOVER.md`, `CLAUDE.md` (handover protocol)
   - `arnold-app/src/Arnold.jsx` (EdgeIQ hero rail — new driver tiles + sparklines + Action column fix; **Nutrition 3rd tile is now "Glycogen"** (Coach signal `computeGlycogenEstimate`, status replete/moderate/depleted/critical + carbs-supplied/need sub). History: Balance → Carbs left → Glycogen. Web only.)
   - `arnold-app/src/core/goals.js` (weekly run target default 20→30; + `intermittentFastingOverride` goal)
@@ -141,7 +147,30 @@ Sourced from `arnold-app/COACH.md`, `arnold-app/RACES.md`, and
 - [ ] **Course profile modeling (user wants FULL modeling).** Predictor is course-blind — NY (hilly) vs Berlin/Valencia (flat) all show the same marathon time. User wants real elevation-based modeling. NEEDS: a course-elevation data source + per-race course data (not currently stored). Flat vs hilly ≈ 2-4 min at marathon distance. `predictRaceFinish` returns `courseModeled:false` as a marker. Scoped as its own (heavier) item.
 - [ ] **Surface base-vs-penalized + readiness in UI.** `predictRaceFinish` now returns `baseSeconds`/`penaltyApplied`/`readiness`; the Races table + calendar drawer still show only `seconds`. Could add a tooltip ("fitness-equivalent X; −Y% for distance readiness").
 
-### ★★ The Coaching Team — panel of experts, one voice (NEW 2026-06-01 — THE PRODUCT VISION)
+### 🔨 Intelligence Hub — Stage 1 SHIPPED + REFINED (2026-06-01): Attribution Engine v1
+`arnold-app/src/core/attribution.js` (NEW) + `src/core/zones.js` (NEW) + `src/core/zonesDebug.js` (NEW), all side-effect imported in Arnold.jsx. Console: `window.attributionDebug()`, `window.zonesDebug()`, `window.zonesResolved()`, `window.setLabTest({...})`.
+- **`attributeOutcome()`** — the hub's "find the culprit": cross-examines per-date confounders (sleep/HRV/RHR/fuel/heat/load) + classifies effort + (for easy runs) within-run zone discipline. Returns `{verdict, effort, zoneDiscipline, culprits[], summary}`. Pure, read-only, defensive.
+- **Effort gate fixed (2 bugs):** (1) race-pace expectation only applies to HARD efforts — easy runs no longer get bogus "underperformed". (2) effort classified against REAL zones via `resolveZones`/`classifyEffort` (NOT %HRmax, NOT the run's own peak HR — both caused false "race effort"). User real zones (Garmin custom): Z2 ceiling 136, LT2 162, maxHR 173, resting 46.
+- **Within-run zone discipline (added per user):** avg HR hides drift — reads `hrZones` per-zone seconds. VALIDATED on real run: avg 135 (looked clean) but only 50% in Z1-2, 37min above Z2 → graded `grey-zone-creep`. Matches block-level zonesDebug (48% easy / 34% Z3). KEY TRAINING INSIGHT: Emil's easy runs drift to Z3 ~half the time — capping easy HR ≤136 is the highest-leverage change for Berlin sub-3:40. (Future refinement: cross-ref elevation/weather to distinguish hill-drift from ran-too-hard.)
+- NOT build-verified — rebuild from Windows terminal. NEXT hub stage: #2 checkpoint grading (clean vs confounded → calibrate anchor or route to response model).
+
+### ★★★ The Intelligence Hub — the reasoning core (NEW 2026-06-01 — THE FOUNDATION, build FIRST)
+Full design doc: `arnold-app/docs/INTELLIGENCE_HUB.md`. **Reframe (user): the hub is the centerpiece, NOT the Plan Generator.** Dependency order is now Intelligence Hub → Coaching Team (its voice) → Plan Generator (an application). "If the hub works we can throw anything at it." Core principles:
+- **Every data point is valuable; interpretation is conditional.** No "bad data" — route each point to a Fitness ledger (clean reads only) and/or a Response ledger (always). A hot/under-slept/under-fueled race = weak fitness checkpoint BUT great heat/sleep/fuel-response data.
+- **Confound attribution ("find the culprit")** — when an outcome diverges, diagnose WHY (weather/sleep/fuel/HRV/load/travel) before judging. The signature capability — coach vs calculator.
+- **Checkpoint validity grading** — races graded clean vs confounded; clean → calibrate + anchor; confounded → response ledger w/ culprit named. Shown to user with reason, never silent.
+- **Missing data is signal, never breaks the model** — robust to skipped sessions/races; reads the gap (adherence, chronotype, motivation); never shames.
+- **Mental state first-class** alongside physiology (motivation, adherence, mood, perceived effort).
+- **Recency-weighted** everything (generalizes the race-anchor fade; hard cutoffs → decay weights).
+- Hub maintains living models: fitness / response / readiness / adherence-mental / confidence-on-everything.
+- Build stages (hub-first): (1) attribution engine v1, (2) checkpoint grading, (3) response model, (4) adherence/mental model, (5) confidence layer, (6) recency-decay refactor → THEN Coaching Team + Plan Generator on top.
+
+### Design deepened 2026-06-01 (three interaction problems — now substantive, not sketches)
+- **Arbiter conflict-resolution** (COACHING_TEAM.md "Arbiter — conflict resolution model"): experts emit structured recommendations {action, urgency, confidence, protects, costs, flexibility}; resolution is PHASE-PRIORITIZED (base/build/peak/race-week/recovery each load a different priority vector — same conflict resolves opposite ways by phase); algorithm = hard-constraint gates (safety/ACWR/injury/fixed-constraints) → score → seek non-conflicting compromise via flexibility FIRST → phase vector breaks true trade-offs → emit one plan + the surfaced trade-off. Worked base-phase example included.
+- **Calibration math** (INTELLIGENCE_HUB.md "Calibration math"): Bayesian precision-weighted update (estimate + confidence); obsPrecision scaled by cleanliness/effort/distance-proximity/recency so one race informs not overwrites; recency half-life decay (generalizes anchor fade); residual partitioned by attribution → feeds response model; sanity clamps + confidence floor on assertiveness.
+- **Knowledge base** (COACHING_TEAM.md "Representation"): curated structured principle store (NOT freetext-to-LLM, NOT hardcoded rules) — each principle {coach, source, claim, prescribes(machine-usable), benefits, costs, conflictsWith, strength}; experts retrieve by domain+phase+conditions and apply to athlete's own numbers; conflicts surfaced not hidden; athlete's own validated responses become personal overriding principles.
+
+### ★★ The Coaching Team — panel of experts, one voice (NEW 2026-06-01 — the VOICE of the hub)
 Full design doc: `arnold-app/docs/COACHING_TEAM.md`. This is the soul of Arnold and the top of the architecture. Run/strength/mobility/nutrition/logistics "coaches" reason over Arnold's metrics, an arbiter (= the v2.6 narrative composer, generalized) resolves their conflicts against the race goal, and the athlete hears ONE voice — advised & guided, ALWAYS in control (advisory only, never auto-mutate).
 - 3 layers: domain experts → arbiter (head coach) → one voice (+ "ask a coach" drill-down). Knowledge base encodes leading coaches' methodologies (Daniels/Pfitzinger/Lydiard/Seiler/Canova/...) with attribution.
 - Differentiator: reasons over the richest per-athlete dataset (fatigue exponent, LTHR, ACWR, HS, cut mode, glycogen, IF, durability) refreshed daily.
@@ -158,7 +187,14 @@ Full design doc: `arnold-app/docs/PLAN_GENERATOR.md`. This is where the Coach ev
 
 ### Data ownership / metrics independence (NEW — added 2026-06-01 from user)
 Goal: Arnold owns its metrics & data; no reliance on Garmin/3rd-party computed values.
-- [ ] **Arnold-native LTHR calculator** — derive lactate-threshold HR from user's own data. Methods: (a) race-anchored (10K≈100-102% LTHR, HM≈96-98%, M≈88-92%) + per-run avgHR; (b) sustained-effort search (highest sustained 30-60min HR) — **needs HR stream, NOT currently stored** (activities store avgHR/maxHR/hrZones only, no per-second trace); (c) HR-pace decoupling deflection. All converge ~158 for user (matches Garmin LT 158, race avg 153 = 97%). Recompute on rolling 8-12wk window; feed zones + race predictor. NOTE: (b)/(c) require ingesting HR streams first.
+### Zones + thresholds (SHIPPED 2026-06-01 — `src/core/zones.js`)
+Single source of truth for HR zones. `resolveZones()` picks best available: **lab/field test → Garmin custom → Karvonen/HRR → %HRmax**. `classifyEffort(avgHR, zones)` → easy/tempo/hard (the attribution engine now uses THIS for the effort gate, not %HRmax — fixed the "140 = race effort" bug; user's REAL data: maxHR 173, resting 46, Karvonen & Garmin AGREE Z2 = 123–136, so 140 is Z3). Zones built around two thresholds: **LT1 = top of easy/Z2**, **LT2 = lactate threshold (≈LTHR)**.
+- **Lab-test anchor + transition (user requirement):** `setLabThresholds({lt1Hr,lt2Hr,testedAt,...})` (console `window.setLabTest(...)`). A test enters at full confidence and DECAYS on a half-life (`LAB_HALF_LIFE_DAYS=75`, `labConfidence()`); `resolveZones` BLENDS the test with derived (Karvonen) zones by that confidence — so it transitions "trust the test → trust derived" automatically as it ages; a fresh test resets the clock. (Answers "how long is a lab test good for": HR anchors ~3mo stable / 6-10wk in a build; pace anchors stale faster — so decay not cutoff.) Console: `window.zonesResolved()`. User getting a lab test in ~30 days → enter via setLabTest.
+- **80/20 finding:** user only ~48% easy (Z1-2), 34% Z3 (30d) — grey-zone drift; tightening easy-run discipline (hold ≤~136) is high-leverage for Berlin sub-3:40.
+
+### Data ownership / metrics independence (NEW — added 2026-06-01 from user)
+Goal: Arnold owns its metrics & data; no reliance on Garmin/3rd-party computed values.
+- [ ] **Arnold-native threshold calculator — LT1 AND LT2 (expanded from LTHR).** Derive BOTH thresholds from user's own data so zones don't depend on a lab/Garmin. **LT2 (≈LTHR):** race-anchored (10K≈100-102% LTHR, HM≈96-98%, M≈88-92%) + per-run avgHR — converges ~158 for user. **LT1 (top of easy/Z2 — the boundary that governs the 80/20 question):** HR-pace decoupling/deflection analysis on runs; rough proxy Maffetone 180−age. Feed both into `resolveZones` as a derived source (and as the blend partner for an aging lab test). Recompute on rolling 8-12wk window. NOTE: decoupling-deflection + sustained-effort methods want HR STREAMS (not currently stored — activities have avgHR/maxHR/hrZones only). Per-run `aerobicDecoupling` IS stored and usable now as a partial signal.
 - [ ] **Data retention / ownership policy.** Findings: data is in browser localStorage + IndexedDB engine (`arnold:*`), **kept forever, never purged** (no TTL/prune anywhere; only `events` log caps at 200). Risk: localStorage ~5-10MB quota ceiling, no quota-handling code → silent write failure possible as data grows. Recommendation: NO deletion of summaries (the history IS the value); tier raw HR streams if added (keep recent raw, downsample old); add one-click full export for true portability/ownership; handle quota gracefully.
 
 ### Run / training coaching cluster (added 2026-05-31 — MOSTLY SHIPPED)

@@ -85,6 +85,9 @@ import { getSystemsReport, getSystemDetail, getSystemWeekly, getSystemCoachRead,
 import { computeUserState as _computeUserStateForCoachRead } from "./core/intelligence.js";
 import { GROUP_COLOR as BIO_GROUP_COLOR } from "./components/BioactiveStack.jsx";
 import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
+import "./core/attribution.js";   // Intelligence Hub stage 1 — wires window.attributionDebug()
+import "./core/zonesDebug.js";    // wires window.zonesDebug() — real HR zones + time-in-zone
+import "./core/zones.js";         // zone resolver + lab-test anchor; wires window.zonesResolved()/setLabTest()
 import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
 import { getTopCoachingPrompts, getPromptsByPillar, runCoachingPromptsHealthProbe } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
 import { runCoachBriefsHealthProbe } from "./core/coachBriefs.js";
