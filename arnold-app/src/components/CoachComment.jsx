@@ -143,9 +143,17 @@ function composeDigest({ us, sessions, hour }) {
 
   // ── Beat 1 · today's training ──
   const trainedToday = Array.isArray(sessions) && sessions.length > 0;
+  // Phase 4r.coach.racename — when today IS a race, name it instead of the
+  // generic activity class. A HYROX logs as "HIIT" via activityKind, so the
+  // digest said "your HIIT in today" on race day. Pull the race name from the
+  // raceHorizon signal (daysOut === 0 AND its date matches today).
+  const rh = us?.coachSignals?.raceHorizon || null;
+  const raceName = (rh && rh.daysOut === 0 && rh.race?.date === us?.asOf && rh.race?.name) ? rh.race.name : null;
   if (trainedToday) {
     const kinds = [...new Set(sessions.map(activityLabel).filter(Boolean))];
-    if (kinds.length >= 2) {
+    if (raceName) {
+      beats.push(`Race done — you raced ${raceName} today. 🏁`);
+    } else if (kinds.length >= 2) {
       beats.push(`Strong day — you stacked ${joinList(kinds.map(phraseLabel))}.`);
     } else {
       beats.push(`Good work getting your ${phraseLabel(kinds[0] || 'session')} in today.`);
@@ -304,7 +312,7 @@ function planLabel(plan) {
 //   open_morning        — no plan, nothing done, morning
 //   open_midday         — no plan, nothing done, midday
 //   evening_done        — late day wrap-up regardless of plan/session
-function classifyPlayState({ sessions, upcomingPlan, nowMs, hour }) {
+function classifyPlayState({ sessions, upcomingPlan, nowMs, hour, raceName = null }) {
   const todayPlan = upcomingPlan?.todayPlanned || null;
   const trainedToday = sessions.length > 0;
 
@@ -312,7 +320,7 @@ function classifyPlayState({ sessions, upcomingPlan, nowMs, hour }) {
   for (const a of sessions) {
     const end = sessionEndMs(a);
     if (end && (nowMs - end) >= 0 && (nowMs - end) <= 75 * 60 * 1000) {
-      return { kind: 'post_workout', ctx: { session: a } };
+      return { kind: 'post_workout', ctx: { session: a, raceName } };
     }
   }
 
@@ -320,7 +328,7 @@ function classifyPlayState({ sessions, upcomingPlan, nowMs, hour }) {
   if (hour >= 21) return { kind: 'evening_done', ctx: { trainedToday, todayPlan, nextPlanned: nextPlannedAfterToday(upcomingPlan) } };
 
   // Logged earlier today (>75 min ago, or no end-time but date matches).
-  if (trainedToday) return { kind: 'logged_earlier', ctx: { session: sessions[0], todayPlan } };
+  if (trainedToday) return { kind: 'logged_earlier', ctx: { session: sessions[0], todayPlan, raceName } };
 
   // Planned today, not done. Bucket by clock so the line evolves.
   if (todayPlan && todayPlan.intensityClass && todayPlan.intensityClass !== 'rest' && !todayPlan.done) {
@@ -344,12 +352,17 @@ function composePlayLine({ kind, ctx }) {
   const tag = (s) => s; // hook for future per-state tag colors
   switch (kind) {
     case 'post_workout': {
-      const lbl = phraseLabel(activityLabel(ctx.session) || 'session');
-      return { tag: 'Refuel', body: `Strong ${lbl}. The refuel window is open — protein + carbs in the next 30 minutes.`, tone: 'positive' };
+      // Race day → name the race (HYROX classifies as HIIT otherwise).
+      const lbl = ctx.raceName || phraseLabel(activityLabel(ctx.session) || 'session');
+      const lead = ctx.raceName ? `${lbl} done` : `Strong ${lbl}`;
+      return { tag: 'Refuel', body: `${lead}. The refuel window is open — protein + carbs in the next 30 minutes.`, tone: 'positive' };
     }
     case 'logged_earlier': {
-      const lbl = phraseLabel(activityLabel(ctx.session) || 'session');
-      return { tag: 'Today done', body: `Today's ${lbl} is logged. Recovery is the work now — sleep tonight is the multiplier.`, tone: 'positive' };
+      const lbl = ctx.raceName || phraseLabel(activityLabel(ctx.session) || 'session');
+      const body = ctx.raceName
+        ? `${lbl} is in the books. Recovery is the work now — sleep tonight is the multiplier.`
+        : `Today's ${lbl} is logged. Recovery is the work now — sleep tonight is the multiplier.`;
+      return { tag: 'Today done', body, tone: 'positive' };
     }
     case 'planned_morning': {
       const lbl = planLabel(ctx.plan);
@@ -703,7 +716,12 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
   // leverage + secondary signal (library).
   const STATE_TONE_DOT = { positive: '#4ade80', gentle: '#fbbf24', neutral: COACH_TEAL };
   if (cfg.mode === 'playState') {
-    const s = classifyPlayState({ sessions, upcomingPlan, nowMs, hour });
+    // Phase 4r.coach.racename — race name for race day, so Play says
+    // "raced HYROX" not "your HIIT" (HYROX classifies as HIIT via activityKind).
+    const playRaceName = (raceHorizon && raceHorizon.daysOut === 0
+      && raceHorizon.race?.date === us?.asOf && raceHorizon.race?.name)
+      ? raceHorizon.race.name : null;
+    const s = classifyPlayState({ sessions, upcomingPlan, nowMs, hour, raceName: playRaceName });
     const line = composePlayLine(s);
     if (!line?.body) return null;
     tag = line.tag;

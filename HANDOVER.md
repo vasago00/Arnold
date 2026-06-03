@@ -10,6 +10,21 @@
 ---
 
 ## Last updated
+2026-06-03 — Race-day fixes (race-pre signature image + Coach race-name)
+
+## Race-day fixes (2026-06-03, from HYROX race day)
+- **Mobile pre-race tile had no image** — `PlannedWorkoutTile.jsx` `race-pre` block was the ONLY state lacking a `SessionSignature` corner-stamp (it only rendered SectionHeader + SplitTopPanel). Added the signature (family='race'/planType='race' → SIGNATURE_SRC.race = race.png). `Card` is position:relative so the absolute stamp anchors fine.
+- **Coach said "your HIIT" on race day** — HYROX classifies as HIIT via activityKind. Fixed in `CoachComment.jsx`: both `composeDigest` (Daily) and `composePlayLine` (Play, via `classifyPlayState` ctx.raceName) now use the race NAME when `raceHorizon.daysOut===0 && race.date===us.asOf`. Daily: "Race done — you raced {name} today 🏁"; Play post-workout/logged_earlier name the race. Falls back to activity label on non-race days.
+- NOT build-verified — rebuild from Windows terminal.
+
+## Attribution v2 — SHIPPED 2026-06-03 (`attribution.js`)
+Acute/chronic timescale split + honest messaging. Every probe now tags `timescale` (acute=this-day: last-night sleep, HRV, RHR, fuel, heat; chronic=compounding: sleep-debt rolling-7night, load/ACWR). Result returns `acute[]` + `chronic[]` buckets. New `probeSleepChronic` (rolling 7-night deficit). `no-expectation` verdict now honestly says "can't grade — no expectation for this race type" + lists acute factors (was the misleading "no confounders"). Debug helper attaches weather via `fetchWeatherForDate` (day max temp) so heat probe fires. STILL PENDING: response-model quantification (per-factor % contribution) — needs hub stage 3 response model. Re-test: `window.attributionDebug('2026-06-03')` should now show heat (hot day) as acute + week-long sleep as chronic.
+
+## Attribution v2 backlog (original notes from HYROX race-day test) — see INTELLIGENCE_HUB.md §3c
+- HYROX logged as "0mi in 5647s" — running distance (~8km) not in `distanceMi` (multisport/other activity). Matters for the response model later (wants the run portion). Log/extract HYROX run distance someday.
+- Attribution v1 said "No notable confounders" but really had NO expectation to assess against (hybrid race, not predicted) AND missed heat (weather not attached) + chronic sleep debt (probe is acute-only). Fixes specced in §3c: acute/chronic timescale tags, chronic sleep+load probes, weather attachment, "can't assess" vs "no confounders" messaging, two output buckets (affected-this-effort vs standing-risks), and eventual response-model quantification. Causation comes from the response model across MANY efforts, not one race.
+
+## Last-updated (prior)
 2026-06-01 — Intelligence Hub stage 1 (attribution + real-zones engine)
 
 ## Commit status

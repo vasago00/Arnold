@@ -1825,6 +1825,12 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
           right="TAPER · LET 'EM COME UP"
         />
         <SplitTopPanel left={leftLines} right={rightLines}/>
+        {/* Phase 4r.race.signature — race-pre was the only state missing the
+            corner-stamp signature, so race day rendered with no image. Match
+            the pre/complete states. planType='race' → SIGNATURE_SRC.race. */}
+        <div style={{ position: 'absolute', bottom: 4, right: 6, pointerEvents: 'none', zIndex: 1 }}>
+          <SessionSignature family="race" planType="race" FamilyIcon={FamilyIcon} color={familyColor}/>
+        </div>
       </Card>
     );
   }

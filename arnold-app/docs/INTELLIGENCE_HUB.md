@@ -74,6 +74,46 @@ training, not underperformance. Each session type has its OWN expectation:
 v1 SHIPPED the guard (suppresses the bogus verdict → 'not-an-effort'); the
 positive easy/tempo evaluations are the next refinement.
 
+### 3c. ACUTE vs CHRONIC factors + "can we even assess?" (learned 2026-06-03, HYROX race day)
+User's framing (adopt verbatim as design): "Race day is a pinnacle of
+performance for that day, but is the result of cumulative factors — some
+compounding [chronic], some immediate for the day [acute]. The coach should
+distinguish and decide what's important and highlight it."
+Real gaps the HYROX race exposed in attribution v1:
+- **"No confounders" OVERSTATED what it knew.** Attribution only attributes a
+  cause when there's a divergence (actual vs expected). HYROX has NO expected
+  time (hybrid → not predicted), so there was no yardstick — yet it printed
+  "No notable confounders," implying it checked & cleared everything. FIX:
+  when there's no expectation, say "can't assess performance — no expectation
+  for this race type," NOT "no confounders."
+- **Heat missed.** Race day was hot (~84°F) but the heat probe only fires when
+  weather is ATTACHED to the activity record; it wasn't, so a real factor went
+  unseen. FIX: fetch/attach weather for the activity's date+location (weather.js
+  exists, async) so heat is considered. Data gap, not logic gap.
+- **Sleep was ACUTE-only.** probeSleep checks only race-eve, but the EdgeIQ
+  coach was (correctly) flagging WEEK-LONG sleep debt. They measured different
+  things and looked contradictory. FIX: probe BOTH acute (last night) and
+  chronic (rolling 7d via computeSleepDebt), and TAG each culprit by timescale.
+- **How do we know a factor affected the race? (user's question, honest answer):**
+  Within ONE race you mostly can't prove causation — only plausibility (factor
+  present + divergence). REAL causation comes from the RESPONSE MODEL across
+  MANY efforts ("for you, +1°C above 18° ≈ +1.5%; +1h weekly sleep debt ≈
+  +0.5%") — then each factor's contribution can be QUANTIFIED, not just listed.
+  This is why every data point matters (two-ledger principle). Acute factors
+  explain THIS day; chronic factors are standing risks that also dull the
+  pinnacle. Coach surfaces both, distinguished: "heat cost you today; sleep
+  debt is the thing to fix before Berlin."
+- **Attribution v2 — SHIPPED 2026-06-03:** (1) ✅ `timescale` tag on every
+  probe; (2) ✅ chronic sleep probe (`probeSleepChronic` — rolling 7-night
+  deficit) + load tagged chronic; (3) ✅ weather attachment in the debug helper
+  via `fetchWeatherForDate` (day's max temp → heat probe); (4) ✅ honest
+  messaging — `no-expectation` now says "can't grade performance — no
+  expectation for this race type" + lists acute factors, NOT "no confounders";
+  (5) ✅ two output buckets `acute` (affected this effort) + `chronic`
+  (standing risks to watch) on the result; (6) ⏳ response-model QUANTIFICATION
+  still pending (needs the response model — hub stage 3). Result now:
+  `{verdict, effort, zoneDiscipline, acute[], chronic[], culprits[], summary}`.
+
 ### 4. Missing data is itself signal — and must never break the model
 The athlete will skip sessions and miss races — overslept, no motivation, life.
 The hub must:

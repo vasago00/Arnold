@@ -78,24 +78,50 @@ function onDate(rows, dateStr, valueOf) {
 }
 
 // ── The confounder probes ──────────────────────────────────────────────────
-// Each returns a culprit object { factor, direction, detail, magnitude, confidence }
-// or null when it has no evidence / not enough baseline.
+// Each returns a culprit object, or null when no evidence. Shape:
+//   { factor, direction, timescale, detail, magnitude, confidence }
+//   timescale: 'acute'   = specific to this day (heat, last-night sleep)
+//              'chronic'  = accumulated/compounding over weeks (sleep debt, load)
+// The acute/chronic split lets the engine say "X cost you TODAY; Y is the
+// standing risk to fix" (user framing, 2026-06-03).
 
-function probeSleep(dateStr, sleep) {
-  const valueOf = (r) => {
-    const mins = num(r, 'totalSleepMinutes', 'durationMinutes');
-    return mins != null ? mins / 60 : null;
-  };
-  const night = onDate(sleep, dateStr, valueOf);
+const sleepHrsOf = (r) => {
+  const mins = num(r, 'totalSleepMinutes', 'durationMinutes');
+  return mins != null ? mins / 60 : null;
+};
+
+// ACUTE: the night before the run.
+function probeSleepAcute(dateStr, sleep) {
+  const night = onDate(sleep, dateStr, sleepHrsOf);
   if (night == null) return null;
   const debt = REF.sleepTargetHrs - night;
   if (debt < REF.sleepDebtHrsForFlag) return null;
   return {
     factor: 'sleep',
     direction: 'hurt',
-    detail: `${night.toFixed(1)}h sleep (−${debt.toFixed(1)}h vs ${REF.sleepTargetHrs}h target)`,
-    magnitude: debt,                 // hours short
+    timescale: 'acute',
+    detail: `${night.toFixed(1)}h the night before (−${debt.toFixed(1)}h vs ${REF.sleepTargetHrs}h target)`,
+    magnitude: debt,
     confidence: Math.min(1, debt / 2.5),
+  };
+}
+
+// CHRONIC: rolling 7-night cumulative deficit vs target. A week of under-
+// sleeping degrades performance even if last night was fine.
+function probeSleepChronic(dateStr, sleep) {
+  const nights = baselineRows(sleep, dateStr, 7, sleepHrsOf);  // last 7 nights before the run
+  if (nights.length < 4) return null;                          // need most of the week
+  const avg = nights.reduce((s, v) => s + v, 0) / nights.length;
+  const debtPerNight = REF.sleepTargetHrs - avg;
+  if (debtPerNight < 0.75) return null;                        // ≥45min/night short
+  const weekDebt = +(debtPerNight * nights.length).toFixed(1);
+  return {
+    factor: 'sleep-debt',
+    direction: 'hurt',
+    timescale: 'chronic',
+    detail: `~${avg.toFixed(1)}h/night over ${nights.length} nights (${weekDebt}h cumulative debt) — compounding`,
+    magnitude: debtPerNight,
+    confidence: Math.min(1, debtPerNight / 1.5),
   };
 }
 
@@ -115,6 +141,7 @@ function probeHrv(dateStr, sleepRows, hrvRows) {
   return {
     factor: 'hrv',
     direction: 'hurt',
+    timescale: 'acute',
     detail: `HRV ${Math.round(today)}ms (−${Math.round(base - today)}ms vs ${Math.round(base)} baseline)`,
     magnitude: dropPct,
     confidence: Math.min(1, dropPct / 0.30),
@@ -135,6 +162,7 @@ function probeRhr(dateStr, sleepRows, hrvRows) {
   return {
     factor: 'rhr',
     direction: 'hurt',
+    timescale: 'acute',
     detail: `RHR ${Math.round(today)}bpm (+${Math.round(rise)} vs ${Math.round(base)} baseline) — possible illness/incomplete recovery`,
     magnitude: rise,
     confidence: Math.min(1, rise / 10),
@@ -165,6 +193,7 @@ function probeFuel(dateStr) {
   return {
     factor: 'fuel',
     direction: 'hurt',
+    timescale: 'acute',
     detail: `intake ${Math.round(todayKcal)}kcal — ${Math.round(ratio * 100)}% of your ~${Math.round(base)}kcal norm`,
     magnitude: 1 - ratio,
     confidence: Math.min(1, (1 - ratio) / 0.5),
@@ -183,6 +212,7 @@ function probeWeather(activity) {
   return {
     factor: 'heat',
     direction: 'hurt',
+    timescale: 'acute',
     detail: `${Math.round(tempC)}°C${humidNote} — above ~${REF.heatThresholdC}°C performance accrues a cost`,
     magnitude: overHeat,
     confidence: Math.min(1, overHeat / 12),
@@ -197,7 +227,8 @@ function probeLoad(dateStr, acwr) {
   return {
     factor: 'load',
     direction: 'hurt',
-    detail: `ACWR ${acwr.toFixed(2)} — acute load spike; fatigue may be masking fitness`,
+    timescale: 'chronic',  // ACWR is an accumulated 7-vs-28d ratio, not a single-day event
+    detail: `ACWR ${acwr.toFixed(2)} — elevated training load; fatigue may be masking fitness`,
     magnitude: acwr - REF.acwrHighForFlag,
     confidence: Math.min(1, (acwr - REF.acwrHighForFlag) / 0.4),
   };
@@ -290,9 +321,12 @@ export function attributeOutcome(opts = {}) {
   }
 
   // ── Cross-examine confounders (always run — they characterize the day even
-  //    when there's no expectation to compare against). ──
-  const culprits = [
-    probeSleep(dateStr, sleep),
+  //    when there's no expectation to compare against). Split by TIMESCALE:
+  //    acute factors plausibly affected THIS effort; chronic factors are
+  //    standing risks that compound over weeks (and may dull the pinnacle). ──
+  const allFactors = [
+    probeSleepAcute(dateStr, sleep),
+    probeSleepChronic(dateStr, sleep),
     probeHrv(dateStr, sleep, hrv),
     probeRhr(dateStr, sleep, hrv),
     probeFuel(dateStr),
@@ -301,18 +335,31 @@ export function attributeOutcome(opts = {}) {
   ].filter(Boolean)
    .sort((a, b) => b.confidence - a.confidence);
 
-  // ── Compose a plain-language summary (this is the "coach not calculator" line). ──
+  const acute   = allFactors.filter(f => f.timescale === 'acute');    // affected THIS effort
+  const chronic = allFactors.filter(f => f.timescale === 'chronic');  // standing risks to watch
+  // `culprits` kept for back-compat (all factors, confidence-ranked).
+  const culprits = allFactors;
+
+  // ── Compose a plain-language summary (the "coach not calculator" line). ──
+  // Whether we can ASSESS performance depends on having an expectation.
+  // Acute factors get attributed to the result; chronic factors are appended
+  // as standing risks even when they didn't clearly cost this effort.
+  const acuteList   = () => acute.map(c => c.detail).join('; ');
+  const chronicNote = () => chronic.length
+    ? ` Standing risk${chronic.length > 1 ? 's' : ''} to watch: ${chronic.map(c => c.detail).join('; ')}.`
+    : '';
   let summary;
   if (verdict === 'underperformed') {
-    summary = culprits.length
-      ? `Ran ${Math.round(divergencePct * 100)}% slower than expected — likely ${culprits.map(c => c.factor).join(' + ')}: ${culprits[0].detail}.`
-      : `Ran ${Math.round(divergencePct * 100)}% slower than expected, but no clear confounder — may be a genuine fitness read.`;
+    summary = acute.length
+      ? `Ran ${Math.round(divergencePct * 100)}% slower than expected — likely ${acute.map(c => c.factor).join(' + ')}: ${acute[0].detail}.`
+      : `Ran ${Math.round(divergencePct * 100)}% slower than expected with no acute confounder — may be a genuine fitness read.`;
+    summary += chronicNote();
   } else if (verdict === 'overperformed') {
-    summary = `Beat expectation by ${Math.round(-divergencePct * 100)}%${culprits.length ? ` despite ${culprits.map(c => c.factor).join(' + ')}` : ''} — strong signal.`;
+    summary = `Beat expectation by ${Math.round(-divergencePct * 100)}%${acute.length ? ` despite ${acute.map(c => c.factor).join(' + ')}` : ''} — strong signal.` + chronicNote();
   } else if (verdict === 'as-expected') {
-    summary = culprits.length
-      ? `On expectation, even with ${culprits.map(c => c.factor).join(' + ')} working against you — solid.`
-      : `Right on expectation under clean conditions — a trustworthy read.`;
+    summary = (acute.length
+      ? `On expectation, even with ${acute.map(c => c.factor).join(' + ')} working against you — solid.`
+      : `Right on expectation under clean conditions — a trustworthy read.`) + chronicNote();
   } else if (verdict === 'not-an-effort') {
     if (effort === 'easy') {
       const disc = zoneDiscipline
@@ -320,18 +367,23 @@ export function attributeOutcome(opts = {}) {
             ? `${zoneDiscipline.detail} ✓`
             : `${zoneDiscipline.detail} — ease off to protect the aerobic stimulus`)
         : `avg HR ${avgHR} ≤ Z2 ceiling ${zones.z2Ceiling}`;
-      summary = `Easy run — ${disc}.${culprits.length ? ` Conditions of note: ${culprits.map(c => c.detail).join('; ')}.` : ''}`;
+      summary = `Easy run — ${disc}.${acute.length ? ` Conditions of note: ${acuteList()}.` : ''}${chronicNote()}`;
     } else {
       const eLabel = effort === 'tempo' ? `Tempo/sub-threshold run (avg HR ${avgHR})` : `Sub-race effort`;
-      summary = `${eLabel} — judged on zone discipline + efficiency, not race pace.${culprits.length ? ` Conditions of note: ${culprits.map(c => c.detail).join('; ')}.` : ''}`;
+      summary = `${eLabel} — judged on zone discipline + efficiency, not race pace.${acute.length ? ` Conditions of note: ${acuteList()}.` : ''}${chronicNote()}`;
     }
   } else {
-    summary = culprits.length
-      ? `Conditions of note: ${culprits.map(c => c.detail).join('; ')}.`
-      : `No notable confounders on ${dateStr}.`;
+    // verdict === 'no-expectation' — be HONEST: we couldn't grade performance
+    // (no expected time for this effort/race type). Do NOT imply we checked &
+    // cleared everything — report conditions, distinguish acute vs chronic.
+    const cantAssess = effort === 'hard'
+      ? `Hard effort, but can't grade performance — no expectation for this ${activity.type === 'race' || activity.isRace ? 'race type' : 'session'}.`
+      : `Can't grade performance — no expectation set.`;
+    const acutePart = acute.length ? ` Acute factors present: ${acuteList()}.` : ` No acute confounders detected.`;
+    summary = `${cantAssess}${acutePart}${chronicNote()}`;
   }
 
-  return { date: dateStr, verdict, divergencePct, effort, zoneDiscipline, culprits, summary };
+  return { date: dateStr, verdict, divergencePct, effort, zoneDiscipline, acute, chronic, culprits, summary };
 }
 
 // ── Debug helper ─────────────────────────────────────────────────────────────
@@ -367,7 +419,23 @@ if (typeof window !== 'undefined') {
       maxHR = getEffectiveMaxHR(_storage.get('profile') || {}, activities);
     } catch {}
 
-    const result = attributeOutcome({ activity: target, expectedSecs, maxHR });
+    // Attach weather so the heat probe can fire (v1 only saw weather if it was
+    // already on the activity — it usually isn't). Best-effort: the day's MAX
+    // temp is the relevant heat stress for a daytime race. Skips silently on
+    // any failure (offline, geolocation denied).
+    let actForAttr = target;
+    if (!Number.isFinite(Number(target.tempC))) {
+      try {
+        const { fetchWeatherForDate } = await import('./pdfParser.js');
+        const w = await fetchWeatherForDate(target.date);
+        if (w && Number.isFinite(w.tempMaxC)) {
+          actForAttr = { ...target, tempC: w.tempMaxC };
+          console.log('[attribution] attached weather:', `${Math.round(w.tempMaxC)}°C max (${w.condition})`);
+        }
+      } catch {}
+    }
+
+    const result = attributeOutcome({ activity: actForAttr, expectedSecs, maxHR });
     const avg = Number(target.avgHR || target.avgHeartRate) || null;
     console.log('━━ Attribution ━━', target.date,
       `(${target.distanceMi}mi in ${target.durationSecs}s, avgHR ${avg ?? '—'}, lifetime maxHR ${maxHR ?? '—'})`);
@@ -375,7 +443,8 @@ if (typeof window !== 'undefined') {
     console.log('verdict:', result.verdict, 'effort:', result.effort,
       result.divergencePct != null ? `(${(result.divergencePct * 100).toFixed(1)}%)` : '');
     if (result.zoneDiscipline) console.log('zone discipline:', result.zoneDiscipline);
-    console.log('culprits:', result.culprits);
+    console.log('acute (affected this effort):', result.acute);
+    console.log('chronic (standing risks):', result.chronic);
     console.log('summary:', result.summary);
     return result;
   };
