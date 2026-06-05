@@ -10,12 +10,456 @@
 ---
 
 ## Last updated
-2026-06-03 — Race-day fixes (race-pre signature image + Coach race-name)
+2026-06-04 — Hub core DONE (39/39, live via hubDebug); NEXT chapter planned → docs/HUB_GO_LIVE.md
+
+## ▶ ACTIVE NEXT CHAPTER: Hub Go-Live (plan in docs/HUB_GO_LIVE.md)
+Make the hub live, accurate, visible. 4 sequenced steps (do pure-logic 1–2 first = no build risk;
+render edits 3–4 when mount stable). Tasks #46–#49 seed this.
+  1. CALIBRATION — best-anchor (not training-average) so hub 10K ≈ Races 49:23 not 56:48; wire personal k.
+  2. PERSIST + BOOT — core/hub/hubBoot.js (ensureHub/recordRaceLive) + 1 guarded Arnold.jsx hook.
+  3. UI SURFACE — caveated hubFacts card (predictions + response sensitivities).
+  4. PREDICTOR UNIFY — route Races + Trend racePredictor through predictFromFitness (kills 49:23 vs 1:01:40).
+After this: Coaching Team (COACHING_TEAM.md) reads the live hub, voiced by the parked narration layer.
+Plan-Generator stage 1 is the one item BLOCKED on Emil input (training days/week + strength commitment).
+
+## Intelligence Hub — core loop, cut 5 (2026-06-04) — BACKFILL + WIRED (debug entry)
+
+## ★ Intelligence Hub — core loop, cut 5 (2026-06-04) — BACKFILL + WIRED (debug entry)
+The hub now boots from real history and is reachable in-app. Pure logic node-tested; full hub
+suite (hubCore 11 + hubIngest 8 + hubState 7 + hubRaceFitness 5 + hubBackfill 5 + hubFacts 3) =
+39/39, all executed.
+- **`src/core/hub/backfill.js`** — `backfillHub(activities, {attributionFn, k, ...})` replays
+  qualifying races CHRONOLOGICALLY: for each, predict from the hub's fitness-so-far → attribute →
+  recordRace. First race seeds fitness (no prediction yet); later races' residuals teach the
+  response model. Recency via gap-based ageWeeks (decay prior by gap since previous checkpoint).
+  `defaultIsCheckpoint` = running race/hard effort ≥3km. DI `attributionFn` (app passes a wrapper
+  around attributeOutcome; tests pass a fake) keeps it node-testable.
+- **`src/core/hub/hubFacts.js`** (PURE, tested) — renders state → {refEquivSecs, fitnessConfidence,
+  predictions[5K/10K/HM/M via predictFromFitness], responses[{factor,perUnitPct,unit,confidence,text}]}.
+  fmtTime helper. "heat ≈ 0.42%/°C (confidence 38%)" style facts.
+- **`src/core/hub/hubDebug.js`** (browser glue, NOT node-tested) — `buildHubFromStorage()` reads
+  storage.get('activities'), backfills via real attributeOutcome, returns {state,trace,count,facts};
+  attaches `window.hubDebug(opts)` (read-only: backfills + console-logs predictions + response facts).
+- **Arnold.jsx**: ONE import line added (~L96) `import "./core/hub/hubDebug.js";` next to the other
+  window.*Debug wirings. (Windows file verified complete; mount truncated it mid-write again = phantom.)
+MOBILE: no separate step — hub is shared web code, reaches Android via `npm run build && npx cap sync`.
+Hub is also self-deriving (backfills from synced activities), so it need not sync its own state.
+VERIFY AFTER REBUILD: open the app/web console and run `window.hubDebug()` → should print N backfilled
+checkpoints, fitness 10K-equiv + 5K/10K/HM/M predictions, and any learned response sensitivities.
+
+### CHECKPOINT-SELECTION FIX (2026-06-04, after first window.hubDebug() showed 0 checkpoints)
+First live run returned 0 — the original `defaultIsCheckpoint` required name/flag "race"/"tempo",
+but real activities are plain `activityType:'running'`, names like "Morning Run", NO race flag, often
+NO avgHR. REPLACED with `defaultSelectCheckpoints(activities)` (backfill.js) mirroring
+tileMetrics.findEmpiricalRaceAnchor: a run qualifies if (1) explicit race (isRace/type'race'), OR
+(2) standard-distance (±5% of 5/10/21.0975/42.195km) AND hard (avgHR≥85%max OR pace≤92% of median
+≥16km long-run pace), OR (3) quality long run ≥10mi. Gated on isRun() (HYROX excluded). So Emil's
+LONG RUNS now seed fitness (honest: easy long → conservative Riegel projection). backfillHub takes
+`opts.selectCheckpoints` override. Tests updated (hubBackfill 5/5, hubFacts 3/3 with realistic shapes).
+If hubDebug still shows 0 after rebuild → check whether ≥10mi runs exist in synced storage activities.
+
+### ✅ LIVE RESULT (2026-06-04, after rebuild): hub works — but conservatively anchored
+`window.hubDebug()` → backfilled **9 checkpoints**, fitness 10K-equiv 3408s (conf 0.86) →
+predictions 5K 27:15 / 10K 56:48 / HM 2:05:20 / M 4:21:19; response model empty.
+CALIBRATION FINDING (important, not a bug): predictions are ~conservative (M 4:21 vs Emil's real
+2× sub-3:47; 10K-equiv ~7-8min slow). WHY: the 9 qualifying checkpoints were all QUALITY LONG RUNS
+(easy training pace), no hard race efforts / no avgHR in the data → Riegel from easy pace projects
+slow (same conservatism as the existing tier-2 anchor). Response empty because no graded races with
+confounders yet. SELF-CORRECTS once a real race or HR-bearing fast effort is logged (a result faster
+than the conservative estimate = overperformance = fitness signal that lifts it).
+IMPLICATIONS for the deferred UI-surfacing step:
+  • DON'T surface these predictions in the Coach without a "training-anchored / conservative" caveat
+    (or until race-calibrated) — they read ~35min slow on the marathon and will look wrong to Emil.
+  • 0.86 confidence reflects DATA VOLUME, not race accuracy — consider a separate "race-calibrated
+    confidence" (low until a real race effort anchors it) before surfacing assertively.
+  • Possible refinement: down-weight pure easy-long-run reads further, or require effort/HR for full
+    fitness precision, so the estimate stays humble until a real effort calibrates it.
+This is the calibration loop behaving correctly on training-only data; it is the expected v1 state.
+
+### PREDICTOR INCONSISTENCY found 2026-06-04 (Emil: FOLD INTO HUB later, do NOT band-aid now)
+Same race, two different predictions in the existing app: Races page Queens 10K = 49:23, Trend
+"Race Predictor" KRI = 1:01:40. ROOT CAUSE (diagnosed, not the hub): two independent predictor paths.
+  • Races page (GoalsHub/CalendarTab) → predictRaceFinish → findEmpiricalRaceAnchor = SINGLE BEST
+    anchor (fastest demonstrated effort) + personal fatigueExponent k → 49:23 ("what can you race?").
+  • Trend racePredictor (tileMetrics.js L898 metric; displayed value from its `timeframes()` L1015-1053)
+    → `mode:'avg'` over `riegelPredictFromRun(a, fieldKey)` for ALL runs → AVERAGES every run's 10K
+    projection, dragged slow by easy runs → 1:01:40. (Also note compute().value hardcodes headline.tHM
+    at L984 — a separate latent oddity.)
+DECISION: don't tactically patch the Trend metric. Instead, when the hub becomes the single predictor,
+route BOTH Races + Trend through predictFromFitness (one fitness model → one number everywhere). This
+inconsistency is the canonical motivation for the hub-as-single-source-of-truth. Tracked here.
+
+### NEXT (deferred — paused here per Emil)
+1. Coach-UI surfacing: show hubFacts ("for you, heat ~X%/°C"; hub predictions) in the Coach/EdgeIQ —
+   the careful render edit, do when mount is stable.
+2. Persist-on-boot: load hub:state on app boot, recordRace when a race grades, saveHubState — so it's
+   incremental, not re-backfilled each call. (Currently hubDebug re-backfills read-only.)
+3. Wire personal k: feed the existing fatigueExponent fit into buildHubFromStorage instead of 1.06.
+4. Coaching-Team / Plan-Generator consume hub state (predictFromFitness, hubFacts, response model).
+⚠ Stale-mount keeps truncating Arnold.jsx + edited test files mid-write — re-emit via bash heredoc,
+strip NULs, verify Windows file via Read tool. Bash writes = reliable mount channel.
+
+## Intelligence Hub — core loop, cut 4 (2026-06-04) — REAL RACES → FITNESS LEDGER
+
+## ★ Intelligence Hub — core loop, cut 4 (2026-06-04) — REAL RACES → FITNESS LEDGER
+Connected logged races to the fitness ledger and made the accumulated fitness predict. Pure logic,
+tested: `node arnold-app/tests/hubRaceFitness.test.mjs` → 5/5; full hub suite (hubCore 11 +
+hubIngest 8 + hubState 7 + hubRaceFitness 5) = 31/31, all executed. Still no app wiring.
+- **`src/core/hub/raceFitness.js`** — Riegel inversion consistent with tileMetrics.js (T2=T1·(D2/D1)^k).
+  Hub fitness scalar = `ref10kEquivSecs` (race normalized to 10K via personal k). Exports:
+  `raceEquivSecs(distKm,secs,k)`, `observationsFromRace(race,{k})` → paramObservations,
+  `predictFromFitness(fitnessModel,targetKm,{k})` → predicted secs+confidence (unfolds the scalar),
+  `recordRace(hubState,race,attribution,{k})` → recordCheckpoint (both ledgers). k defaults 1.06;
+  pass the personal fatigueExponent k when known. NON-running results (HYROX, no dist/time) → skipped.
+- **ROUTER DECOUPLE (design fix, ingestCheckpoint.js rewritten):** fitness updates no longer require
+  a prior expectation — a race is a direct fitness measurement, so a FIRST race seeds fitness. Only
+  the RESPONSE ledger needs a residual (divergencePct>0). gradeCheckpoint now returns
+  {obsPrecision (=cleanliness×effort, always), hasExpectation, responseable}. Updated hubIngest tests
+  (now 8: added "first race seeds fitness w/o prediction" + "no fitness obs → nothing moves").
+- Proven round-trip: log a 40:00 10K → predicts the 10K back AND a ~1:28 HM via personal k.
+- ⚠ Stale-mount truncated ingestCheckpoint.js + hubIngest.test.mjs mid-write AGAIN; re-emitted via
+  bash heredoc, re-ran clean. Windows files authoritative/correct. (Bash writes = reliable mount channel.)
+HUB STATUS: Estimate → response+fitness ledgers → router → persistent hubState → race↔fitness I/O.
+NEXT: (1) BACKFILL — replay historical races through recordRace to seed both ledgers from day one;
+(2) app WIRING — load hub on boot, recordRace when a race is graded, save, surface response facts +
+hub predictions in the Coach/predictor; (3) wire personal k from existing fatigueExponent into the
+hub calls; (4) Coaching-Team / Plan-Generator consumption.
+
+## Intelligence Hub — core loop, cut 3 (2026-06-04) — PERSISTENCE
+
+## ★ Intelligence Hub — core loop, cut 3 (2026-06-04) — PERSISTENCE
+The hub now accumulates across sessions (the point of "learning over time"). Pure logic, tested:
+`node arnold-app/tests/hubState.test.mjs` → 7/7; full hub suite (hubCore+hubIngest+hubState) = 25/25,
+all executed in sandbox. Still no app wiring (nothing imports core/hub/* → zero build risk).
+- **`src/core/hub/hubState.js`** — `createHubState({fitnessPriors})`; `recordCheckpoint(state,
+  attribution, opts)` → {state, ingest} (runs the router, folds ledgers back, appends a compact
+  dated log entry capped at 200, sets lastUpdated); `serializeHubState`/`deserializeHubState`
+  (JSON round-trip + version migration; deserialize is PARANOID — junk/corrupt-estimate/future-
+  version all → clean fallback via `coerceEstimates`); `saveHubState(state, store)` /
+  `loadHubState(store)` take an INJECTED store ({get,set}) so the module stays node-testable —
+  the app passes the real `storage` from core/storage.js. Key: `hub:state`, version 1.
+- Proven: a 2nd hot-race obs grows heat-sensitivity confidence; survives serialize→store→reload.
+HUB STATUS: spine complete — Estimate → responseModel + fitnessModel → ingestCheckpoint router →
+hubState (persistent, accumulating, self-healing). All core/hub/*, unwired from the app.
+NEXT (still unbuilt): (1) race→param INVERSION — derive paramObservations from a real logged race
+via predictRaceFinish (connects real data to the fitness ledger; the one caller-supplied gap left
+in cut 2); (2) BACKFILL — replay historical graded efforts through recordCheckpoint to seed the
+response model; (3) app WIRING — load hub state on boot, recordCheckpoint when an effort is graded,
+save; surface response-model facts in the Coach ("for you, heat ~X%/°C"); (4) Coaching-Team /
+Plan-Generator consumption of hub state.
+
+## Intelligence Hub — core loop, cut 2 (2026-06-04) — LOOP CLOSED
+
+## ★ Intelligence Hub — core loop, cut 2 (2026-06-04) — LOOP CLOSED
+Added the fitness ledger + the router that ties both ledgers together. All pure logic, tested:
+`node arnold-app/tests/hubIngest.test.mjs` → 7/7, plus cut-1 `hubCore.test.mjs` 11/11 = 18/18, all
+actually executed in sandbox. No app wiring yet (nothing imports core/hub/* → zero build risk).
+- **`src/core/hub/fitnessModel.js`** — params as Estimates; `updateFitness` with sanity clamps:
+  ABSOLUTE bounds reject impossible values (fatigueExponentK ∉ [1.0,1.25] → rejected, model
+  unchanged), RATE bound clamps implausible weekly shifts (thresholdPaceSecPerKm ≤4 s/km/wk →
+  clamped + flagged). Returns {model, log} (explainable: prior, obs, appliedObs, clamped, reason).
+- **`src/core/hub/ingestCheckpoint.js`** — the ROUTER + `gradeCheckpoint`. Grades a checkpoint's
+  fitness precision = cleanliness × effort (cleanliness = 1/(1+Σ acute confidence); effort hard=1
+  / tempo=0.5 / easy=0.25; no-expectation → 0/not gradeable). Then: fitness update at graded
+  precision + residual→response (ONLY when divergencePct>0; overperformance = fitness signal,
+  not "the heat helped"). Returns {fitnessModel, responseModel, log{grade,fitness,response,summary}}.
+  Consumes attributeOutcome shape {verdict,divergencePct(signed fraction,+=slower),effort,acute[],chronic[]}.
+- KEY proven property: a confounded 3%-slow race moves fitness <0.5s (precision-damped) AND routes
+  the 3% to the response model split heat/sleep — the two-ledger principle in one test.
+NEXT cut (HUB_CORE.md build sequence): persistence (store/restore ledgers in storage), backfill
+from history (replay graded efforts to seed the response model), recency-decay scheduling, then
+the race→param inversion (derive paramObservations from a real race result via predictRaceFinish),
+then Coaching-Team / Plan-Generator consumption of hub state. NOTE: paramObservations are currently
+caller-supplied (cut 2 didn't build the race→threshold inversion — that's the next concrete piece).
+
+## Intelligence Hub — core loop, cut 1 (2026-06-04)
+
+## ★ Intelligence Hub — core loop, cut 1 (2026-06-04)
+Emil chose "build the hub core loop (two-ledger + response model)" as the next foundation.
+This is the FIRST real code of the Intelligence Hub itself (not UI). Pure logic, unit-tested
+(`node arnold-app/tests/hubCore.test.mjs` → 11/11 pass, actually executed in sandbox).
+- **`docs/HUB_CORE.md`** — design: the loop (grade cleanliness → fitness update + residual→response
+  → decay → log), schemas, residual-partitioning math, guardrails, build sequence. Grounded in
+  INTELLIGENCE_HUB.md "Calibration math" + attribution.js output shape.
+- **`src/core/hub/estimate.js`** — Bayesian `{value, precision}` primitive: `updateEstimate`
+  (precision-weighted blend — naive prior moves a lot, established prior barely moves; "one 10K
+  shouldn't rewrite history" falls out of the math), `decayPrecision` (half-life recency),
+  `confidence` (saturating p/(p+k0), gates coach assertiveness).
+- **`src/core/hub/responseModel.js`** — the SECOND ledger. `observeOutcome(model, divergence,
+  factors)` partitions the residual across ACUTE attribution factors by magnitude·confidence →
+  accumulates per-confounder sensitivity (fraction-per-unit); `predictPenalty(conditions)` →
+  "expect ~2% slower: heat ~1.5%, sleep ~0.5%" with confidence; `sensitivityOf`. Consumes the
+  attribution factor shape `{factor,timescale,magnitude,confidence}`. Shares sum to residual
+  (no double-count); chronic/empty/zero inputs are no-ops.
+NEXT cut (per HUB_CORE.md build sequence): `fitnessModel.js` (params as Estimates + sanity clamps)
++ `ingestCheckpoint.js` (the router: takes {predicted, actual, attributeOutcome result} → grades
+cleanliness → updates fitness + response → explainable log), with a fixture test over a real
+graded effort. Then persistence + backfill from history, then Coaching-Team/Plan-Gen consumption.
+
+## Narration Layer (guided local-LLM "one voice") — built + validated, DEPLOYMENT DEFERRED (2026-06-04)
+
+## ★ Narration Layer + local-LLM experiment (2026-06-04)
+Explored using a small local model (HuggingFace/LM Studio) as Arnold's narrative voice.
+Tested 3 phone-realistic models on real data (free-form, raw JSON):
+- **Qwen 3 8B** — faithful but vague; BURIED the key signal (overreaching rTSS).
+- **Phi-4-mini 3.8B** — numbers correct, best-ish salience, but LEAKED JSON keys + INVENTED
+  "a session on Monday" (true hallucination).
+- **Gemma 3 4B** — WARMEST + BEST salience (caught the A:C 0.43 vs rTSS 171 tension), but
+  MISREAD calorie target as intake (said "high" when 380 under) + leaned on chat memory.
+Conclusion: all faithful on explicit numbers; NONE safe doing selection / interpretation /
+free generation. **Chosen narrator: Gemma 3 4B.** Each failure = the model doing a job it
+shouldn't (select / interpret / invent) — all removed by a guided contract.
+- **New doc: `arnold-app/docs/NARRATION_LAYER.md`** — the guided design + paste-ready test kit:
+  the **narration contract** (engine → narrator: pre-interpreted, pre-numbered, ordered
+  `must_mention` + `may_mention` + `closing`; cross-day context supplied, never recalled), the
+  guided **system prompt**, two worked examples (HYROX day + sparse rest day), and the wiring
+  (templates now → arbiter emits the contract later; the contract IS the arbiter's output shape,
+  per COACHING_TEAM.md §3 "one voice"). Calls LM Studio local server (localhost:1234) for proto.
+- Also at workspace root: `LLM_NARRATIVE_TEST.md` (the original FREE-FORM test kit).
+VALIDATED 2026-06-04: ran the guided prompt on Gemma 3 4B and iterated the prompt 3× — each
+iteration closed one failure channel (calorie misread → fixed by pre-interpreted contract;
+invented "75%" number → fixed by no-new-numbers rule; invented hydration/nutrition advice +
+padding → fixed by no-advice/no-padding rule). FINAL Example-B output was CLEAN: every number
+from the contract, no invented number, no invented advice, no padding, warm voice, natural
+closing. Recipe proven end-to-end on a 4B phone-sized model:
+deterministic engine → guided contract → tightened narrator prompt → number-validator backstop.
+NEXT BUILD: engine-side `core/narration/` module — (1) contract templater that assembles
+must_mention (pre-interpreted, pre-numbered, priority-ordered) from the presentation-layer
+registry values + attribution.js output + closing; (2) the deterministic number-validator
+(allowed-number set from contract → regex output → reject/regen on stray number). Emil wires the
+actual LM Studio / on-device call. (No app code shipped this session — design + experiment only.)
+
+## Presentation Layer Pass 1 — EdgeIQ web driver rail (2026-06-04)
+
+## ★ Presentation Layer Pass 1 — EdgeIQ web driver rail (2026-06-04)
+Scope chosen by Emil: "Registry-fy web EdgeIQ tiles" (NOT unify web+mobile — they show different
+things: web = MiniStat driver rail, mobile = Health Systems scorecard; left mobile alone).
+- **New: `src/core/presentation/edgeiqRegistry.js`** — `EDGE_SIGNALS` (one def per signal:
+  domainActivity/Nutrition/Body, acwr, rtssToday, weeklyLoad, calLeft, proteinLeft, glycogen,
+  hrv, sleep, weight — each carries label/type/tier/valuePx/fmt + a `select(bag)` for value+sub+
+  history); `resolveEdgeStat(id, bag)` → props for the existing `<MiniStat>`; `EDGE_RAIL` =
+  declarative column layout (domain col · sep · Activity · Nutrition · Body brackets).
+  `display` field handles tiles whose shown text ≠ color-driving value (Glycogen word, Sleep h/score).
+- **Arnold.jsx**: import added (~L62); web EdgeIQ render (~L10383) now builds an `edgeBag` (the
+  already-computed values + sparkline histories + rtssBand helper) and maps `EDGE_RAIL` →
+  RailColumns/MiniStats via resolveEdgeStat. The 4 hand-written RailColumns were deleted. The
+  `MiniStat`/`RailColumn`/`Sep` renderers AND the trailing Action+Race column (bespoke ✓/race JSX)
+  are unchanged.
+- Intended: ZERO visual change — same tiles, same values, just sourced through the registry.
+- Full file parses clean. NOT visually build-verified — rebuild from Windows + eyeball EdgeIQ.
+- ⚠ Stale-mount NULs recurred (2089); stripped + Windows file confirmed clean (now 11492 lines).
+NEXT options: (a) the special Action+Race tiles could join a registry later; (b) Start tiles /
+session-detail surfaces; (c) mobile EdgeIQ is deliberately NOT registry-fied (different surface).
+
+## Presentation Layer Pass 0b COMPLETE — whole hero band shared (2026-06-04)
+
+## ★ Presentation Layer Pass 0b — ContextCluster (2026-06-04) — HERO BAND FULLY SHARED
+Extracted the readiness rings + A:C chip (the `context` role) into a shared component. With
+this, ALL THREE hero-band roles are now declaration-driven and shared by the web Daily hero
+and the mobile Play hero: context (ContextCluster) · headline (LoadGauge) · primary (MetricCluster).
+The hero band can no longer drift between platforms — platform = a surface profile only.
+New files:
+- `src/core/presentation/readinessTokens.js` — `ZONE_COLORS`, `ZONE_LABELS`, `ZONE_LABELS_SHORT`
+  (short A:C labels so "Under-training"→"Under" on compact), `ringColor(s)` (70/45 hex thresholds
+  + null guard, matches the hero ring scoreColor). Moved here so a component can share them
+  without importing back from Arnold.jsx (cycle).
+- `src/components/ContextCluster.jsx` — 7d/30d rings + A:C chip, sized by surface profile.
+Arnold.jsx changes:
+- Imports added (~L60): ContextCluster + `{ ZONE_COLORS, ZONE_LABELS }` from readinessTokens.
+- Module-level `const ZONE_COLORS`/`ZONE_LABELS` (was ~L4181) DELETED → now imported (all existing
+  refs across EdgeIQ etc. resolve to the import unchanged).
+- Mobile Play hero left cluster (~L6376): MiniRing×2 + inline A:C IIFE → `<ContextCluster ...
+  surface="play-hero"/>`. (The inline `MiniRing` def ~L6198 is now dead but left in place — harmless.)
+- Web Daily hero readiness col (~L6499): inline rings map + A:C → `<ContextCluster ...
+  surface="daily-hero"/>`. "Training Readiness" header kept.
+Intentional unifications (eyeball on rebuild): web ring labels now "7d"/"30d" (were "7-day"/
+"30-day"); web A:C chip is now the vertical stack (ratio / zone / "A:C ratio") like mobile, instead
+of ratio+label inline. Mobile A:C unchanged in spirit (still short labels via ZONE_LABELS_SHORT).
+- Full file parses clean. ✅ BUILD-VERIFIED on web & mobile 2026-06-04 (Emil confirmed all in order).
+- ⚠ Stale-mount NULs recurred AGAIN (3746); stripped + Windows file confirmed clean (now 11516 lines).
+
+## Presentation Layer Pass 0b — LoadGauge (2026-06-04)
+
+## ★ Presentation Layer Pass 0b — LoadGauge (2026-06-04)
+Extracted the hero speedometer into `src/components/LoadGauge.jsx` (the `headline` role).
+One self-contained component replaced the two inline SVG copies (web Daily hero + mobile
+Play hero). Props = the gauge MODEL: `value, max, breaks, zoneNames, label, unit, surface`.
+It computes its own geometry (cx/cy/R, arcs, needle, zoneIdx, display) internally.
+- Wiring (Arnold.jsx): import added (~L58); mobile gauge block (~L6434) and web gauge block
+  (~L6522, inside the tooltip+order:2 wrapper) both replaced with `<LoadGauge ... surface=
+  "play-hero|daily-hero" />`; the shared geometry block (was ~L6132-6161) DELETED — the gauge
+  MODEL vars (gaugeValue/gaugeMax/gaugeBreaks/gaugeZoneNames/gaugeLabel/gaugeUnit, ~L6110-6130)
+  stay and feed LoadGauge.
+- BUGFIX via unification: the old MOBILE gauge hardcoded the label "rTSS" even on Tonnage days;
+  LoadGauge uses the real `label`(+unit), so mobile now correctly shows "Tonnage · lbs" / "Load".
+  (rTSS days unchanged — still "rTSS".) Mobile Tonnage value font is 15 (was 18) on big numbers.
+- Full file parses clean (@babel/parser). NOT visually build-verified — rebuild from Windows.
+- ⚠ Stale-mount NUL corruption recurred (5449 trailing NULs on the bash mount); stripped with
+  `tr -d '\000'`, Windows file confirmed clean via Read tool. (See the stale-mount note below —
+  this keeps happening after large edits; always strip+reparse before trusting a full-file parse.)
+NEXT (still Pass 0b/1): ContextCluster (rings + A:C) needs `ZONE_LABELS`/`ZONE_COLORS`/`scoreColor`
+moved to a shared module first (they live in Arnold.jsx module scope, not exported) — that's the
+one extra plumbing step before the context role can be a shared component. Then EdgeIQ/Start/detail.
+
+## Presentation Layer Pass 0 — registry + MetricCluster (2026-06-04)
+
+## ★ Presentation Layer Pass 0 — BUILT (2026-06-04)
+First consumer of docs/PRESENTATION_LAYER.md. The session-quality cluster (the reps/tempo
+tiles) is now declaration-driven and SHARED by the web Daily hero and the mobile Play hero.
+New files:
+- `src/core/presentation/metricRegistry.js` — format/label/tier SoT per metric. Centralizes the
+  run IF/EF tier logic + EF-vs-30d verdict that was DUPLICATED inline in both heroes. `select(bag)`
+  per metric returns a tile descriptor; `selectMetrics(ids, bag)` resolves an ordered list.
+  Value bag = `{ runMetrics, strengthMetrics, ef30Avg }` (pre-resolved; this layer only formats).
+- `src/core/presentation/storySpecs.js` — `STORY` (per-kind role→metric-ids: run→pace/effortIF/
+  efficiency, strength&hybrid→density/workRest/effortPct), `kindFromBag`, `primaryIdsFor(bag)`,
+  `SURFACE` profiles (`play-hero`=compact/short, `daily-hero`=comfortable/full), `profileFor`.
+- `src/components/MetricCluster.jsx` — the ONE renderer. Owns layout (row+wrap, gap, font sizes via
+  DENSITY tiers, short-vs-full label via profile). Pass-0 scope = the `primary` role only.
+Wiring in Arnold.jsx:
+- Imports added (~L57): MetricCluster, primaryIdsFor, selectMetrics.
+- Mobile Play hero (~L6387): deleted the inline runTiles/strengthTiles builders; now builds
+  `heroBag` + `primaryIds`, gates the right grid cell on `selectMetrics(...).length`, renders
+  `<MetricCluster ... surface="play-hero" align="end"/>`.
+- Web Daily hero (~L6659): deleted the inline cells IIFE; same `heroBag`/`primaryIds`, renders
+  `<MetricCluster ... surface="daily-hero" align="start"/>` inside the bordered order:3 cell.
+- Full file parses clean (@babel/parser). ✅ BUILD-VERIFIED on device 2026-06-04 (Emil rebuilt;
+  both heroes render correctly, nothing out of sync).
+Behavior notes / intentional unifications:
+- EF-vs-30d sub text is now ONE wording ("↑ X% vs 30d" / "↓ X% vs 30d" / "≈ 30d avg") — was
+  longer on web, shorter on mobile. Tile VALUE color is now neutral (text-primary) on both; the
+  tier color rides the SUB line (web already did this; mobile previously colored some values).
+- Gauge (headline) + rings/A:C (context) still bespoke — they fold in at Pass 0b/1.
+NEXT (Pass 0b/1, pending Emil's call): extract the load gauge into a shared `<LoadGauge>` (headline
+role) + a `ContextCluster` (rings+A:C), then EdgeIQ/Start/detail surfaces. Pass 2 = arbiter emits
+the story specs (COACHING_TEAM.md) and templates become live reasoning.
+
+## Presentation Layer — design doc (2026-06-04)
+
+## ★ Presentation Layer — design doc written, NEXT decision pending (2026-06-04)
+Emil stepped back from per-screen pixel tweaks (reps/tempo side-by-side, "Under-training"
+wrap, etc.) and named the real problem: we hand-author presentation for every
+**activity kind × surface × platform** combo — that's whack-a-mole and not what the vision
+says the screens are for. The screens should be layer 3 (ONE VOICE / presentation) of the
+Coaching Team, telling the hub's story, not a grid we re-tune by hand.
+- **New doc: `arnold-app/docs/PRESENTATION_LAYER.md`** — defines the fix: a metric registry
+  (one format SoT per metric, extending METRIC_OVERLAP_AUDIT's value-SoT), a per-activity-kind
+  STORY CONTRACT (metrics tagged headline/primary/secondary/context), and ONE responsive
+  `MetricCluster` renderer that owns all layout (direction/wrap/gap/label-length) driven by a
+  SURFACE PROFILE (density). Platform = a profile param, not a code fork. The story shape =
+  the arbiter's output shape, so we build the rendering contract now and the hub fills it later.
+- **Pass 0 proposed:** prove it on the hero band — re-point BOTH web Daily + mobile Play heroes
+  at the same MetricCluster w/ different profiles, so they can't drift and reps/tempo + wrap
+  become declarations, not JSX.
+- **PENDING Emil decision** (5 open questions in the doc §"Open decisions"): Pass-0 scope,
+  where code lives, density auto-vs-fixed, role-vocab depth, message ownership. He said
+  "write up and then we'll decide where/how to take it forward" — so the doc is the deliverable
+  for this turn; next session resumes from his answers to those 5 questions.
+- Tactical state: the reps/tempo fix (mobile right cluster → `flexDirection:'row'`) is IN as a
+  stopgap; it'll be superseded by the MetricCluster when Pass 0 lands.
+
+## Mobile Play hero — declutter the readiness band (2026-06-03)
+
+## Mobile Play hero — declutter the readiness band (2026-06-03)
+User screenshot: mobile Play hero band (`Arnold.jsx` ~L6441, the `1fr auto 1fr` grid)
+rendered cramped — A:C "Under-training" wrapped to two lines, side metrics crowded/clipped
+the card edges. Mobile-only (this band is above the web section, untouched by the web change).
+- **A:C chip** (~L6446): added a short single-word zone map for the narrow chip
+  (`{optimal:'Optimal', undertraining:'Under', overreaching:'Over', danger:'Danger'}`) +
+  `whiteSpace:'nowrap'`, so it stops wrapping and stops blowing out the left cluster width.
+  Global `ZONE_LABELS` left untouched (web/Daily still shows the full words).
+- **Right cluster** (~L6493): tiles now stack value / unit / label VERTICALLY with `nowrap`
+  (was value+unit inline, which was wide and crowded the gauge / clipped the edge).
+- Gauge stays dead-center (grid `1fr auto 1fr` centers the auto column regardless of side widths).
+- NOT visually build-verified — rebuild from Windows. JSX balance confirmed (band parsed clean in isolation).
+
+### ⚠ Sandbox mount went STALE mid-session (read this if babel/build looks wrong)
+After the mobile edits, the sandbox-mount copy of Arnold.jsx FROZE at a truncated 11764 lines
+(ended mid-object at `ait:{`), so `@babel/parser` in the VM reported phantom EOF errors that
+DID NOT exist in the real file. The Read tool (Windows path) showed the correct 11770-line file
+ending in `};`. Lesson: the Edit/Read tools = authoritative Windows path (what the user builds);
+the bash `/sessions/.../mnt/...` mount can lag/truncate. To validate JSX when the mount is stale,
+copy the edited region into a /tmp file and parse THAT in isolation (worked here). Don't trust a
+full-file bash parse when `wc -l` on the mount disagrees with the Read tool's last line number.
+
+## Web Daily hero — mirror mobile 3-col band (2026-06-03)
+Reorganized the WEB Daily hero (`Arnold.jsx` ~L6542 `<section>`) so it mirrors mobile:
+ONE hero rail, two top-level columns — a LEFT readiness band and the Coach digest RIGHT.
+- **Outer grid** now `minmax(0,1fr) minmax(0,1fr)` (was `1fr 1.45fr`) so the Coach column's
+  left border lines up exactly with the divider between the Activity and Nutrition tiles below
+  (that grid is also `1fr 1fr`, same gap) — the symmetry the user asked for.
+- **LEFT band** is a 3-col grid `minmax(0,1fr) auto minmax(0,1fr)` with CSS `order` placing:
+  readiness numbers (rings + A:C, `order:1`) LEFT · speedometer (`order:2`) CENTER ·
+  session-quality cells (Pace/Effort/Eff or Density/W:R/Effort, new `order:3` cell) RIGHT.
+  Achieved by splitting the old single readiness COL2 row: rings+A:C stay in the left cell,
+  the cells IIFE moved out into its own right-cell `<div>`.
+- **Dead readiness-narrative IIFE deleted** (it already `return null`'d since narrative.5.fix.30).
+- Coach (`<CoachComment surface="daily_digest"/>`) is the outer grid's 2nd column, unchanged.
+- JSX verified balanced + full file parses clean via `@babel/parser` (sandbox node).
+- WEB-ONLY; mobile (`MobileHome.jsx`) untouched. NOT visually build-verified — rebuild from Windows.
+
+### ⚠ NUL-corruption recovery (same session)
+After the edits the file failed to parse ("Unexpected character ' '" at EOF). Root cause: the
+file had **3061 trailing NUL bytes** appended (a stale-mount/partial-write artifact, not lost
+code — content was intact). Fixed with `tr -d '\000'`. If a future window sees a parse error at
+the very end of a big file on a line that looks like blank spaces, check for trailing NULs
+(`tr -cd '\000' < f | wc -c`) before assuming a real syntax bug. Confirmed clean via Read tool
+(Windows-visible path) afterward.
+
+## Race-day fixes (2026-06-03, race-pre signature image + Coach race-name)
 
 ## Race-day fixes (2026-06-03, from HYROX race day)
 - **Mobile pre-race tile had no image** — `PlannedWorkoutTile.jsx` `race-pre` block was the ONLY state lacking a `SessionSignature` corner-stamp (it only rendered SectionHeader + SplitTopPanel). Added the signature (family='race'/planType='race' → SIGNATURE_SRC.race = race.png). `Card` is position:relative so the absolute stamp anchors fine.
 - **Coach said "your HIIT" on race day** — HYROX classifies as HIIT via activityKind. Fixed in `CoachComment.jsx`: both `composeDigest` (Daily) and `composePlayLine` (Play, via `classifyPlayState` ctx.raceName) now use the race NAME when `raceHorizon.daysOut===0 && race.date===us.asOf`. Daily: "Race done — you raced {name} today 🏁"; Play post-workout/logged_earlier name the race. Falls back to activity label on non-race days.
 - NOT build-verified — rebuild from Windows terminal.
+
+## Race-card-won't-drop-after-HYROX fix (SHIPPED 2026-06-03)
+The pre-race card lingered after the race because "race done" detection was RUN-ONLY (`isRun(a)`), but HYROX logs as strength/cardio, not run. Fixed in THREE places, all broadened to "any non-mobility activity ≥30min or ≥5mi on the race date":
+- `PlannedWorkoutTile.jsx` `raceLogged` fallback (~L205) — flips Play/web tile race-pre → race-complete.
+- `Arnold.jsx` Play race card gate (~L6222, `_raceDoneToday`) — drops the mobile Play RaceFocusCard.
+- `Arnold.jsx` web EdgeIQ race card gate (~L10761, `_raceDoneToday`) — drops the web RaceFocusCard.
+Each now hides the card immediately once the race is logged, not at midnight.
+"vs usual" panel — REAL fix 2026-06-03: the dense inline IIFE had a SYNTAX ERROR (Uncaught SyntaxError 'Unexpected identifier vsusual') that crashed the whole block → nothing rendered, and made all my data-shape theories moot (code never ran). FIX: extracted to a clean top-level `SessionVsUsual({fd,todayStr,divider,subHdr})` component (~Arnold.jsx L4192, before TrainingStressPanel), called from the strength panel's last-panel slot. Always renders when fd has duration; shows today's stats (Duration/AvgHR/Load) labeled "logged", upgrades to "+X% vs usual" deltas once ≥2 prior same-type sessions exist. Uses classifier FUNCTIONS not fd.* properties. LESSON: stop hand-writing dense inline IIFEs in JSX — extract to components.
+- **2nd reason it didn't show (found after the syntax fix):** there are TWO `fitGroups.map` strength-render paths in Arnold.jsx (~L6896 the Daily/desktop card, ~L7298 the alternate). The panel was only added to the L7298 one; user's Daily screenshots render via L6896. NOW added to BOTH (L7072 after that path's VS-GOAL IIFE, + L7385).
+- **3rd fix — comparison bucket too broad (RENDERS NOW, showed bogus +151%/+184% deltas):** `sameType` for HIIT matched all interval RUNS via isHIITAct, so HYROX compared against short interval runs ("15 similar sessions", absurd deltas). FIXED: distinct buckets — hybrid↔hybrid ONLY (isHybridAct, checked first), HIIT excl. hybrid, strength excl. hybrid, run excl. HIIT+hybrid. `typeKind` drives the label. HYROX now reads "Today's hybrid session · 0 prior · logged" (no baseline) instead of comparing to runs. PANEL CONFIRMED RENDERING on Daily.
+
+## Speedometer redesign — rTSS out + zone label + cluster legibility (2026-06-03)
+Per user: hero wasn't rendering cleanly, mobile missing the OVERREACHING zone message web has, and rTSS should come OUT of the dial.
+- **rTSS relocated out of the dial** (BOTH web ~L6592 + mobile ~L6466): dial now shows needle + metric label only; rTSS value moved to a small caption line BELOW, under the zone status.
+- **Zone label added to MOBILE hero** (`zoneLabel` = OVERREACHING/OPTIMAL/etc., needleColor-tinted) — mobile now matches web which already had it (~L6594).
+- **Right cluster legibility**: was cramped horizontal rows; now vertical stack — value (13px) + inline sub-tier + uppercase label below. More breathing room (gap 3, paddingLeft 8). Wrapped center dial+labels in a flex column so zone/rTSS sit under the gauge in the 3-col grid.
+
+## ★ HYROX/hybrid ROOT FIX (2026-06-03) — ended the whack-a-mole
+After patching "HYROX excluded from strength" in 5+ surfaces one-by-one, did the root fix. NEW `isStrengthVolume(a)` in `activityClass.js` = `isStrength(a) || isHybridWorkout(a)`. KEY DESIGN: kept `isStrength()` PURE (unchanged) for CLASSIFICATION (calendar icon/family, activityKind route hybrid→'hiit' first BY DESIGN — changing isStrength would break HYROX's icon). `isStrengthVolume` is the single source of truth for VOLUME/TRACKING surfaces.
+- Audited all isStrength usages. Switched VOLUME surfaces to `isStrengthVol`/`isStrengthVolume`: Arnold.jsx strength hero cluster (L6024), 2× weekly strength rollups (L7079, L7409), ytdStrength (L3662), wk7Str (L8580); MobileHome.jsx thisWeekStr (L119), recent30Str (L129).
+- LEFT untouched (classification/display): fd.isStrength label rendering, calendar activityFamily (hybrid→hiit icon is intentional), isPureRunningRace (predictor already handles hybrid). 
+- Verify after build: HYROX counts toward strength minutes/sessions/YTD everywhere; still shows HIIT-family icon on calendar; predictor still excludes it.
+
+## Mobile round 3 (2026-06-03)
+- **Strength hero cluster missing on HYROX** (this screenshot) — `strengths = todayActs.filter(isStrengthAct)` excluded HYROX → strengthMetrics null → no right cluster. Now uses `isStrengthVol` (root fix above).
+- **vs-usual didn't render on MOBILE** — duration guard read `fd.durationSecs` but grouped/mobile objects may carry only `durationMins`. Now derives `fdDurSecs` from either.
+- **HYROX still on START hero (badge + RACE card)** — `MobileHome.jsx` data hook `nextRace` (~L282) filtered `d>=today`, including race day. Added `_raceDoneOn(rDate)` (any non-mobility ≥30min/≥5mi logged on race date) to the filter → Start badge + RACE perf card drop once logged. (3rd surface with this same fix; Play tile + web EdgeIQ done earlier.)
+- **Play hero RIGHT cluster for non-run days** — runs show Pace/Effort/Efficiency; strength/HYROX showed nothing (asymmetric). Now builds `strengthTiles` from existing `strengthMetrics`: **Density (work rate) · Work:Rest (energy system) · Effort (%maxHR zone)** — meaningful + distinct from the Duration/AvgHR/AnaerTE tiles already below the hero (per user). `rightTiles = runTiles || strengthTiles`; empty div only when neither exists.
+
+## Play hero speedometer centering (FIXED 2026-06-03)
+On non-run days (e.g. HYROX) the Play hero's RIGHT run-metrics cluster is omitted; the old `space-between` flex then pushed the speedometer to the right edge. Changed to a 3-col grid `1fr auto 1fr` (Arnold.jsx ~L6392) with the RIGHT column rendering an empty `<div/>` when no run metrics — speedometer stays dead-center, left cluster balanced by empty right. justifySelf start/end on the side clusters.
+
+## Race card 7-day window regression (FIXED 2026-06-03)
+After HYROX dropped, the NEXT race (NYRR Queens 10K, ~17d out) immediately showed on web EdgeIQ — because that RaceFocusCard used a **60-day** window (`cutoff60`) while the rule (and the Play tab) is **7 days**. Changed web EdgeIQ gate to `cutoff7` (~Arnold.jsx L10760). Now matches the Play tab: race card only within 7 days of race date.
+
+## Daily screen fixes (SHIPPED 2026-06-03)
+- **Trend tab icon** — was reusing Core's Pulse; added distinct `Icon.TrendChart` (line-chart trending up) in MobileHome, mapped weekly→TrendChart in WEB_TAB_ICON_CMP.
+- **Strength minutes/sessions read 0 on HYROX day** — `isStrengthAct` excludes HYROX (HIIT-run precedence: hyrox matches HIIT_RE + has run distance → isRun true → isStrength false). FIX: weekly strength rollups now count `isStrengthAct(a)||isHybridAct(a)` (both Daily VS-GOAL sites, ~L6938 + ~L7258). HYROX/CrossFit/circuits are resistance-heavy → count toward strength. (`isHybridWorkout` imported as `isHybridAct`; 'hyrox'+'cardio_training' both in HYBRID_RE so works regardless of whether Garmin logged it as hyrox or cardio.)
+- **"Today vs your usual" panel (NEW)** — fills the gap below strength VS-GOAL bars / above Nutrition. Compares the logged session vs median of last ≤180d same-type sessions (duration, avgHR, load) as % deltas. Pops when you log; needs ≥3 prior similar sessions. Same-type predicate matches HIIT/hybrid, strength(+hybrid), run(non-HIIT), mobility. (User wanted "how it compares to all such sessions" — daily screen, session-triggered, not weekly-redundant.)
+
+## Web tab bar icons (SHIPPED 2026-06-03)
+Web tab bar used unicode glyphs (◈ ⊕ ▦ etc.); now uses the same gamified inline-SVG icon language as mobile. New `WebTabIcon({tabId,color,size})` exported from `MobileHome.jsx` (maps all 9 web tab ids → best-fit `Icon`: training→GemSpark, daily→PspX, weekly→Pulse, races→Calendar, goals→Target, labs→Pipe, clinical→Pulse, supplements→Pill, settings→User). Wired into `Arnold.jsx` TABS map (replaced `{t.icon}` glyph); active=C.acc, inactive=C.s, size 18. (Web has more tabs than mobile's bottom-nav, so couldn't reuse NavIconForTab/TAB_TO_NAV_ID which sends Daily/Trend/Stack/Profile → 'more'.) NOT build-verified.
+
+## ★ NEXT: Surface attribution in the Coach voice (narrative integration) — user wants the "right way"
+User asked where/when the attribution narrative appears. Answer: TODAY it's CONSOLE-ONLY (`window.attributionDebug`). User chose to surface it the RIGHT way = via the v2.6 narrative layer (one unified coach voice), NOT a standalone competing card.
+- **GOOD NEWS: the narrative layer largely EXISTS already** — `src/core/narrativeComposer.js` has `composeNarrative(userState)`: leverage-point selection (`pickLeverage`/`findProblematicSignals`), causal chains, secondary threads, action + metric-to-watch, a visualization graph, macro context. Rendered via CoachComment (Daily digest / Play / EdgeIQ).
+- **The integration task (design first, then build):** attribution is a DIFFERENT kind of input — event-triggered (a run/race just happened) + explanatory (why did THIS go as it did), vs the narrative's standing-state leverage. KEY DESIGN DECISION: does a fresh hard-effort attribution BECOME that day's leverage point, or feed in as a high-priority THREAD the composer weaves into the opening? (This is the arbiter-priority logic from COACHING_TEAM.md.) Get it wrong → coach either ignores the race or fixates on it.
+- Recommended next session: read pickLeverage/threads end-to-end, design attribution's slot, then wire `attributeOutcome` output into composeNarrative as a post-activity thread. Connecting two BUILT things, not building from scratch.
 
 ## Attribution v2 — SHIPPED 2026-06-03 (`attribution.js`)
 Acute/chronic timescale split + honest messaging. Every probe now tags `timescale` (acute=this-day: last-night sleep, HRV, RHR, fuel, heat; chronic=compounding: sleep-debt rolling-7night, load/ACWR). Result returns `acute[]` + `chronic[]` buckets. New `probeSleepChronic` (rolling 7-night deficit). `no-expectation` verdict now honestly says "can't grade — no expectation for this race type" + lists acute factors (was the misleading "no confounders"). Debug helper attaches weather via `fetchWeatherForDate` (day max temp) so heat probe fires. STILL PENDING: response-model quantification (per-factor % contribution) — needs hub stage 3 response model. Re-test: `window.attributionDebug('2026-06-03')` should now show heat (hot day) as acute + week-long sleep as chronic.

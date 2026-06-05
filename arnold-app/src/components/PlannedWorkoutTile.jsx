@@ -197,12 +197,15 @@ function deriveState({ planned, todayActivities, todayDate, nextRace }) {
       const tolerance = Math.max(0.5, raceDistMi * 0.12);
       if (aMi > 0 && Math.abs(aMi - raceDistMi) <= tolerance) return true;
     }
-    // Phase 4r.race.12 — last-resort fallback. If today IS the race
-    // date AND the user logged any run of meaningful duration (≥30 min)
-    // or a long-run distance (≥5 mi), call it the race. Edge case
-    // (running a non-race long-run on race day) is rare enough that
-    // this is the right tradeoff for users who don't tag activities.
-    if (isRun(a)) {
+    // Phase 4r.race.12 — last-resort fallback. If today IS the race date
+    // AND the user logged any meaningful session, call it the race.
+    // Phase 4r.race.15 — was `isRun(a)` only, which missed NON-RUNNING races:
+    // HYROX/hybrid/strength-format races (and tris) log as strength/cardio,
+    // not run, so the pre-race tile never flipped to race-complete after the
+    // race. Broadened to any NON-MOBILITY activity of meaningful duration
+    // (≥30 min) or distance (≥5 mi). Mobility excluded so a race-morning
+    // shakeout/stretch doesn't false-trigger.
+    if (!isMobility(a)) {
       const mins = (Number(a.durationSecs) || 0) / 60;
       const miles = Number(a.distanceMi) || 0;
       if (mins >= 30 || miles >= 5) return true;

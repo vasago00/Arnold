@@ -99,6 +99,23 @@ export function isStrength(a) {
   return STRENGTH_RE.test(_both(a));
 }
 
+/**
+ * STRENGTH-VOLUME predicate — true for resistance training AND hybrid events
+ * (HYROX, CrossFit, circuits) that are resistance-heavy. Use this for VOLUME /
+ * TRACKING surfaces (weekly strength minutes/sessions, YTD strength counts,
+ * the strength hero quality cluster) so HYROX counts toward strength load.
+ *
+ * Deliberately SEPARATE from isStrength(): isStrength stays pure for
+ * CLASSIFICATION (calendar icon/family, activityKind) where hybrid routes to
+ * 'hiit' first by design. This is the single source of truth that ended the
+ * per-surface HYROX-excluded-from-strength whack-a-mole (Phase 4r.hybrid.root).
+ */
+export function isStrengthVolume(a) {
+  if (!a) return false;
+  if (isMobility(a)) return false;
+  return isStrength(a) || isHybridWorkout(a);
+}
+
 export function isCycling(a) {
   if (!a) return false;
   if (isRun(a) || isMobility(a) || isStrength(a)) return false;

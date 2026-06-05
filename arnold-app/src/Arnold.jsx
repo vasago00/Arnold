@@ -55,10 +55,17 @@ import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { CoachLine } from "./components/CoachLine.jsx";
 import { CoachSigil } from "./components/CoachSigil.jsx";
 import { CoachComment } from "./components/CoachComment.jsx";
+import { MetricCluster } from "./components/MetricCluster.jsx";
+import { LoadGauge } from "./components/LoadGauge.jsx";
+import { primaryIdsFor } from "./core/presentation/storySpecs.js";
+import { selectMetrics } from "./core/presentation/metricRegistry.js";
+import { ContextCluster } from "./components/ContextCluster.jsx";
+import { ZONE_COLORS, ZONE_LABELS } from "./core/presentation/readinessTokens.js";
+import { resolveEdgeStat, EDGE_RAIL } from "./core/presentation/edgeiqRegistry.js";
 import { StackCard } from "./components/StackCard.jsx";
 import { RaceFocusCard } from "./components/RaceFocusCard.jsx";
 import { summarizeRecentSignatures } from "./core/derive/recoverySignature.js";
-import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar, DcyDetails, NavIconForTab, TAB_LABEL, TAB_ACTIVE_COLOR, TAB_ACCENT_COLOR } from "./components/MobileHome.jsx";
+import { MobileHome, MobileEdgeIQ, NAV_ITEMS, useSwipeNav, BottomNavBar, DcyDetails, NavIconForTab, WebTabIcon, TAB_LABEL, TAB_ACTIVE_COLOR, TAB_ACCENT_COLOR } from "./components/MobileHome.jsx";
 import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPanel.jsx";
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
@@ -86,9 +93,10 @@ import { computeUserState as _computeUserStateForCoachRead } from "./core/intell
 import { GROUP_COLOR as BIO_GROUP_COLOR } from "./components/BioactiveStack.jsx";
 import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
 import "./core/attribution.js";   // Intelligence Hub stage 1 — wires window.attributionDebug()
+import "./core/hub/hubDebug.js";  // Intelligence Hub core loop — wires window.hubDebug() (backfill + facts)
 import "./core/zonesDebug.js";    // wires window.zonesDebug() — real HR zones + time-in-zone
 import "./core/zones.js";         // zone resolver + lab-test anchor; wires window.zonesResolved()/setLabTest()
-import { isRun as isRunAct, isStrength as isStrengthAct, isMobility as isMobilityAct, isHIIT as isHIITAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
+import { isRun as isRunAct, isStrength as isStrengthAct, isStrengthVolume as isStrengthVol, isMobility as isMobilityAct, isHIIT as isHIITAct, isHybridWorkout as isHybridAct, isHardSession, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
 import { getTopCoachingPrompts, getPromptsByPillar, runCoachingPromptsHealthProbe } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
 import { runCoachBriefsHealthProbe } from "./core/coachBriefs.js";
 // Phase 4r.dataspine.4 — getDynamicMacroTarget + resolveCalorieTarget
@@ -1790,7 +1798,7 @@ export default function App(){
         <div style={S.hr} className="arnold-hdr-right">{(()=>{let n=data.profile?.name;try{const lp=storage.get('profile')||{};n=lp.name||n;}catch{}return n?<span style={{...S.un,textDecoration:"underline",textUnderlineOffset:"3px"}}>Prepared for {n}</span>:null;})()}<span style={{width:"0.5px",height:"1em",background:C.m,opacity:0.5,alignSelf:"center"}}/><span style={S.dc2}>{(()=>{const d=new Date();const s=new Date(d.getFullYear(),0,1);const wk=Math.ceil((((d-s)/86400000)+s.getDay()+1)/7);return `Week ${wk} · ${d.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric',year:'numeric'})}`;})()}</span></div>
       </header>
       <nav style={S.nav} className="arnold-nav">
-        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={S.ni}>{t.icon}</span><span style={S.nl}>{t.label}{t.beta&&<span style={{marginLeft:6,fontSize:8,fontWeight:800,letterSpacing:'0.14em',color:'#5eead4',background:'rgba(94,234,212,0.14)',padding:'2px 5px',borderRadius:3,verticalAlign:'1px'}}>BETA</span>}</span></button>)}
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.nb,...(tab===t.id?S.nba:{})}}><span style={{...S.ni,display:'inline-flex',alignItems:'center',justifyContent:'center'}}><WebTabIcon tabId={t.id} color={tab===t.id?C.acc:C.s} size={18}/></span><span style={S.nl}>{t.label}{t.beta&&<span style={{marginLeft:6,fontSize:8,fontWeight:800,letterSpacing:'0.14em',color:'#5eead4',background:'rgba(94,234,212,0.14)',padding:'2px 5px',borderRadius:3,verticalAlign:'1px'}}>BETA</span>}</span></button>)}
       </nav>
       <main style={{...S.main,...(isMobileApp&&tab!=='training'?{paddingBottom:90}:{}),...(isMobileApp?{touchAction:'pan-y'}:{})}} className="arnold-main" {...(isMobileApp?mobileSwipe:{})}>
         {/* ── Phase 4q.header.2 — Unified mobile page header ──
@@ -3659,7 +3667,7 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
   // Suffixed with Ytd / Trend where Dashboard already has same-name
   // variables for THIS-WEEK calculations (e.g. avgPaceSecs is this-week
   // pace at line 2595; mine is YTD average and gets a different name).
-  const ytdStrength=yearActs.filter(isStrengthAct);
+  const ytdStrength=yearActs.filter(isStrengthVol);
   const yearStartDt=new Date(now.getFullYear(),0,1);
   const weeksElapsed=Math.max(1,(now-yearStartDt)/(7*86400000));
   const avgWeeklyMi=yearDist/weeksElapsed;
@@ -4174,20 +4182,111 @@ function Dashboard({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mobile
 // TRAINING STRESS PANEL (replaces 7-day trends + Recovery)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const ZONE_COLORS = {
-  optimal:       '#4ade80',
-  undertraining: '#60a5fa',
-  overreaching:  '#fbbf24',
-  danger:        '#f87171',
-  no_data:       'var(--text-muted)',
-};
-const ZONE_LABELS = {
-  optimal:       'Optimal',
-  undertraining: 'Under-training',
-  overreaching:  'Over-reaching',
-  danger:        'Danger',
-  no_data:       'No data',
-};
+// ZONE_COLORS / ZONE_LABELS moved to core/presentation/readinessTokens.js
+// (imported at top) so the ContextCluster component can share the one source.
+
+// Session vs-usual panel — today's logged session at a glance, upgrading to a
+// "vs your usual" comparison once 2+ prior same-type sessions exist. Always
+// renders when there's a session with a duration, so the gap above Nutrition
+// is never empty. (Extracted from a brittle inline IIFE.)
+function SessionVsUsual({ fd, todayStr, divider, subHdr }) {
+  if (!fd) return null;
+  // Duration may live on durationSecs OR durationMins (grouped/mobile objects
+  // sometimes carry only the minutes field). Derive seconds from either.
+  const fdDurSecs = Number(fd.durationSecs) > 0 ? Number(fd.durationSecs)
+                  : Number(fd.durationMins) > 0 ? Number(fd.durationMins) * 60
+                  : 0;
+  if (!(fdDurSecs > 0)) return null;
+  const acts = getUnifiedActivities();
+
+  const fdHybrid = isHybridAct(fd);
+  const fdHIIT = isHIITAct(fd);
+  const fdStrength = isStrengthAct(fd);
+  const fdRun = isRunAct(fd);
+  const fdMob = isMobilityAct(fd);
+
+  // Same-type buckets — kept DISTINCT so a hybrid event (HYROX/CrossFit) only
+  // compares against OTHER hybrids, not against interval runs (which isHIITAct
+  // sweeps in and which are far shorter/lower-load → bogus +150% deltas).
+  // Order matters: hybrid is the most specific, checked first.
+  let sameType = null, typeKind = 'session';
+  if (fdHybrid) {
+    sameType = (a) => isHybridAct(a);                 // HYROX ↔ HYROX only
+    typeKind = 'hybrid';
+  } else if (fdHIIT) {
+    sameType = (a) => isHIITAct(a) && !isHybridAct(a); // interval runs, excl. hybrids
+    typeKind = 'HIIT';
+  } else if (fdStrength) {
+    sameType = (a) => isStrengthAct(a) && !isHybridAct(a);
+    typeKind = 'strength';
+  } else if (fdRun) {
+    sameType = (a) => isRunAct(a) && !isHIITAct(a) && !isHybridAct(a);
+    typeKind = 'run';
+  } else if (fdMob) {
+    sameType = (a) => isMobilityAct(a);
+    typeKind = 'mobility';
+  } else {
+    sameType = () => false; // unclassified → no comparison, still show today
+  }
+
+  const cutoff = Date.now() - 180 * 24 * 60 * 60 * 1000;
+  const hist = acts.filter((a) =>
+    a.date !== todayStr && sameType(a) && a.date &&
+    new Date(a.date + 'T12:00:00').getTime() >= cutoff);
+  const hasBaseline = hist.length >= 2;
+
+  const median = (arr) => {
+    const xs = arr.filter(Number.isFinite).sort((x, y) => x - y);
+    if (!xs.length) return null;
+    const m = Math.floor(xs.length / 2);
+    return xs.length % 2 ? xs[m] : (xs[m - 1] + xs[m]) / 2;
+  };
+
+  const todayMin = fdDurSecs / 60;
+  const todayHR = Number(fd.avgHR || fd.avgHeartRate) || null;
+  const todayLoad = Number(fd.totalTrainingLoad || fd.trainingLoad) || null;
+  const histMin = hasBaseline ? median(hist.map((a) => (Number(a.durationSecs) || 0) / 60)) : null;
+  const histHR = hasBaseline ? median(hist.map((a) => Number(a.avgHR || a.avgHeartRate)).filter(Boolean)) : null;
+  const histLoad = hasBaseline ? median(hist.map((a) => Number(a.totalTrainingLoad || a.trainingLoad)).filter(Boolean)) : null;
+
+  const rows = [];
+  if (todayMin > 0) rows.push({ label: 'Duration', value: String(Math.round(todayMin)), unit: 'min', today: todayMin, base: histMin });
+  if (todayHR)      rows.push({ label: 'Avg HR', value: String(todayHR), unit: 'bpm', today: todayHR, base: histHR });
+  if (todayLoad)    rows.push({ label: 'Load', value: String(Math.round(todayLoad)), unit: '', today: todayLoad, base: histLoad });
+  if (!rows.length) return null;
+
+  const typeLabel = typeKind;
+  const header = hasBaseline ? `Today vs your usual ${typeLabel}` : `Today's ${typeLabel} session`;
+  const subnote = hasBaseline
+    ? `vs median of your last ${hist.length} similar sessions`
+    : `Building a baseline — ${hist.length} prior ${typeLabel} logged. Comparison appears once you have 2+.`;
+
+  return (
+    <>
+      <div style={divider} />
+      <div style={subHdr}>{header}</div>
+      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 6, marginTop: -2 }}>{subnote}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${rows.length}, 1fr)`, gap: 8 }}>
+        {rows.map((r, i) => {
+          const hasDelta = r.base != null && r.base > 0;
+          const pct = hasDelta ? Math.round(((r.today - r.base) / r.base) * 100) : null;
+          const deltaColor = pct == null || Math.abs(pct) < 5 ? 'var(--text-muted)' : pct > 0 ? '#fbbf24' : '#22d3ee';
+          return (
+            <div key={i} style={{ background: 'var(--bg-elevated, rgba(255,255,255,0.03))', border: '0.5px solid var(--border-subtle, rgba(255,255,255,0.06))', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>{r.label}</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.1, marginTop: 2 }}>
+                {r.value}<span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}> {r.unit}</span>
+              </div>
+              <div style={{ fontSize: 9, color: deltaColor, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                {pct == null ? 'logged' : `${pct > 0 ? '+' : ''}${pct}% vs usual`}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
 
 function TrainingStressPanel({ todayStr, profile, panelStyle, notes, setNotes, ts, saveStatus, handleSave, S, hideNotes = false }) {
   // ── Rolling scores ──
@@ -5915,7 +6014,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           //             with the energy-system tier (Power/Hyper/Endurance).
           //   Effort  — avgHR/maxHR percent with the same Easy/Aerobic/
           //             Tempo/Threshold/VO2 zones used for run Effort.
-          const strengths = todayActs.filter(isStrengthAct);
+          // Strength hero cluster — use the volume predicate so HYROX/hybrid
+          // race days get the cluster (Phase 4r.hybrid.root).
+          const strengths = todayActs.filter(isStrengthVol);
           if (strengths.length) {
             const best = strengths.reduce((b, s) => (s.durationSecs || 0) > (b.durationSecs || 0) ? s : b, strengths[0]);
 
@@ -6021,36 +6122,10 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           gaugeValue = Number(sessionMetric.value) || 0;
         }
 
-        // ── Speedometer geometry (parameterised by gaugeMax/breaks) ──
-        const cx = 100, cy = 100, R = 80;
-        const angleFor = v => 180 + (Math.min(Math.max(v, 0), gaugeMax) / gaugeMax) * 180;
-        const polar = (deg, radius=R) => {
-          const rad = (deg * Math.PI) / 180;
-          return { x: cx + radius * Math.cos(rad), y: cy + radius * Math.sin(rad) };
-        };
-        const arcPath = (v0, v1, radius=R) => {
-          const a0 = angleFor(v0), a1 = angleFor(v1);
-          const p0 = polar(a0, radius), p1 = polar(a1, radius);
-          const large = (a1 - a0) > 180 ? 1 : 0;
-          return `M ${p0.x} ${p0.y} A ${radius} ${radius} 0 ${large} 1 ${p1.x} ${p1.y}`;
-        };
-        const zoneEasy = '#4ade80', zoneMod = '#60a5fa', zoneHard = '#fbbf24', zoneOver = '#f87171';
-        const zoneColors = [zoneEasy, zoneMod, zoneHard, zoneOver];
-        const [b1, b2, b3] = gaugeBreaks;
-        const zoneIdx =
-          gaugeValue >= b3 ? 3 :
-          gaugeValue >= b2 ? 2 :
-          gaugeValue >= b1 ? 1 :
-          gaugeValue >  0  ? 0 : -1;
-        const needleColor = zoneIdx >= 0 ? zoneColors[zoneIdx] : 'var(--text-muted)';
-        const needleEnd = polar(angleFor(gaugeValue), R - 6);
-        const zoneLabel = zoneIdx >= 0 ? gaugeZoneNames[zoneIdx] : 'REST';
-
-        // Display-formatted gauge value: thousands separator for tonnage,
-        // round int for rTSS.
-        const gaugeDisplay = gaugeValue
-          ? (gaugeMax >= 10000 ? gaugeValue.toLocaleString() : Math.round(gaugeValue))
-          : '—';
+        // Speedometer geometry + zone/needle/display derivation moved into the
+        // shared <LoadGauge> component (Phase 4r.viz.34, docs/PRESENTATION_LAYER.md
+        // headline role). The hero just passes the gauge MODEL (gaugeValue /
+        // gaugeMax / gaugeBreaks / gaugeZoneNames / gaugeLabel / gaugeUnit) below.
 
         // ── Coaching prompts (top 2) — Daily shows TODAY-actionable
         // prompts only. Long-arc weight/pace/calibration prompts live on
@@ -6219,10 +6294,20 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
           // race lives on the Calendar tab; surfacing it on Play
           // months out clutters the daily-action view.
           const _sevenDaysOut = new Date(_todayMid); _sevenDaysOut.setDate(_sevenDaysOut.getDate() + 7);
+          // Phase 4r.race.15 — a race counts as DONE once a meaningful session
+          // is logged on its date (any non-mobility ≥30min/≥5mi — HYROX logs as
+          // strength/cardio, not run). Once done, the pre-race card drops
+          // immediately rather than lingering until midnight.
+          const _raceDoneToday = (rDate) => {
+            try {
+              return (getUnifiedActivities() || []).some(a => a?.date === rDate && !isMobilityAct(a)
+                && (((Number(a.durationSecs)||0)/60) >= 30 || (Number(a.distanceMi)||0) >= 5));
+            } catch { return false; }
+          };
           const _upcomingPlayRace = _playRaces
             .filter(r => {
               const d = parseLocalDate(r.date);
-              return d && d >= _todayMid && d <= _sevenDaysOut;
+              return d && d >= _todayMid && d <= _sevenDaysOut && !_raceDoneToday(r.date);
             })
             .sort((a,b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null;
           let _playSweatRate = null;
@@ -6270,81 +6355,51 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   When today has no run logged, RIGHT cluster is omitted so
                   the speedometer + LEFT cluster center naturally. */}
               {(() => {
-                // Pre-compute today's run-metric tier labels for the RIGHT
-                // cluster. Same logic as the cells builder lower in the file,
-                // hoisted up so the hero and the panel below stay aligned.
-                let runTiles = null;
-                if (runMetrics && runMetrics.rTSS) {
-                  const IF = runMetrics.intensityFactor;
-                  const EF = runMetrics.efficiencyFactor;
-                  let effortTier = '—', effortColor = 'var(--text-muted)';
-                  if (IF != null) {
-                    if      (IF < 0.65) { effortTier = 'Easy';      effortColor = '#4ade80'; }
-                    else if (IF < 0.80) { effortTier = 'Aerobic';   effortColor = '#4ade80'; }
-                    else if (IF < 0.92) { effortTier = 'Tempo';     effortColor = '#fbbf24'; }
-                    else if (IF < 1.00) { effortTier = 'Threshold'; effortColor = '#fb923c'; }
-                    else                { effortTier = 'VO2/Race';  effortColor = '#f87171'; }
-                  }
-                  let efSub = 'baseline', efColor = 'var(--text-muted)';
-                  if (EF != null && ef30Avg) {
-                    const pct = (EF - ef30Avg) / ef30Avg;
-                    if      (pct >=  0.06) { efSub = `↑ ${Math.round(pct*100)}%`;    efColor = '#4ade80'; }
-                    else if (pct <= -0.06) { efSub = `↓ ${Math.round(Math.abs(pct)*100)}%`; efColor = '#fbbf24'; }
-                    else                   { efSub = `≈ 30d avg`;                     efColor = 'var(--text-secondary)'; }
-                  } else if (EF == null) { efSub = 'needs HR'; }
-                  runTiles = [
-                    { v: runMetrics.ngpPace || '—', lbl: 'Pace',       sub: 'graded',    color: 'var(--text-primary)', subColor: 'var(--text-muted)' },
-                    { v: IF ?? '—',                 lbl: 'Effort',     sub: effortTier,  color: effortColor,           subColor: effortColor },
-                    { v: EF ?? '—',                 lbl: 'Efficiency', sub: efSub,       color: 'var(--text-primary)', subColor: efColor },
-                  ];
-                }
+                // Phase 4r.viz.33 — RIGHT cluster now comes from the presentation
+                // layer (docs/PRESENTATION_LAYER.md): the per-kind story spec
+                // picks the primary metric ids, the metric registry formats them
+                // (one source of truth, shared with the web Daily hero), and
+                // MetricCluster lays them out for this surface. The old inline
+                // run IF/EF tier logic + the strength tile builder were deleted —
+                // they're now in core/presentation/metricRegistry.js, used by
+                // both heroes, so the two can no longer drift.
+                const heroBag = { runMetrics, strengthMetrics, ef30Avg };
+                const primaryIds = primaryIdsFor(heroBag);
+                const hasPrimary = selectMetrics(primaryIds, heroBag).length > 0;
 
                 return (
-                  <div style={{ display:'flex', alignItems:'center', gap:8, justifyContent:'space-between' }}>
-                    {/* LEFT cluster — readiness rings + A:C ratio */}
-                    <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
-                      <MiniRing val={r7Score}  label="7d"/>
-                      <MiniRing val={r30Score} label="30d"/>
-                      {acr.ratio != null && (
-                        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', paddingLeft:6, borderLeft:'0.5px solid var(--border-subtle)' }}>
-                          <span style={{ fontSize:13, fontWeight:600, color: ZONE_COLORS[acr.zone], lineHeight:1 }}>{acr.ratio}</span>
-                          <span style={{ fontSize:8, color: ZONE_COLORS[acr.zone], marginTop:2 }}>{ZONE_LABELS[acr.zone]}</span>
-                          <span style={{ fontSize:7.5, color:'var(--text-muted)', marginTop:1, letterSpacing:'0.04em' }}>A:C</span>
-                        </div>
-                      )}
+                  // Phase 4r.viz.28 — 3-column GRID (equal side columns, auto
+                  // center) so the speedometer stays DEAD-CENTER whether or not
+                  // the RIGHT run-metrics cluster is present. Previously a
+                  // space-between flex pushed the speedometer to the right edge
+                  // on non-run days (no right cluster). On non-run days the right
+                  // column renders empty, balancing the left so center holds.
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:8, width:'100%' }}>
+                    {/* LEFT cluster — readiness rings + A:C ratio (shared
+                        ContextCluster, compact profile). */}
+                    <div style={{ flexShrink:0, justifySelf:'start', minWidth:0 }}>
+                      <ContextCluster r7={r7Score} r30={r30Score} acr={acr} surface="play-hero" />
                     </div>
 
-                    {/* CENTER — speedometer (the focal point) */}
-                    <svg width="100" height="60" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet" style={{flexShrink:0}}>
-                      <path d={arcPath(0,  b1)}        stroke={zoneEasy} strokeWidth="10" fill="none" opacity={zoneIdx>0?0.35:zoneIdx===0?1:0.35}/>
-                      <path d={arcPath(b1, b2)}        stroke={zoneMod}  strokeWidth="10" fill="none" opacity={zoneIdx>1?0.35:zoneIdx===1?1:0.35}/>
-                      <path d={arcPath(b2, b3)}        stroke={zoneHard} strokeWidth="10" fill="none" opacity={zoneIdx>2?0.35:zoneIdx===2?1:0.35}/>
-                      <path d={arcPath(b3, gaugeMax)}  stroke={zoneOver} strokeWidth="10" fill="none" opacity={zoneIdx===3?1:0.35}/>
-                      {[0, b1, b2, b3, gaugeMax].map(v=>{
-                        const inner = polar(angleFor(v), R-13);
-                        const outer = polar(angleFor(v), R-3);
-                        return <line key={v} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} stroke="var(--border-subtle)" strokeWidth="0.6"/>;
-                      })}
-                      <line x1={cx} y1={cy} x2={needleEnd.x} y2={needleEnd.y} stroke={needleColor} strokeWidth="2.5" strokeLinecap="round"/>
-                      <circle cx={cx} cy={cy} r="4" fill={needleColor}/>
-                      <text x={cx} y={cy - 22} textAnchor="middle" fontSize="22" fontWeight="700" fill="var(--text-primary)">{gaugeDisplay}</text>
-                      <text x={cx} y={cy - 6} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text-muted)" letterSpacing="0.06em">rTSS</text>
-                    </svg>
+                    {/* CENTER — speedometer + zone label below (Phase 4r.viz.30).
+                        rTSS number RELOCATED out of the dial (it now lives in the
+                        right cluster / below) — the dial shows the needle + the
+                        ZONE name (OVERREACHING etc.), matching the web hero. */}
+                    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', flexShrink:0 }}>
+                      <LoadGauge value={gaugeValue} max={gaugeMax} breaks={gaugeBreaks}
+                        zoneNames={gaugeZoneNames} label={gaugeLabel} unit={gaugeUnit}
+                        surface="play-hero" />
+                    </div>
 
-                    {/* RIGHT cluster — today's run quality (Pace · Effort · Efficiency).
-                        Omitted entirely on non-run days so the speedometer and
-                        LEFT cluster can center naturally. */}
-                    {runTiles && (
-                      <div style={{ display:'flex', flexDirection:'column', gap:2, flexShrink:0, paddingLeft:6, borderLeft:'0.5px solid var(--border-subtle)', minWidth:0 }}>
-                        {runTiles.map((t, i) => (
-                          <div key={i} style={{ display:'flex', alignItems:'baseline', gap:4, minWidth:0 }}>
-                            <span style={{ fontSize:11, fontWeight:700, color: t.color, lineHeight:1.1, minWidth:34, textAlign:'right' }}>{t.v}</span>
-                            <span style={{ fontSize:7.5, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.04em', minWidth:38 }}>{t.lbl}</span>
-                            <span style={{ fontSize:7.5, color: t.subColor, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.sub}</span>
-                          </div>
-                        ))}
+                    {/* RIGHT cluster — today's session quality (Pace/Effort/
+                        Efficiency for runs; Density/W:R/Effort for strength/HYROX),
+                        from the presentation layer. Empty div on days with neither
+                        so the 3-column grid keeps the speedometer dead-center. */}
+                    {hasPrimary ? (
+                      <div style={{ flexShrink:0, paddingLeft:8, borderLeft:'0.5px solid var(--border-subtle)', minWidth:0, justifySelf:'end' }}>
+                        <MetricCluster ids={primaryIds} bag={heroBag} surface="play-hero" align="end" />
                       </div>
-                    )}
+                    ) : <div/>}
                   </div>
                 );
               })()}
@@ -6395,15 +6450,21 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
             padding: 'clamp(10px,1vw,14px) clamp(12px,1.2vw,16px)',
             marginBottom: 12,
             display: 'grid',
-            // Phase 4r.narrative.5.fix.34 — give the Coach digest (COL 3) the
-            // widest share so its paragraph extends left and fills what used
-            // to be empty space. Readiness (COL 2) keeps enough room for its
-            // rings + metric row, which flex-wrap if pushed.
-            gridTemplateColumns: '120px minmax(0,1fr) minmax(0,1.45fr)',
+            // Phase 4r.viz.32 — TWO top-level columns now: a LEFT section that
+            // mirrors mobile (metrics-left · centered speedometer · metrics-
+            // right, narrative below) and the Coach digest as the RIGHT column.
+            // (Was 3 cols: speedometer | readiness | coach.)
+            // 50/50 so the Coach column's left border lines up exactly with
+            // the divider between the Activity and Nutrition tiles below
+            // (that grid is also minmax(0,1fr) minmax(0,1fr) with the same gap).
+            gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
             gap: 'clamp(8px,1vw,12px)',
             alignItems: 'start',
             minWidth: 0,
           }}>
+            {/* ── LEFT SECTION · readiness band (3-col: metrics | gauge | metrics) + narrative below ── */}
+            <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:0 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'minmax(0,1fr) auto minmax(0,1fr)', alignItems:'center', gap:'clamp(8px,1vw,14px)' }}>
             {/* ── COL 1 · Adaptive speedometer ──
                 Run/mixed days  → rTSS gauge (0–200, threshold-anchored).
                 Strength/hyrox  → Tonnage gauge (0–25k lbs).
@@ -6416,44 +6477,10 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                 : gaugeLabel === 'Load'
                 ? "Today's training load (HR-derived) — for strength sessions without a template, we use duration × HR-relative-to-threshold² × 100. Same 0-200 scale as rTSS so it reads consistently."
                 : "Today's run training load. rTSS = duration × intensity² scaled so 100 = 1 hour at lactate threshold. A long Z2 run can score high here even when the pace felt easy because the duration stacks the stress."}
-              style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2, minWidth:0, cursor:'help' }}>
-              <svg width="100%" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet"
-                   style={{ maxWidth: 130 }}>
-                {/* zone arcs (easy → over) — opacity dims the inactive zones */}
-                <path d={arcPath(0,  b1)}        stroke={zoneEasy} strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx>0?0.35:zoneIdx===0?1:0.35}/>
-                <path d={arcPath(b1, b2)}        stroke={zoneMod}  strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx>1?0.35:zoneIdx===1?1:0.35}/>
-                <path d={arcPath(b2, b3)}        stroke={zoneHard} strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx>2?0.35:zoneIdx===2?1:0.35}/>
-                <path d={arcPath(b3, gaugeMax)}  stroke={zoneOver} strokeWidth="10" fill="none" strokeLinecap="butt" opacity={zoneIdx===3?1:0.35}/>
-
-                {/* tick marks at zone boundaries */}
-                {[0, b1, b2, b3, gaugeMax].map(v=>{
-                  const inner = polar(angleFor(v), R-13);
-                  const outer = polar(angleFor(v), R-3);
-                  return <line key={v} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y}
-                    stroke="var(--border-subtle)" strokeWidth="0.6"/>;
-                })}
-
-                {/* needle */}
-                <line x1={cx} y1={cy} x2={needleEnd.x} y2={needleEnd.y}
-                  stroke={needleColor} strokeWidth="2.5" strokeLinecap="round"/>
-                <circle cx={cx} cy={cy} r="4" fill={needleColor}/>
-
-                {/* center value + metric label */}
-                <text x={cx} y={cy-22} textAnchor="middle" fontSize={gaugeMax >= 10000 ? "16" : "22"} fontWeight="700"
-                  fill="var(--text-primary)" style={{ fontFamily:'var(--font-ui)' }}>
-                  {gaugeDisplay}
-                </text>
-                <text x={cx} y={cy-8} textAnchor="middle" fontSize="8" letterSpacing="0.1em"
-                  fill="var(--text-muted)" style={{ fontFamily:'var(--font-ui)' }}>
-                  {gaugeLabel}{gaugeUnit ? ` · ${gaugeUnit}` : ''}
-                </text>
-              </svg>
-              <div style={{
-                fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
-                color: needleColor, marginTop: -4,
-              }}>
-                {zoneLabel}
-              </div>
+              style={{ order:2, display:'flex', flexDirection:'column', alignItems:'center', gap:2, minWidth:0, cursor:'help' }}>
+              <LoadGauge value={gaugeValue} max={gaugeMax} breaks={gaugeBreaks}
+                zoneNames={gaugeZoneNames} label={gaugeLabel} unit={gaugeUnit}
+                surface="daily-hero" />
               {/* Inline caption removed Phase 4o.daily.18 — full
                   explanation lives in the parent column's hover tooltip. */}
             </div>
@@ -6463,8 +6490,7 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                 Phase 4o.daily.14 — that's already the headline of EdgeIQ.
                 What stays here: the rings, A:C, run pace quality, and a
                 short narrative interpreting the readiness for today. */}
-            <div style={{ display:'flex', flexDirection:'column', gap:7, minWidth:0,
-              borderLeft: '0.5px solid var(--border-subtle)', paddingLeft: 12 }}>
+            <div style={{ order:1, display:'flex', flexDirection:'column', gap:7, minWidth:0 }}>
               {/* Header — single line, no right-side subtitle (the
                   narrative below explains what readiness measures). */}
               <div style={{ fontSize:9, fontWeight:600, color:'var(--text-muted)',
@@ -6472,50 +6498,15 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                 Training Readiness
               </div>
 
-              {/* Rings + A:C + run metrics laid out HORIZONTALLY in one row
-                  so the column packs vertically tight. Each cluster is its
-                  own micro-section with the value(s) on top and a label
-                  beneath. */}
-              <div style={{ display:'flex', alignItems:'center', gap:14, flexWrap:'wrap' }}>
-                {/* 7d + 30d rings */}
-                {[
-                  { val: r7Score,  label: '7-day',  caption: 'weighted' },
-                  { val: r30Score, label: '30-day', caption: 'trend'    },
-                ].map(ring => {
-                  const C = 2 * Math.PI * 17;
-                  return (
-                    <div key={ring.label} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
-                      <div style={{ position:'relative', width:40, height:40, flexShrink:0 }}>
-                        <svg width="40" height="40" viewBox="0 0 40 40">
-                          <circle cx="20" cy="20" r="17" fill="none" stroke="var(--bg-elevated)" strokeWidth="3.5"/>
-                          <circle cx="20" cy="20" r="17" fill="none"
-                            stroke={scoreColor(ring.val)} strokeWidth="3.5" strokeLinecap="round"
-                            strokeDasharray={`${(ring.val/100)*C} ${C}`} transform="rotate(-90 20 20)"/>
-                        </svg>
-                        <div style={{ position:'absolute', inset:0, display:'flex',
-                          alignItems:'center', justifyContent:'center' }}>
-                          <span style={{ fontSize:13, fontWeight:700, color:'var(--text-primary)', lineHeight:1 }}>
-                            {ring.val || '—'}
-                          </span>
-                        </div>
-                      </div>
-                      <span style={{ fontSize:8.5, color:'var(--text-secondary)', fontWeight:600, lineHeight:1 }}>{ring.label}</span>
-                    </div>
-                  );
-                })}
+              {/* Rings + A:C — shared ContextCluster (comfortable profile),
+                  the same component the mobile Play hero uses. */}
+              <ContextCluster r7={r7Score} r30={r30Score} acr={acr} surface="daily-hero" />
+            </div>
 
-                {/* A:C ratio inline */}
-                {acr.ratio != null && (
-                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:1,
-                    paddingLeft:10, borderLeft:'0.5px solid var(--border-subtle)' }}>
-                    <div style={{ display:'flex', alignItems:'baseline', gap:5 }}>
-                      <span style={{ fontSize:13, fontWeight:600, color: ZONE_COLORS[acr.zone] }}>{acr.ratio}</span>
-                      <span style={{ fontSize:8.5, color: ZONE_COLORS[acr.zone] }}>{ZONE_LABELS[acr.zone]}</span>
-                    </div>
-                    <span style={{ fontSize:8.5, color:'var(--text-muted)', letterSpacing:'0.05em' }}>A:C ratio</span>
-                  </div>
-                )}
-
+            {/* ── RIGHT band cell · session-quality metrics (order:3) ──
+                Mirrors mobile: the gauge sits centered, readiness numbers
+                (rings + A:C) on its left, session-quality cells on its right. */}
+            <div style={{ order:3, display:'flex', alignItems:'center', minWidth:0 }}>
                 {/* ── Session quality metrics (Phase 4o.daily.21) ──
                     Same three-tile rhythm regardless of session modality:
                       Run days     → Pace · Effort · Efficiency
@@ -6524,163 +6515,30 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                     semantics stay constant, so the hero feels coherent
                     whether you logged a run, a lift, or both. */}
                 {(() => {
-                  let cells = null;
-
-                  if (runMetrics && runMetrics.rTSS) {
-                    const IF = runMetrics.intensityFactor;
-                    const EF = runMetrics.efficiencyFactor;
-                    let effortTier, effortColor;
-                    if (IF == null) { effortTier = '—'; effortColor = 'var(--text-muted)'; }
-                    else if (IF < 0.65) { effortTier = 'Easy';      effortColor = '#4ade80'; }
-                    else if (IF < 0.80) { effortTier = 'Aerobic';   effortColor = '#4ade80'; }
-                    else if (IF < 0.92) { effortTier = 'Tempo';     effortColor = '#fbbf24'; }
-                    else if (IF < 1.00) { effortTier = 'Threshold'; effortColor = '#fb923c'; }
-                    else                { effortTier = 'VO2/Race';  effortColor = '#f87171'; }
-
-                    let efVerdict = 'baseline still loading';
-                    let efColor = 'var(--text-muted)';
-                    if (EF != null && ef30Avg) {
-                      const pct = (EF - ef30Avg) / ef30Avg;
-                      if (pct >= 0.06)       { efVerdict = `↑ ${Math.round(pct*100)}% vs 30d avg`; efColor = '#4ade80'; }
-                      else if (pct <= -0.06) { efVerdict = `↓ ${Math.round(Math.abs(pct)*100)}% vs 30d avg`; efColor = '#fbbf24'; }
-                      else                   { efVerdict = `near 30d avg (${ef30Avg.toFixed(2)})`; efColor = 'var(--text-secondary)'; }
-                    } else if (EF == null) {
-                      efVerdict = 'needs HR';
-                    }
-
-                    cells = [
-                      { v: runMetrics.ngpPace || '—', lbl: 'Pace',
-                        sub: 'graded', subColor: 'var(--text-muted)' },
-                      { v: IF ?? '—', lbl: 'Effort', sub: effortTier, subColor: effortColor,
-                        tooltip: runMetrics.ifSource === 'hr'
-                          ? `IF ${IF} = ${Math.round(IF*100)}% of threshold HR (HR-based — your easy pace ran faster than your effort).`
-                          : `IF ${IF} = ${Math.round(IF*100)}% of threshold pace (pace-based — set max HR in profile to switch to HR).`
-                      },
-                      { v: EF ?? '—', lbl: 'Efficiency', sub: efVerdict, subColor: efColor,
-                        tooltip: ef30Avg
-                          ? `Efficiency = pace ÷ HR. Today ${EF}, 30-day avg ${ef30Avg.toFixed(2)}. Rising over weeks at the same effort = aerobic engine improving.`
-                          : 'Efficiency = pace ÷ HR. Need ≥3 past runs with HR to compare to your baseline.'
-                      },
-                    ];
-                  } else if (strengthMetrics) {
-                    const sm = strengthMetrics;
-                    const setsLine = sm.setsCount && sm.totalReps ? `${sm.setsCount} sets · ${sm.totalReps} reps` : '';
-
-                    cells = [
-                      { v: sm.density ?? '—',
-                        lbl: 'Density',
-                        sub: sm.densityUnit || 'volume/min',
-                        subColor: 'var(--text-muted)',
-                        tooltip: sm.densityUnit === 'lb/min'
-                          ? `Tonnage per minute (sets × reps × weight ÷ duration). ${setsLine}`
-                          : sm.densityUnit === 'reps/min'
-                          ? `Reps per minute — fallback when no strength template matches this session. ${setsLine} Add a template in Workouts to upgrade to lb/min.`
-                          : 'No volume data available for this session.'
-                      },
-                      { v: sm.wr ?? '—',
-                        lbl: 'W:R',
-                        sub: sm.wrTier || 'no lap data',
-                        subColor: sm.wrColor || 'var(--text-muted)',
-                        tooltip: sm.wr
-                          ? `Work:Rest ratio ${sm.wr} — ${sm.wrTier} energy system. >1:5 = power/phosphagen, 1:1.5–5 = hypertrophy/glycolytic, <1:1.5 = endurance/oxidative.`
-                          : 'Work:Rest ratio needs typed set/rest segments from the FIT — older watches without lap-button discipline can\'t supply this.'
-                      },
-                      { v: sm.effortPct ?? '—',
-                        lbl: 'Effort',
-                        sub: sm.effortTier || 'needs HR',
-                        subColor: sm.effortColor || 'var(--text-muted)',
-                        tooltip: sm.effortPct
-                          ? `Avg HR as percent of max HR. ${sm.effortTier} zone — same tiering as run Effort so the colour reads the same across modalities.`
-                          : 'Effort needs avg HR + a maxHR estimate. Profile maxHR not set.'
-                      },
-                    ];
-                  }
-
-                  if (!cells) return null;
+                  // Presentation layer (docs/PRESENTATION_LAYER.md) — the SAME
+                  // story spec + metric registry + MetricCluster as the mobile
+                  // Play hero, just a different surface profile ('daily-hero'
+                  // vs 'play-hero'). The old inline cells builder (duplicated run
+                  // IF/EF tier logic + strength tiles) is gone; the tier logic
+                  // now lives once in core/presentation/metricRegistry.js, so the
+                  // web and mobile heroes can no longer drift.
+                  const heroBag = { runMetrics, strengthMetrics, ef30Avg };
+                  const primaryIds = primaryIdsFor(heroBag);
+                  if (!selectMetrics(primaryIds, heroBag).length) return null;
                   return (
-                    <div style={{ display:'flex', gap:14, paddingLeft:12,
-                      borderLeft:'0.5px solid var(--border-subtle)' }}>
-                      {cells.map(c => (
-                        <div key={c.lbl} title={c.tooltip || ''}
-                          style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2 }}>
-                          <span style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', lineHeight:1 }}>{c.v}</span>
-                          <span style={{ fontSize:10, color:'var(--text-secondary)', fontWeight:500 }}>{c.lbl}</span>
-                          <span style={{ fontSize:9, color: c.subColor, lineHeight:1.2 }}>{c.sub}</span>
-                        </div>
-                      ))}
+                    <div style={{ paddingLeft:12, borderLeft:'0.5px solid var(--border-subtle)' }}>
+                      <MetricCluster ids={primaryIds} bag={heroBag} surface="daily-hero" align="start" />
                     </div>
                   );
                 })()}
-              </div>
-
-              {/* ── Readiness narrative ──
-                  This is the one block where the abstract numbers get
-                  translated into English. It always names:
-                    1. the score and a quality tier (strong/solid/mixed/fragile)
-                    2. how the 7d compares to the 30d baseline
-                    3. the dominant + lagging domain when the spread is real
-                    4. the A:C ramp-rate state and what to do about it
-                  No generic filler — every clause is tied to the actual data. */}
-              {(() => {
-                const tier =
-                  r7Score >= 80 ? 'strong'  :
-                  r7Score >= 65 ? 'solid'   :
-                  r7Score >= 50 ? 'mixed'   :
-                  r7Score >  0  ? 'fragile' : null;
-                const delta = r7Score - r30Score;
-                let trendClause;
-                if (delta >=  6) trendClause = `up ${delta} pts on the 30-day baseline`;
-                else if (delta <= -6) trendClause = `${Math.abs(delta)} pts off the 30-day baseline`;
-                else                  trendClause = `right on the 30-day baseline`;
-
-                const headline = tier
-                  ? `Readiness ${r7Score} — ${tier}, ${trendClause}.`
-                  : `No readiness yet — log a few days to bootstrap.`;
-
-                // Domain driver (uses the score breakdown internally; we
-                // never print the raw 0–100 numbers, only the names).
-                const ds = [
-                  ['activity',  domains.activity ],
-                  ['nutrition', domains.nutrition],
-                  ['body',      domains.body     ],
-                ].filter(([,v]) => v != null);
-                let driverClause = '';
-                if (ds.length >= 2) {
-                  ds.sort((a,b) => b[1] - a[1]);
-                  const [topName, topVal] = ds[0];
-                  const [botName, botVal] = ds[ds.length - 1];
-                  const cap = s => s.charAt(0).toUpperCase()+s.slice(1);
-                  if (topVal - botVal >= 15) {
-                    driverClause = ` ${cap(topName)} is doing the lifting; ${botName} is the lever to push higher.`;
-                  } else if (topVal >= 75) {
-                    driverClause = ' All three pillars in shape.';
-                  } else if (topVal < 60) {
-                    driverClause = ' All three pillars middling — pick one to focus on.';
-                  }
-                }
-
-                // A:C context — always carries the ratio number so the
-                // claim is verifiable, plus a what-to-do tail.
-                let acrClause = '';
-                if (acr.ratio != null) {
-                  if (acr.zone === 'overreaching')   acrClause = ` Load is ramping fast (A:C ${acr.ratio}) — green-light if recovery is on point, fragile if not.`;
-                  else if (acr.zone === 'danger')    acrClause = ` Load is in injury territory (A:C ${acr.ratio}) — back off this week.`;
-                  else if (acr.zone === 'undertraining') acrClause = ` Load has dropped (A:C ${acr.ratio}) — fine for a deload, rebuild after.`;
-                  else if (acr.zone === 'optimal')   acrClause = ` Load ramp is in the sweet spot (A:C ${acr.ratio}).`;
-                }
-
-                // Phase 4r.narrative.5.fix.30 — legacy readiness narrative
-                // retired. It was an unbranded coaching interpretation
-                // ("Readiness 83 — strong… activity is the lever…") that
-                // competed with the ambient Coach. The Coach (Daily +
-                // EdgeIQ surfaces) is the single coaching voice now; the
-                // readiness rings/stats above still show the numbers.
-                void headline; void driverClause; void acrClause;
-                return null;
-              })()}
+                {/* Readiness narrative retired Phase 4r.narrative.5.fix.30 —
+                    the Coach (Daily + EdgeIQ) is the single coaching voice;
+                    the rings/A:C/cells above still show the raw numbers. */}
+            </div>
+            </div>
             </div>
 
-            {/* ── COL 3 · Coaching prompts + calibration ── */}
+            {/* ── RIGHT SECTION · Coaching prompts + calibration ── */}
             <div style={{ display:'flex', flexDirection:'column', gap:8, minWidth:0,
               borderLeft: '0.5px solid var(--border-subtle)', paddingLeft: 12 }}>
               {/* Phase 4r.narrative.5.fix.33 — COL 3 is the empty right slot
@@ -6935,7 +6793,8 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                         monday.setDate(monday.getDate()-(dow===0?6:dow-1));
                         monday.setHours(0,0,0,0);
                         if (planType === 'strength') {
-                          const wk=acts.filter(a=>isStrengthAct(a)&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                          // Phase 4r.strength.hybrid — include hybrid (HYROX/CrossFit) in strength totals.
+                          const wk=acts.filter(a=>isStrengthVol(a)&&a.date&&new Date(a.date+'T12:00:00')>=monday);
                           const cnt=wk.length;
                           const mins=wk.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
                           const tgt=parseFloat(profile?.weeklyStrengthTarget)||2;
@@ -6972,6 +6831,12 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                             pct={weeklyMiles/(parseFloat(profile?.weeklyRunDistanceTarget)||30)}/>
                         </>;
                       })()}
+                      {/* Session vs-usual — fills the gap; this is the render
+                          path the Daily/desktop strength card uses (the other
+                          fitGroups.map ~L7385 is the alternate layout). */}
+                      {idx===fitGroups.length-1 && (
+                        <SessionVsUsual fd={fd} todayStr={todayStr} divider={divider} subHdr={subHdr}/>
+                      )}
                     </>
                   );
                 })()}
@@ -7255,7 +7120,9 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                   {idx===fitGroups.length-1&&(()=>{
                     const acts=getUnifiedActivities();
                     const monday=new Date();const dow=monday.getDay();monday.setDate(monday.getDate()-(dow===0?6:dow-1));monday.setHours(0,0,0,0);
-                    const wkStrength=acts.filter(a=>isStrengthAct(a)&&a.date&&new Date(a.date+'T12:00:00')>=monday);
+                    // Phase 4r.strength.hybrid — count HYBRID workouts (HYROX,
+                    // Strength volume incl. hybrid (Phase 4r.hybrid.root).
+                    const wkStrength=acts.filter(a=>isStrengthVol(a)&&a.date&&new Date(a.date+'T12:00:00')>=monday);
                     const wkCount=wkStrength.length;
                     const wkMins=wkStrength.reduce((s,a)=>s+(a.durationSecs||0),0)/60;
                     const target=parseFloat(profile?.weeklyStrengthTarget)||2;
@@ -7273,6 +7140,14 @@ function LogDay({data,persist,showToast,mobileView,setTab}){
                         pct={wkMins/minTarget}/>
                     </>;
                   })()}
+
+                  {/* Session vs-usual panel — fills the gap above Nutrition with
+                      today's session stats, upgrading to a "vs usual" comparison
+                      once enough history exists. Extracted to a component to
+                      avoid the brittle inline-IIFE parse issues. */}
+                  {idx===fitGroups.length-1 && (
+                    <SessionVsUsual fd={fd} todayStr={todayStr} divider={divider} subHdr={subHdr}/>
+                  )}
                 </>}
 
                 {/* Phase 4r.viz.7 — Mobility branch. Sparse by design.
@@ -8417,7 +8292,7 @@ function WebSystemDetail({ system, comment, onClose, data }) {
   const ytdAll = useMemo(() => activities.filter(a => a.date && parseLocalDate(a.date) >= yearStart), [activities]);
   const wk7 = useMemo(() => activities.filter(a => a.date && parseLocalDate(a.date) >= d7), [activities]);
   const wk7Runs = useMemo(() => wk7.filter(isRunAct), [wk7]);
-  const wk7Str = useMemo(() => wk7.filter(isStrengthAct), [wk7]);
+  const wk7Str = useMemo(() => wk7.filter(isStrengthVol), [wk7]);
 
   const resolveSignal = (name, period) => {
     if (period === 'annual') {
@@ -10507,64 +10382,40 @@ Structure:
                   <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-subtle)', flexShrink: 0, marginTop: 18 }}/>
                 );
 
+                // Presentation layer (docs/PRESENTATION_LAYER.md) — the domain +
+                // driver tiles below are now declared in EDGE_RAIL and resolved
+                // through edgeiqRegistry (one source of truth for each signal's
+                // label / format / sub / type), instead of hand-written MiniStats.
+                // The bag is just the already-computed values + sparkline
+                // histories + helpers the registry's select() functions read.
+                const edgeBag = {
+                  domains: todayResult?.domains,
+                  acwrToday, todayRTSS, weeklyLoadVal,
+                  calRemaining, calTarget, proRemaining, proTarget,
+                  glycoPct, glyco, latestHrv, sleepHrs, sleepScore, curWeight, targetWt,
+                  rtssBand,
+                  hist: {
+                    activity: activityHist, nutrition: nutritionHist, body: bodyHist,
+                    acwr: acwrHist, rtss: rtssHist, load: loadHist,
+                    calLeft: calLeftHist, proLeft: proLeftHist,
+                    hrv: hrvHist, sleepHrs: sleepHistHrs, weight: weightHist,
+                  },
+                };
+
                 return (
                   <>
-                    {/* ── Domain scores (3 tiles → weight 3) ── */}
-                    <RailColumn flexWeight={3}>
-                      <MiniStat tier="domain" label="Activity"  value={todayResult?.domains?.activity}  history={activityHist}/>
-                      <MiniStat tier="domain" label="Nutrition" value={todayResult?.domains?.nutrition} history={nutritionHist}/>
-                      <MiniStat tier="domain" label="Body"      value={todayResult?.domains?.body}      history={bodyHist}/>
-                    </RailColumn>
-
-                    <Sep/>
-
-                    {/* ── Activity drivers (bracket: Activity / blue) ── */}
-                    <RailColumn bracket="Activity" color="#60a5fa" flexWeight={3}>
-                      <MiniStat label="ACWR" value={acwrToday?.ratio} history={acwrHist} type="acwr"
-                        fmt={v => v.toFixed(2)}
-                        sub={acwrToday?.ratio != null ? (acwrToday.ratio > 1.5 ? 'high risk' : acwrToday.ratio > 1.3 ? 'over-reach' : acwrToday.ratio < 0.8 ? 'under-load' : 'in zone') : 'no data'}/>
-                      <MiniStat label="rTSS today" value={todayRTSS} history={rtssHist} type="rtss"
-                        sub={rtssBand(todayRTSS).label}/>
-                      <MiniStat label="Weekly load" value={weeklyLoadVal} history={loadHist} type="load"
-                        fmt={v => `${v}`}
-                        sub={acwrToday?.chronicLoad ? `vs ${acwrToday.chronicLoad} avg` : '7-day rTSS'}/>
-                    </RailColumn>
-
-                    {/* ── Nutrition drivers (bracket: Nutrition / green) ── */}
-                    <RailColumn bracket="Nutrition" color="#4ade80" flexWeight={3}>
-                      <MiniStat label="Cal left"  value={calRemaining} history={calLeftHist} type="fuel"
-                        fmt={v => `${v}`}
-                        sub={`/${calTarget}`}/>
-                      <MiniStat label="Protein left" value={proRemaining} history={proLeftHist} type="fuel"
-                        fmt={v => `${v}g`}
-                        sub={`/${proTarget}g`}/>
-                      <MiniStat label="Glycogen" value={glycoPct} type="glycogen" valuePx={12}
-                        fmt={() => glyco?.status ? glyco.status.charAt(0).toUpperCase() + glyco.status.slice(1) : '—'}
-                        sub={glyco && glyco.need24h > 0
-                          ? `${glyco.supplied24h}/${glyco.need24h}g carbs`
-                          : (glyco?.status === 'insufficient' ? 'no training load' : 'no data')}/>
-                    </RailColumn>
-
-                    {/* ── Body drivers (bracket: Body / cyan) ── */}
-                    <RailColumn bracket="Body" color="#22d3ee" flexWeight={3}>
-                      <MiniStat label="HRV" value={latestHrv} history={hrvHist} type="hrv"
-                        fmt={v => `${v}ms`}
-                        sub={latestHrv != null ? (latestHrv >= 40 ? 'recovered' : latestHrv >= 30 ? 'borderline' : 'strained') : 'no data'}/>
-                      {/* Phase 4r.viz.25 — fall back to sleep score when
-                          duration isn't recorded by HC. Was showing "—" with
-                          "score 77" as sub which made the tile look empty. */}
-                      <MiniStat label="Sleep"
-                        value={sleepHrs != null ? sleepHrs : sleepScore}
-                        history={sleepHistHrs} type="sleep"
-                        fmt={v => sleepHrs != null ? `${v}h` : `${v}`}
-                        sub={sleepHrs != null && sleepScore != null ? `score ${sleepScore}`
-                             : sleepHrs != null ? 'hours slept'
-                             : sleepScore != null ? 'sleep score'
-                             : 'no data'}/>
-                      <MiniStat label="Weight" value={curWeight} history={weightHist} type="weight"
-                        fmt={v => `${v.toFixed(1)}`}
-                        sub={curWeight != null ? `${(curWeight - targetWt) > 0 ? '+' : ''}${(curWeight - targetWt).toFixed(1)} vs ${targetWt}` : 'no data'}/>
-                    </RailColumn>
+                    {/* ── Domain scores + Activity/Nutrition/Body drivers ──
+                        Declared in EDGE_RAIL, resolved via edgeiqRegistry. The
+                        MiniStat/RailColumn/Sep renderers are unchanged; only the
+                        per-signal formatting moved to the single registry. */}
+                    {EDGE_RAIL.map((col, ci) => col.sep
+                      ? <Sep key={`sep-${ci}`}/>
+                      : (
+                        <RailColumn key={`col-${ci}`} bracket={col.bracket} color={col.color} flexWeight={col.flexWeight}>
+                          {col.metrics.map(id => <MiniStat key={id} {...resolveEdgeStat(id, edgeBag)} />)}
+                        </RailColumn>
+                      )
+                    )}
 
                     <Sep/>
 
@@ -10593,7 +10444,13 @@ Structure:
                         sub={
                           todayCompleted
                             ? `${todayRTSS} load logged`
-                            : (planned?.distanceMi ? `${planned.distanceMi}mi` : (planned?.minutes ? `${planned.minutes}min` : 'No plan'))
+                            : (planned?.distanceMi ? `${planned.distanceMi}mi`
+                                : (planned?.minutes ? `${planned.minutes}min`
+                                    // A session IS planned (e.g. Mobility) but has no
+                                    // distance/duration target → "no target", not the
+                                    // misleading "No plan". "No plan" is reserved for a
+                                    // truly empty day (no planned entry at all).
+                                    : (planned ? 'no target' : 'No plan')))
                         }/>
                       <MiniStat tier="action" label="Race" value={daysToRace} type="race"
                         fmt={v => `${v}d`}
@@ -10678,14 +10535,21 @@ Structure:
           AnnotationStrip removed — coaching nudges are surfaced through
           the hero-rail Behind line + (future Stage 3) coaching prompts. */}
 
-      {/* Race detail — conditional. Only render when there's a race within
-          the next 60 days. Carries info the hero's compact Race tile can't:
-          predicted finish, goal pace vs current pace, race readiness. */}
+      {/* Race detail — conditional. Phase 4r.race.16 — only render within the
+          7-day pre-race window (was 60 days, which surfaced the NEXT race ~weeks
+          out the moment the current one finished — violated the 7-day rule the
+          Play tab already follows). Outside 7 days the race lives on Calendar.
+          Carries info the hero's compact Race tile can't: predicted finish,
+          goal pace vs current pace, race readiness. */}
       {(()=>{
         const races=(()=>{try{return JSON.parse(localStorage.getItem('arnold:races')||'[]');}catch{return[];}})();
         const nowD=new Date(); nowD.setHours(0,0,0,0);
-        const cutoff60=new Date(nowD); cutoff60.setDate(nowD.getDate()+60);
-        const upcoming=races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=nowD&&d<=cutoff60;}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
+        const cutoff7=new Date(nowD); cutoff7.setDate(nowD.getDate()+7);
+        // Phase 4r.race.15 — drop the race card once the race is LOGGED on its
+        // date (any non-mobility ≥30min/≥5mi — HYROX logs as strength/cardio,
+        // not run), rather than lingering until midnight on race day.
+        const _raceDoneToday=(rDate)=>(activities||[]).some(a=>a?.date===rDate&&!isMobilityAct(a)&&(((Number(a.durationSecs)||0)/60)>=30||(Number(a.distanceMi)||0)>=5));
+        const upcoming=races.filter(r=>{const d=parseLocalDate(r.date);return d&&d>=nowD&&d<=cutoff7&&!_raceDoneToday(r.date);}).sort((a,b)=>parseLocalDate(a.date)-parseLocalDate(b.date));
         const nr=upcoming[0];
         if(!nr)return null;
         const runs30=ytdRuns.filter(a=>a.date&&parseLocalDate(a.date)>=thirtyDays);

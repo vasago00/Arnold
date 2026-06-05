@@ -12,7 +12,7 @@ import { computeDailyScore, computeRolling7d, computeRolling30d, computeHrTSS } 
 import { getEffectiveMaxHR } from "../core/trainingStress.js";
 import { buildIntelContext, makePaint } from "../core/intelContext.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
-import { isRun, isStrength, isMobility, isHIIT, activityKind, iconTypeFor } from "../core/activityClass.js";
+import { isRun, isStrength, isStrengthVolume, isMobility, isHIIT, activityKind, iconTypeFor } from "../core/activityClass.js";
 import { dcy as dcyToday, dcyWeekly, formatDcy, glyphFor, stateFor } from "../core/dcy.js";
 import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.js";
 import { NutritionInput } from "./NutritionInput.jsx";
@@ -116,7 +116,7 @@ function useMobileData() {
     // Use canonical activityClass helpers — single source of truth for
     // run/strength/HIIT bucketing across every screen.
     const thisWeekRuns = thisWeekActs.filter(isRun);
-    const thisWeekStr  = thisWeekActs.filter(isStrength);
+    const thisWeekStr  = thisWeekActs.filter(isStrengthVolume); // incl. hybrid (HYROX)
     const twMi = thisWeekRuns.reduce((s, a) => s + (a.distanceMi || 0), 0);
     const twHrs = thisWeekActs.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600;
     const twSessions = thisWeekActs.length;
@@ -126,7 +126,7 @@ function useMobileData() {
     const d30Date = new Date(now - 30 * 86400000);
     const recent30 = activities.filter(a => a.date && parseLocalDate(a.date) >= d30Date);
     const recent30Runs = recent30.filter(isRun);
-    const recent30Str  = recent30.filter(isStrength);
+    const recent30Str  = recent30.filter(isStrengthVolume); // incl. hybrid (HYROX)
     const weeks43 = 30 / 7;
     const avg30Mi = (recent30Runs.reduce((s, a) => s + (a.distanceMi || 0), 0) / weeks43).toFixed(1);
     const avg30StrSess = (recent30Str.length / weeks43).toFixed(1);
@@ -279,7 +279,13 @@ function useMobileData() {
     const avg30Protein = recentNut.length ? (recentNut.reduce((s, n) => s + (n.protein || 0), 0) / recentNut.length).toFixed(0) : '—';
 
     // ── Next race ──
-    const nextRace = (() => { try { const races = JSON.parse(localStorage.getItem('arnold:races') || '[]'); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => { const d = parseLocalDate(r.date); return d && d >= n2; }).sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null; } catch { return null; } })();
+    // Phase 4r.race.15 — a race is DONE once a meaningful session is logged on
+    // its date (any non-mobility ≥30min/≥5mi — HYROX logs as strength/cardio,
+    // not run). Exclude done races so the Start hero badge + RACE card drop
+    // immediately, instead of lingering until midnight on race day.
+    const _raceDoneOn = (rDate) => (activities || []).some(a => a?.date === rDate && !isMobility(a)
+      && (((Number(a.durationSecs) || 0) / 60) >= 30 || (Number(a.distanceMi) || 0) >= 5));
+    const nextRace = (() => { try { const races = JSON.parse(localStorage.getItem('arnold:races') || '[]'); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => { const d = parseLocalDate(r.date); return d && d >= n2 && !_raceDoneOn(r.date); }).sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null; } catch { return null; } })();
 
     return {
       G, profile, today, d30Cutoff,
@@ -442,6 +448,17 @@ const Icon = {
   Pulse: ({ color = T4, size = 19 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  ),
+  // Line chart trending up — Trend (distinct from Core's Pulse)
+  TrendChart: ({ color = T4, size = 19 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {/* axes */}
+      <path d="M3 3 v18 h18" opacity="0.4" />
+      {/* trend line */}
+      <polyline points="6 15 10 11 13 13 19 6" />
+      {/* arrowhead at the rising end */}
+      <polyline points="15.5 6 19 6 19 9.5" />
     </svg>
   ),
   // Cross pipe fitting — Labs (Option D)
@@ -661,6 +678,28 @@ export function NavIconForTab({ tabId, color, size = 16 }) {
   const Cmp = NAV_TAB_ICON_CMP[navId];
   if (!Cmp) return null;
   return <Cmp color={color || C.blue} size={size} />;
+}
+
+// Phase 4r.web.tabicons — web has MORE tabs than the mobile bottom-nav (Daily,
+// Trend, Stack, Profile have no mobile slot, so TAB_TO_NAV_ID maps them to
+// 'more'). To give the WEB tab bar the same gamified SVG icon language as
+// mobile, map each web tab id directly to the best-fit Icon. Used by the web
+// tab bar in Arnold.jsx in place of the old unicode glyphs.
+const WEB_TAB_ICON_CMP = {
+  training:    Icon.GemSpark,  // EdgeIQ
+  daily:       Icon.PspX,      // Daily
+  weekly:      Icon.TrendChart, // Trend
+  races:       Icon.Calendar,  // Calendar
+  goals:       Icon.Target,    // Plan
+  labs:        Icon.Pipe,      // Labs
+  clinical:    Icon.Pulse,     // Core
+  supplements: Icon.Pill,      // Stack
+  settings:    Icon.User,      // Profile
+};
+export function WebTabIcon({ tabId, color, size = 16 }) {
+  const Cmp = WEB_TAB_ICON_CMP[tabId];
+  if (!Cmp) return null;
+  return <Cmp color={color} size={size} />;
 }
 
 // Public color export — same as the bottom-nav active blue. Lets Arnold.jsx
