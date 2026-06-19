@@ -9,9 +9,13 @@
 
 import { makeFitnessModel } from './fitnessModel.js';
 import { makeResponseModel } from './responseModel.js';
+import { makeBodyModel } from './bodyModel.js';
+import { makeSweatModel } from './sweatModel.js';
 import { ingestCheckpoint } from './ingestCheckpoint.js';
 
-export const HUB_STATE_VERSION = 1;
+// v2 adds the body (weight trend) + sweat (rate-vs-temp) ledgers. heatStrain lives
+// in response.factors, so it already persists with the response model — no new slot.
+export const HUB_STATE_VERSION = 2;
 export const HUB_STATE_KEY = 'hub:state';
 const LOG_CAP = 200; // keep the most recent N checkpoint log entries
 
@@ -21,6 +25,8 @@ export function createHubState(opts = {}) {
     version: HUB_STATE_VERSION,
     fitness: makeFitnessModel(opts.fitnessPriors || {}),
     response: makeResponseModel(),
+    body: makeBodyModel(),
+    sweat: makeSweatModel(),
     log: [],
     lastUpdated: null,
   };
@@ -60,6 +66,8 @@ export function serializeHubState(state) {
     version: HUB_STATE_VERSION,
     fitness: state.fitness,
     response: state.response,
+    body: state.body,
+    sweat: state.sweat,
     log: state.log,
     lastUpdated: state.lastUpdated,
   }));
@@ -81,9 +89,32 @@ export function deserializeHubState(raw, opts = {}) {
     version: HUB_STATE_VERSION,
     fitness: { params: coerceEstimates(fitnessParams) },
     response: { factors: coerceEstimates(responseFactors) },
+    body: coerceBody(raw.body) || fresh.body,     // v1 states lack these → fresh (migration)
+    sweat: coerceSweat(raw.sweat) || fresh.sweat,
     log: Array.isArray(raw.log) ? raw.log.slice(-LOG_CAP) : fresh.log,
     lastUpdated: typeof raw.lastUpdated === 'string' ? raw.lastUpdated : null,
   };
+}
+
+// Repair the body ledger ({ weight: Estimate, fasted: [{date, lb}] }).
+function coerceBody(b) {
+  if (!b || typeof b !== 'object') return null;
+  const w = (b.weight && Number.isFinite(b.weight.value) && Number.isFinite(b.weight.precision))
+    ? { value: b.weight.value, precision: b.weight.precision } : { value: 0, precision: 0 };
+  const fasted = Array.isArray(b.fasted)
+    ? b.fasted.filter(f => f && typeof f.date === 'string' && Number.isFinite(Number(f.lb)))
+        .map(f => ({ date: f.date, lb: Number(f.lb) })).slice(-60) : [];
+  return { weight: w, fasted };
+}
+
+// Repair the sweat ledger ({ obs: [{tempC, rateLhr, precision, date}] }).
+function coerceSweat(s) {
+  if (!s || typeof s !== 'object') return null;
+  const obs = Array.isArray(s.obs)
+    ? s.obs.filter(o => o && Number.isFinite(o.tempC) && Number.isFinite(o.rateLhr))
+        .map(o => ({ tempC: o.tempC, rateLhr: o.rateLhr, precision: Number.isFinite(o.precision) ? o.precision : 1, date: o.date || null }))
+        .slice(-40) : [];
+  return { obs };
 }
 
 // Keep only well-formed { value, precision } estimates; drop anything corrupt.

@@ -1,0 +1,52 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Sparkline > draws a deterministic trajectory path for a real series 1`] = `
+<div>
+  <svg
+    height="18"
+    viewBox="0 0 60 18"
+    width="60"
+  >
+    <path
+      d="M 2,17 L 2,16 L 16,12.5 L 30,14.25 L 44,7.25 L 58,2 L 58,17 Z"
+      fill="#60a5fa"
+      opacity="0.15"
+    />
+    <polyline
+      fill="none"
+      points="2,16 16,12.5 30,14.25 44,7.25 58,2"
+      stroke="#60a5fa"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.2"
+    />
+    <circle
+      cx="58"
+      cy="2"
+      fill="#60a5fa"
+      r="1.6"
+    />
+  </svg>
+</div>
+`;
+
+exports[`Sparkline > renders a dashed placeholder line when given fewer than 2 points 1`] = `
+<div>
+  <svg
+    height="18"
+    viewBox="0 0 60 18"
+    width="60"
+  >
+    <line
+      opacity="0.6"
+      stroke="var(--text-muted)"
+      stroke-dasharray="2 2"
+      stroke-width="1"
+      x1="2"
+      x2="58"
+      y1="9"
+      y2="9"
+    />
+  </svg>
+</div>
+`;

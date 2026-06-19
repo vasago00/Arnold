@@ -135,63 +135,115 @@ export function computeActivityNeeds(activity, profile = {}) {
 // ─── Track replenishment progress ────────────────────────────────────────────
 // Checks nutrition-log entries tagged with pre/during/post workout meal categories
 // against the computed needs. Returns progress for each micro-goal.
-export function trackReplenishment(activityNeeds, dateStr) {
+// Pre/post windows around the workout (ms). Cronometer per-meal rows carry
+// wall-clock timestamps, so we bucket intake by WHEN it was eaten relative to
+// the session rather than relying on the user to hand-tag each meal as
+// pre/post-workout. Pre = up to 3 h before the start; During = start→end;
+// Post = up to 2 h after the end.
+const PRE_WINDOW_MS  = 3 * 60 * 60 * 1000;
+const POST_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+function _zeroMacros() { return { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0 }; }
+
+// Parse "07:32 AM" / "19:14" / "6:41 PM" → { h, m } (24h) or null.
+function _parseClock(raw) {
+  if (!raw) return null;
+  const m = String(raw).trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  const ap = (m[3] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+  return { h, m: mm };
+}
+
+// Epoch-ms for an activity's start (activity.startTime || activity.time on its date).
+function _clockMs(raw, activity, dateStr) {
+  const clk = _parseClock(raw);
+  const d = activity?.date || dateStr;
+  if (!clk || !/^\d{4}-\d{2}-\d{2}$/.test(String(d))) return null;
+  const ms = new Date(`${d}T${String(clk.h).padStart(2, '0')}:${String(clk.m).padStart(2, '0')}:00`).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+// The FIT parser stores `time` as the activity START. We also accept an explicit
+// END field if any source supplies one, deriving the missing endpoint from the
+// elapsed time (durationSecs), so the window sits correctly whichever is given.
+function _workoutStartMs(activity, dateStr) {
+  if (!activity) return null;
+  return _clockMs(activity.startTime || activity.startTimeLocal || activity.time, activity, dateStr);
+}
+function _workoutEndMs(activity, dateStr) {
+  if (!activity) return null;
+  return _clockMs(activity.endTime || activity.endTimeLocal, activity, dateStr);
+}
+
+// Epoch-ms for a nutrition-log entry — prefer its ISO timestamp (Cronometer
+// per-meal rows), else reconstruct from date + clock time.
+function _entryMs(e, dateStr) {
+  if (e?.timestamp) { const ms = Date.parse(e.timestamp); if (!Number.isNaN(ms)) return ms; }
+  const clk = _parseClock(e?.time);
+  const d = e?.date || dateStr;
+  if (clk && /^\d{4}-\d{2}-\d{2}$/.test(String(d))) {
+    const ms = new Date(`${d}T${String(clk.h).padStart(2, '0')}:${String(clk.m).padStart(2, '0')}:00`).getTime();
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+export function trackReplenishment(activityNeeds, dateStr, activity = null) {
   if (!activityNeeds) return [];
 
-  // Merge nutrition-log entries (manual/barcode/photo/voice)
   const logEntries = (storage.get('nutritionLog') || []).filter(e => e.date === dateStr);
 
-  // Also check Cronometer CSV data for the same date
-  const cronoRow = (storage.get('cronometer') || []).find(c => c.date === dateStr);
+  // Workout time window. If we can't determine when the session happened, we
+  // fall back to honoring only explicit pre/during/post meal tags (no
+  // timestamp bucketing) so we never mis-attribute intake.
+  const durMs = (activityNeeds.durationSecs || 0) * 1000;
+  let startMs = _workoutStartMs(activity, dateStr);
+  let endMs = _workoutEndMs(activity, dateStr);
+  // Derive whichever endpoint is missing from the elapsed time.
+  if (startMs == null && endMs != null) startMs = endMs - durMs;
+  if (endMs == null && startMs != null) endMs = startMs + durMs;
 
-  // Sum macros by meal phase from nutrition-log
-  const phaseTotals = {};
+  const phaseTotals = {
+    pre_workout: _zeroMacros(),
+    during_workout: _zeroMacros(),
+    post_workout: _zeroMacros(),
+  };
+
   for (const e of logEntries) {
-    const phase = e.meal;
+    // Skip the Cronometer full-day rollup — it's a daily sum, not a timed meal,
+    // and counting it made every goal auto-complete with day-totals.
+    if (e.meal === 'full-day' || e.source === 'cronometer-live') continue;
+
+    // 1) An explicit pre/during/post tag always counts toward that phase.
+    let phase = (e.meal === 'pre_workout' || e.meal === 'during_workout' || e.meal === 'post_workout')
+      ? e.meal : null;
+
+    // 2) Otherwise bucket by timestamp relative to the workout window.
+    if (!phase && startMs != null) {
+      const t = _entryMs(e, dateStr);
+      if (t != null) {
+        if (t >= startMs - PRE_WINDOW_MS && t < startMs) phase = 'pre_workout';
+        else if (t >= startMs && t <= endMs) phase = 'during_workout';
+        else if (t > endMs && t <= endMs + POST_WINDOW_MS) phase = 'post_workout';
+      }
+    }
     if (!phase) continue;
-    if (!phaseTotals[phase]) phaseTotals[phase] = { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0 };
+
     const s = e.servings || 1;
     for (const k of ['calories', 'protein', 'carbs', 'fat', 'water']) {
       phaseTotals[phase][k] += (e.macros?.[k] || 0) * s;
     }
   }
 
-  // All-day totals from nutrition-log
-  const allDayTotals = { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0 };
-  for (const e of logEntries) {
-    const s = e.servings || 1;
-    for (const k of ['calories', 'protein', 'carbs', 'fat', 'water']) {
-      allDayTotals[k] += (e.macros?.[k] || 0) * s;
-    }
-  }
-
-  // Merge Cronometer totals (use the higher of nutrition-log vs Cronometer)
-  if (cronoRow) {
-    allDayTotals.calories = Math.max(allDayTotals.calories, parseFloat(cronoRow.calories) || 0);
-    allDayTotals.protein = Math.max(allDayTotals.protein, parseFloat(cronoRow.protein) || 0);
-    allDayTotals.carbs = Math.max(allDayTotals.carbs, parseFloat(cronoRow.carbs) || 0);
-    allDayTotals.fat = Math.max(allDayTotals.fat, parseFloat(cronoRow.fat) || 0);
-    allDayTotals.water = Math.max(allDayTotals.water, (parseFloat(cronoRow.water) || 0) * 1000); // Cronometer water is in L
-  }
-
   return activityNeeds.goals.map(goal => {
-    // Use all-day totals for all macros. Most users tag meals as breakfast/
-    // lunch/snack, not "post_workout", so phase-only tracking misses intake.
-    // Phase-specific totals kept for future detail view.
-    const phaseConsumed = (phaseTotals[goal.phase] || {})[goal.macro] || 0;
-    const dayConsumed = allDayTotals[goal.macro] || 0;
-    // Use the higher of phase-specific or all-day (all-day always >= phase)
-    const consumed = Math.max(phaseConsumed, dayConsumed);
-
+    const consumed = (phaseTotals[goal.phase] || {})[goal.macro] || 0;
     const pct = goal.target > 0 ? Math.min(consumed / goal.target, 1) : 0;
     const met = pct >= 0.9; // 90% threshold = goal met
-
-    return {
-      ...goal,
-      consumed: Math.round(consumed),
-      pct,
-      met,
-    };
+    return { ...goal, consumed: Math.round(consumed), pct, met };
   });
 }
 

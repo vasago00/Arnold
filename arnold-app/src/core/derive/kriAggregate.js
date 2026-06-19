@@ -116,6 +116,7 @@ export function aggregateTimeframes(samples, opts) {
     if (!vals.length) return null;
     if (mode === 'total') return vals.reduce((s, v) => s + v, 0);
     if (mode === 'max') return Math.max(...vals);
+    if (mode === 'min') return Math.min(...vals);   // best (e.g. fastest predicted race time)
     return vals.reduce((s, v) => s + v, 0) / vals.length;
   };
 
@@ -174,6 +175,18 @@ export function aggregateTimeframes(samples, opts) {
       }
     }
     ytd = any ? mx : null;
+  } else if (ytdMode === 'min') {
+    // Year's best (smallest) sample — e.g. fastest predicted race time.
+    let mn = Infinity;
+    let any = false;
+    for (const s of samples) {
+      if (!s?.date || s.value == null || !Number.isFinite(s.value)) continue;
+      if (s.date >= yearStartStr) {
+        if (s.value < mn) mn = s.value;
+        any = true;
+      }
+    }
+    ytd = any ? mn : null;
   } else {
     // Weekly avg — collect every week from Jan 1 to current week.
     const ytdBuckets = [];

@@ -271,6 +271,8 @@ export const KEYS = {
 
   // Training
   strengthTemplates: 'arnold:strength-templates',
+  sessionRPE:    'arnold:session-rpe',         // per-session perceived effort (RPE) — syncs cross-device (web↔mobile)
+  addedLoad:     'arnold:added-load',          // per-session weight-vest / pack load (lb) — syncs cross-device
 
   // System
   importHistory: 'arnold:import-history',

@@ -20,8 +20,16 @@
 // cross-device sync all pick it up automatically.
 
 import { canonicalActivityType } from '../dcyMath.js';
+import { morningWeightRows } from '../bodyWeight.js';
 import { isRun, isStrength as isStrengthAct } from '../activityClass.js';
 import { timeframesFromCollection, aggregateTimeframes } from './kriAggregate.js';
+import { storage } from '../storage.js';
+// Hub-authoritative predictor: Races + Trend read the persisted hub fitness and
+// project through the SAME predictFromFitness the HubPanel uses, so there is one
+// race number everywhere. Safe import — raceFitness has no dependency back on
+// derive/ (verified), so no import cycle.
+import { predictFromFitness } from '../hub/raceFitness.js';
+import { racedDistancesKm } from '../hub/backfill.js';
 // Phase 4r.dataspine.4 — Migrated from legacy resolveCalorieTarget to
 // the canonical Layer 3 reader getEffectiveTargets (see DATAMODEL.md).
 // resolveCalorieTarget is now deprecated/deleted.
@@ -241,6 +249,68 @@ export function isPureRunningRace(race) {
   return km >= 1;
 }
 
+// ── THE shared finish-time primitive (Step 4 unify) ──
+// Best empirical anchor + personal distance-aware exponent → finish seconds for
+// ANY distance. This is the single source of truth: predictRaceFinish (Races list)
+// and the Trend "Race Predictor" tile both route through it, so they can no longer
+// disagree (the old Races 49:23 vs Trend 1:01:40 split came from the tile using a
+// CONSTANT Riegel 1.06 instead of this personal model). The Intelligence Hub is
+// built on the same anchor+exponent primitives (fatigueExponent), so all three agree.
+// ── ONE source of truth for race-model configuration ────────────────────────
+// Every surface that converts hub fitness into a race time MUST configure the
+// model through this helper: the personal distance-aware fatigue exponent (kFor)
+// + the athlete's raced distances (racedKms, for extrapolation conservatism).
+// predictFinishSecs / predictRaceFinish (Start pill, Calendar, Goals) AND the
+// Coach (hubFacts) all pass these, so every surface shows ONE number. Passing
+// partial opts silently degrades the model into an over-optimistic estimate —
+// that divergence is the bug raceParity.test.js now guards against.
+export function racePredictionOpts(activities) {
+  const acts = activities || [];
+  const kFor = (fromKm, toKm) => {
+    const lo = Math.min(fromKm, toKm), hi = Math.max(fromKm, toKm);
+    try { const f = fatigueExponent(acts, { anchorKm: lo, targetKm: hi }); return f && Number.isFinite(f.k) ? Math.min(1.30, Math.max(1.0, f.k)) : 1.06; }
+    catch { return 1.06; }
+  };
+  return { kFor, racedKms: racedDistancesKm(acts) };
+}
+
+export function predictFinishSecs(distanceKm, activities) {
+  if (!distanceKm || distanceKm <= 0) return null;
+
+  // HUB-AUTHORITATIVE: if the hub has seeded fitness, project through it — the SAME
+  // predictFromFitness the HubPanel/hubDebug use, so one race number everywhere.
+  // Distance-aware exponent comes from the athlete's own fatigueExponent fit. Falls
+  // back to the best-anchor model below when the hub isn't seeded (cold start).
+  try {
+    const hub = storage.get('hub:state');
+    const fitness = hub && hub.fitness;
+    if (fitness && fitness.params && fitness.params.ref10kEquivSecs) {
+      const p = predictFromFitness(fitness, distanceKm, racePredictionOpts(activities));
+      if (p && p.secs > 0) {
+        return { seconds: Math.round(p.secs), exponent: p.k != null ? +Number(p.k).toFixed(3) : null, exponentSource: 'hub', source: 'hub', distanceKm };
+      }
+    }
+  } catch {}
+
+  const anchor = findEmpiricalRaceAnchor(activities || []);
+  if (!anchor?.run) return null;
+  const D1mi = Number(anchor.run.distanceMi || anchor.run.distance_mi);
+  const T1 = Number(anchor.run.durationSecs);
+  if (!D1mi || D1mi < 3 || !T1 || T1 < 15 * 60) return null;
+  const D1km = D1mi * 1.60934;
+  // T = T1 × (D2/D1)^k, k from the runner's own data (not a constant Riegel 1.06,
+  // which under-predicts the further you reach past the anchor).
+  const fit = fatigueExponent(activities, { anchorKm: D1km, targetKm: distanceKm });
+  return {
+    seconds: Math.round(T1 * Math.pow(distanceKm / D1km, fit.k)),
+    exponent: +fit.k.toFixed(3),
+    exponentSource: fit.source,   // 'personal-fit' | 'durability-adjusted' | 'distance-aware'
+    fit,                          // diagnostic detail (R², n points, durability, etc.)
+    anchor,
+    distanceKm,
+  };
+}
+
 export function predictRaceFinish(race, activities) {
   if (!race) return null;
   if (!isPureRunningRace(race)) return null;  // hyrox/tri/other → no run projection
@@ -248,30 +318,10 @@ export function predictRaceFinish(race, activities) {
     (Number(race.distanceMi) ? Number(race.distanceMi) * 1.60934 : null);
   if (!distanceKm || distanceKm <= 0) return null;
 
-  const anchor = findEmpiricalRaceAnchor(activities || []);
-  if (!anchor?.run) return null;
-
-  const D1mi = Number(anchor.run.distanceMi || anchor.run.distance_mi);
-  const T1 = Number(anchor.run.durationSecs);
-  if (!D1mi || D1mi < 3 || !T1 || T1 < 15 * 60) return null;
-  const D1km = D1mi * 1.60934;
-
-  // ── Endurance model: T = T1 × (D2/D1)^k ──
-  // The exponent k IS the endurance/fatigue-resistance model. Riegel's 1.06
-  // is only valid for SHORT extrapolations; it under-predicts (too fast) the
-  // further you reach past the anchor. We derive k from the runner's own data
-  // instead of assuming a constant.
-  const fit = fatigueExponent(activities, { anchorKm: D1km, targetKm: distanceKm });
-  const k = fit.k;
-  const seconds = Math.round(T1 * Math.pow(distanceKm / D1km, k));
-
+  const p = predictFinishSecs(distanceKm, activities);
+  if (!p) return null;
   return {
-    seconds,
-    exponent: +k.toFixed(3),
-    exponentSource: fit.source,   // 'personal-fit' | 'durability-adjusted' | 'distance-aware'
-    fit,                          // diagnostic detail (R², n points, durability, etc.)
-    anchor,
-    distanceKm,
+    ...p,
     // Course profile still NOT modeled — NY-hilly vs Berlin/Valencia-flat get
     // the same time. Separate (heavier) backlog item; needs elevation data.
     courseModeled: false,
@@ -773,7 +823,12 @@ export function evaluate(metric, ctx) {
       const decimals = isFinite(todayVal) && String(result.value).includes('.')
         ? (String(result.value).split('.')[1] || '').length
         : 0;
-      result.avg30 = decimals > 0 ? +avgVal.toFixed(decimals) : Math.round(avgVal);
+      // If the metric defines a value formatter (e.g. race time → H:MM), apply it
+      // so the 30d-avg slot reads in the same units as the headline — not raw
+      // seconds (the Race Predictor was showing "8558" instead of a time).
+      result.avg30 = (typeof metric.formatter === 'function')
+        ? metric.formatter(avgVal)
+        : (decimals > 0 ? +avgVal.toFixed(decimals) : Math.round(avgVal));
     }
   }
   return result;
@@ -925,13 +980,13 @@ export const TILE_METRICS = [
       return out;
     },
     compute: (ctx) => {
+      // H:MM for races ≥1h (no false-precision seconds, rounded to the minute);
+      // M:SS for sub-hour predictions (5K/10K) where seconds still matter.
       const fmt = s => {
         if (s == null || !Number.isFinite(s) || s <= 0) return '—';
-        const h = Math.floor(s / 3600);
-        const m = Math.floor((s % 3600) / 60);
-        const sec = Math.round(s % 60);
-        return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
-                     : `${m}:${String(sec).padStart(2, '0')}`;
+        if (s >= 3600) { const tm = Math.round(s / 60); return `${Math.floor(tm / 60)}:${String(tm % 60).padStart(2, '0')}`; }
+        const m = Math.floor(s / 60); const sec = Math.round(s % 60);
+        return `${m}:${String(sec).padStart(2, '0')}`;
       };
 
       // Phase 4r.race.1 — empirical-first race-time projection.
@@ -942,12 +997,18 @@ export const TILE_METRICS = [
       //   1. Empirical anchor (race-effort distance match OR quality long
       //      run) → Riegel projection across all 4 standard distances.
       //   2. Garmin's racePredictor block from most recent FIT — fallback.
-      const anchor = findEmpiricalRaceAnchor(ctx.activities || []);
+      // Step 4 unify: use the SHARED predictFinishSecs (best anchor + personal
+      // distance-aware k) for all 4 standard distances, so the Trend headline
+      // matches the Races list exactly (was constant-Riegel riegelPredictFromRun,
+      // which produced the 1:01:40-vs-49:23 disagreement).
+      const acts = ctx.activities || [];
+      const anchor = findEmpiricalRaceAnchor(acts);
+      const _secs = (km) => { const p = predictFinishSecs(km, acts); return p ? p.seconds : null; };
       const empirical = anchor ? {
-        t5k:  riegelPredictFromRun(anchor.run, 't5k'),
-        t10k: riegelPredictFromRun(anchor.run, 't10k'),
-        tHM:  riegelPredictFromRun(anchor.run, 'tHM'),
-        tM:   riegelPredictFromRun(anchor.run, 'tM'),
+        t5k:  _secs(5),
+        t10k: _secs(10),
+        tHM:  _secs(21.0975),
+        tM:   _secs(42.195),
       } : null;
 
       const garminMostRecent = (ctx.activities || [])
@@ -1002,12 +1063,9 @@ export const TILE_METRICS = [
     ytdMode: 'avg',
     formatter: (v) => {
       if (v == null || !Number.isFinite(v) || v <= 0) return '—';
-      const h = Math.floor(v / 3600);
-      const m = Math.floor((v % 3600) / 60);
-      const s = Math.round(v % 60);
-      return h > 0
-        ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-        : `${m}:${String(s).padStart(2, '0')}`;
+      if (v >= 3600) { const tm = Math.round(v / 60); return `${Math.floor(tm / 60)}:${String(tm % 60).padStart(2, '0')}`; }
+      const m = Math.floor(v / 60); const s = Math.round(v % 60);
+      return `${m}:${String(s).padStart(2, '0')}`;
     },
     // Map the next race's distance (km) to the FIT racePredictor field key.
     // Tolerances match the standard event distances allowing for course
@@ -1033,22 +1091,35 @@ export const TILE_METRICS = [
       // because it's VO2max-derived). Riegel anchored on actual pace per
       // run is the primary source. Aggregates over qualifying runs only
       // (≥3mi, ≥15min — filter inside riegelPredictFromRun).
+      // Step 4 unify: the headline must MATCH the Races list. Project each run to
+      // the target distance with the PERSONAL distance-aware exponent (the same
+      // fatigueExponent that powers predictFinishSecs), then take the BEST (min)
+      // per window — your fastest demonstrated fitness — instead of averaging easy
+      // runs with a constant Riegel 1.06 (the old 1:01:40 vs 49:23 disagreement).
+      const targetKm = km == null ? 21.0975 : km;   // default Half when no race scheduled
+      // Hub-authoritative: when the hub is seeded, every sample = the hub's prediction
+      // so the Trend headline matches Races + the HubPanel exactly (one number). The
+      // series flattens in that case (current fitness is a single hub estimate); before
+      // the hub is seeded it falls back to the per-run personal-best projection so the
+      // tile still shows a real trend.
+      const hubSecs = (() => { const p = predictFinishSecs(targetKm, ctx.activities); return p && p.source === 'hub' ? p.seconds : null; })();
       return timeframesFromCollection(
         ctx.activities,
         {
           filter: a => isRun(a),
           valueField: a => {
-            const r = riegelPredictFromRun(a, fieldKey);
-            if (r && r > 0) return r;
-            // Fall back to Garmin's block for activities that don't qualify
-            // for Riegel (warm-ups, sprint reps, casual short runs).
-            if (a?.racePredictor && a.racePredictor[fieldKey]) {
-              return Number(a.racePredictor[fieldKey]) || null;
+            if (hubSecs != null) return hubSecs;
+            const dMi = Number(a.distanceMi || a.distance_mi);
+            const T1 = Number(a.durationSecs);
+            if (!dMi || dMi < 3 || !T1 || T1 < 15 * 60) {
+              return (a?.racePredictor && a.racePredictor[fieldKey]) ? Number(a.racePredictor[fieldKey]) || null : null;
             }
-            return null;
+            const D1km = dMi * 1.60934;
+            const fit = fatigueExponent(ctx.activities, { anchorKm: D1km, targetKm });
+            return Math.round(T1 * Math.pow(targetKm / D1km, fit.k));
           },
-          mode: 'avg',
-          ytdMode: 'avg',
+          mode: 'min',
+          ytdMode: 'min',
         }
       );
     },
@@ -2328,15 +2399,15 @@ export const TILE_METRICS = [
     polarity: 'target',
     ytdMode: 'avg',
     timeframes: (ctx) => timeframesFromCollection(
-      ctx.weightData,
+      morningWeightRows(ctx.weightData || []),
       { valueField: w => w?.weightLbs ?? w?.weight, mode: 'avg', ytdMode: 'avg' }
     ),
-    historyOf: (ctx) => [...(ctx.weightData || [])]
+    historyOf: (ctx) => [...morningWeightRows(ctx.weightData || [])]
       .filter(w => w?.weightLbs)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .map(w => w.weightLbs),
     compute: (ctx) => {
-      const recent = filterByDateGe(ctx.weightData || [], daysAgo(7))
+      const recent = filterByDateGe(morningWeightRows(ctx.weightData || []), daysAgo(7))
         .filter(w => w?.weightLbs);
       if (!recent.length) return null;
       const v = avg(recent, 'weightLbs');
@@ -2348,7 +2419,7 @@ export const TILE_METRICS = [
     },
     trendOf: (ctx) => {
       // Prior 7-14d for the trend arrow
-      const prev = filterByDateGe(ctx.weightData || [], daysAgo(14))
+      const prev = filterByDateGe(morningWeightRows(ctx.weightData || []), daysAgo(14))
         .filter(w => w?.weightLbs && w.date < new Date(daysAgo(7)).toISOString().slice(0, 10));
       if (!prev.length) return null;
       return avg(prev, 'weightLbs');

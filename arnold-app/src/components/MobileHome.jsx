@@ -8,13 +8,17 @@ import { Sparkline } from "./Sparkline.jsx";
 // STATUS/statusFromPct removed — readiness now computed by trainingStress.js
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
+import { healthStatusColor } from "../core/presentation/healthTokens.js";
+import { HealthTileBase } from "./HealthSystemTile.jsx";
+import { SYSTEM_ICONS } from "./systemIcons.jsx";
 import { computeDailyScore, computeRolling7d, computeRolling30d, computeHrTSS } from "../core/trainingStress.js";
 import { getEffectiveMaxHR } from "../core/trainingStress.js";
 import { buildIntelContext, makePaint } from "../core/intelContext.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isStrengthVolume, isMobility, isHIIT, activityKind, iconTypeFor } from "../core/activityClass.js";
 import { dcy as dcyToday, dcyWeekly, formatDcy, glyphFor, stateFor } from "../core/dcy.js";
-import { todayPlanned, checkTodayCompletion, DAY_TYPES } from "../core/planner.js";
+import { todayPlanned, checkTodayCompletion, DAY_TYPES, getPlannerWeek, weekKey, dayRunMiles } from "../core/planner.js";
+import { currentTrueWeightLbs } from "../core/bodyWeight.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
@@ -63,11 +67,16 @@ import {
   buildTileContext,
   getMetric,
   evaluate,
+  deriveStatus,
   STATUS_COLORS,
   STATUS_ICONS,
+  predictRaceFinish,
 } from "../core/derive/tileMetrics.js";
 import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
+import { buildHubFromStorage } from "../core/hub/hubDebug.js";
+import { hubScoreTile } from "../core/hub/promote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
+import { MetricTile } from "./ui/MetricTile.jsx";
 import { CoachComment } from "./CoachComment.jsx";
 import { CoachSigil } from "./CoachSigil.jsx";
 // Phase 4r.hygiene.1 — InsightsPanel import removed. Its last consumer in
@@ -184,7 +193,7 @@ function useMobileData() {
     // HC-sourced weight rows lack bodyFatPct (HC doesn't pass it through),
     // so taking sortedW[0] for everything blanks BF whenever HC was last writer.
     const sortedW = [...weightData].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    const currentWeight = sortedW[0]?.weightLbs || null;
+    const currentWeight = currentTrueWeightLbs(sortedW);
     const currentBF = (() => {
       for (const w of sortedW) {
         const v = Number(w?.bodyFatPct);
@@ -1029,7 +1038,7 @@ if (typeof window !== 'undefined') {
   };
 }
 
-function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, scoreSuffix, statusWord, statusColor, intelHeadline, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance }) {
+function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, scoreSuffix, statusWord, statusColor, intelHeadline, factors, stats, raceDaysLeft, raceName, raceDate, raceDistance, raceFinish }) {
   // `score` / `moonScore` are 0-100 projections of the signed DCY value, used
   // only for the ring geometry. `scoreLabel` / `moonScoreLabel` hold the
   // signed text ("+7", "−4") shown inside the ring.
@@ -1139,18 +1148,13 @@ function HeroRail({ score, moonScore, scoreLabel, moonScoreLabel, scoreGlyph, sc
             the narrative beside it to wrap cleanly to 2 lines without
             mid-sentence clipping. */}
         {hasRace && (
-          <div style={{
-            flexShrink: 0, padding: '5px 9px', borderRadius: 10,
-            background: 'rgba(224,155,94,0.06)', border: '1px solid rgba(224,155,94,0.12)',
-            display: 'flex', alignItems: 'center', gap: 6,
-            marginTop: -2,
-          }}>
-            <span style={{ fontSize: 16, fontWeight: 900, color: C.orange, lineHeight: 1 }}>
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7, marginTop: -2 }}>
+            <span style={{ fontSize: 18, fontWeight: 900, color: C.orange, lineHeight: 1 }}>
               {raceDaysLeft}<span style={{ fontSize: 10, fontWeight: 700 }}>d</span>
             </span>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#e6e8ec', lineHeight: 1 }}>{shortName}</div>
-              <div style={{ fontSize: 7, color: T4, marginTop: 1 }}>{raceDateStr}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#e6e8ec', lineHeight: 1.1 }}>{shortName}</div>
+              <div style={{ fontSize: 8, color: T4, marginTop: 1 }}>{raceDateStr}{raceFinish ? ` · ~${raceFinish}` : ''}</div>
             </div>
           </div>
         )}
@@ -1364,36 +1368,6 @@ function SleepInsight({ headline, detail, iconKey = 'Moon', iconColor = C.cyan }
   );
 }
 
-// ─── MINI ARC GAUGE ─────────────────────────────────────────────────────────
-// Semi-circle gauge using <circle> + strokeDasharray (same technique as SmallDial)
-// Both track and fill share the exact same circle geometry — guaranteed alignment.
-function MiniArcGauge({ pct, color }) {
-  const R = 17, CX = 22, CY = 22, SW = 3.5;
-  const halfCirc = Math.PI * R;                   // 180° arc length
-  const fullCirc = 2 * Math.PI * R;               // full circumference
-  const clamp = Math.max(0, Math.min(pct || 0, 1));
-  const fill = halfCirc * clamp;
-
-  return (
-    <svg width={44} height={26} viewBox="0 0 44 26" style={{ display: 'block' }}>
-      {/* Track: show top 180° of circle, hide bottom 180° */}
-      <circle cx={CX} cy={CY} r={R} fill="none"
-        stroke="rgba(255,255,255,0.12)" strokeWidth={SW}
-        strokeDasharray={`${halfCirc} ${halfCirc}`}
-        strokeLinecap="round"
-        transform={`rotate(180 ${CX} ${CY})`} />
-      {/* Fill: show pct portion of the top 180° */}
-      {clamp > 0.005 && (
-        <circle cx={CX} cy={CY} r={R} fill="none"
-          stroke={color} strokeWidth={SW}
-          strokeDasharray={`${fill} ${fullCirc - fill}`}
-          strokeLinecap="round"
-          transform={`rotate(180 ${CX} ${CY})`} />
-      )}
-    </svg>
-  );
-}
-
 // ─── CATEGORY LABEL ─────────────────────────────────────────────────────────
 const CAT_ICONS = {
   Run: (color) => (
@@ -1439,79 +1413,6 @@ function CategoryLabel({ label, color }) {
   );
 }
 
-// ─── METRIC TILE (Today value + semicircle gauge for 30d avg) ────────────────
-function MetricTile({ label, todayVal, todayUnit, trendText, trendColor, avg30, avg30Label, gaugePct, color, statusIcon, statusIconColor, onTap, source, autoReasons }) {
-  // Status is communicated through a tiny glyph next to the trend line:
-  // The top accent stripe also gets stronger when status is set so a glance
-  // across a row of tiles surfaces ones that need attention.
-  // ── Phase 4o.autopromote.3 — star indicator ──
-  // Filled star  ★ = manually pinned by the user (Trend tab star toggle)
-  // Hollow star  ☆ = auto-promoted by the scoring system
-  // The hollow star carries the top auto-promote reason as a title so the
-  // user can long-press / hover to see why the tile bubbled up.
-  const isAuto = source === 'auto';
-  const reasonText = isAuto && Array.isArray(autoReasons) && autoReasons.length
-    ? `Auto-promoted: ${autoReasons.slice(0, 2).join(' · ')}`
-    : null;
-  return (
-    <div onClick={onTap} style={{
-      ...card, borderRadius: 14, padding: '8px 10px 6px',
-      cursor: onTap ? 'pointer' : 'default',
-    }}>
-      {/* Top accent — stronger when status color is set, subtler otherwise */}
-      <div style={{ position: 'absolute', top: 0, left: 12, right: 12, height: 2, borderRadius: '0 0 2px 2px', background: color, opacity: 0.7 }} />
-
-      {/* Source star — top-right corner, very subtle */}
-      {source ? (
-        <span
-          title={reasonText || 'Pinned'}
-          aria-label={reasonText || 'Pinned'}
-          style={{
-            position: 'absolute', top: 5, right: 8,
-            fontSize: 10, lineHeight: 1,
-            color: isAuto ? T4 : color,
-            opacity: isAuto ? 0.55 : 0.85,
-            fontWeight: 600,
-            pointerEvents: 'none',
-          }}
-        >
-          {isAuto ? '☆' : '★'}
-        </span>
-      ) : null}
-
-      {/* Label */}
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color, marginBottom: 4 }}>{label}</div>
-
-      {/* Body: value left, gauge right */}
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        {/* Left: value + trend */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ whiteSpace: 'nowrap' }}>
-            <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: T1 }}>{todayVal}</span>
-            {todayUnit ? <span style={{ fontSize: 11, color: T3, marginLeft: 2 }}>{todayUnit}</span> : null}
-          </div>
-          <div style={{ fontSize: 10, fontWeight: 600, color: trendColor || T3, marginTop: 3, height: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span>{trendText || '\u00A0'}</span>
-            {statusIcon ? (
-              <span style={{ fontSize: 10, fontWeight: 700, color: statusIconColor || T3, lineHeight: 1 }}>
-                {statusIcon}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Right: semicircle arc + value below + label */}
-        <div style={{ flexShrink: 0, width: 44, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <MiniArcGauge pct={gaugePct} color={color} />
-          <div style={{ fontSize: 11, fontWeight: 700, color, lineHeight: 1, marginTop: 0 }}>{avg30}</div>
-          <div style={{ fontSize: 11, color: T4, fontWeight: 600, marginTop: 1, letterSpacing: '0.04em' }}>
-            {avg30Label || '30d avg'}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── THIS WEEK CARD ─────────────────────────────────────────────────────────
 function ThisWeekCard({ headline, miles, sessions, runs, time, weeklyMiPct, weeklyTarget }) {
@@ -1573,6 +1474,32 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
   const runPct = runMiGoal > 0 ? Math.min(runMiActual / runMiGoal, 1) : 0;
   const wkPct = workoutsGoal > 0 ? Math.min(workoutsActual / workoutsGoal, 1) : 0;
 
+  // Measure the actual bar width so date-tag collision packing is accurate.
+  const barRef = useRef(null);
+  const [barW, setBarW] = useState(320);
+  useEffect(() => {
+    const el = barRef.current; if (!el) return;
+    const measure = () => setBarW(el.clientWidth || 320);
+    measure();
+    let ro;
+    if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(measure); ro.observe(el); }
+    return () => { if (ro) ro.disconnect(); };
+  }, []);
+
+  // Date-tag collision packing: every tag stays at its flag's x; a tag that
+  // would overlap the previous one drops to a lower row (lane) so all stay
+  // visible. laneEnds[k] = right-edge px of the last tag placed in lane k.
+  const LABEL_PX = 38, LANE_H = 12;
+  const laneEnds = [];
+  const dateLanes = raceMarkers.map(r => {
+    const cx = r.pct * barW, left = cx - LABEL_PX / 2, right = cx + LABEL_PX / 2;
+    let lane = 0;
+    while (lane < laneEnds.length && laneEnds[lane] > left) lane++;
+    laneEnds[lane] = right;
+    return lane;
+  });
+  const laneCount = Math.max(1, laneEnds.length);
+
   return (
     <div style={{ ...card, borderRadius: 14, padding: '10px 12px 10px' }}>
       <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(212,139,78,0.15), transparent)` }} />
@@ -1588,7 +1515,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
       </div>
 
       {/* Timeline bar with markers */}
-      <div style={{ position: 'relative', height: 20, marginBottom: 4 }}>
+      <div ref={barRef} style={{ position: 'relative', height: 20, marginBottom: 4 }}>
         {/* Track */}
         <div style={{ position: 'absolute', top: 8, left: 0, right: 0, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)' }} />
         {/* Progress fill */}
@@ -1613,17 +1540,27 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         ))}
       </div>
 
-      {/* Race dates positioned under their markers */}
+      {/* Race dates — lane-packed: each tag sits at its flag's x; colliding tags
+          drop to a lower row so every date stays visible. A faint connector ties
+          a dropped tag back to its marker. */}
       {raceMarkers.length > 0 && (
-        <div style={{ position: 'relative', height: 14, marginBottom: 8 }}>
-          {raceMarkers.map((r, i) => (
-            <div key={i} style={{
-              position: 'absolute', left: `${r.pct * 100}%`, transform: 'translateX(-50%)',
-              fontSize: 8, fontWeight: 500, color: r.isPast ? C.green : C.orange, whiteSpace: 'nowrap',
-            }}>
-              {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-            </div>
-          ))}
+        <div style={{ position: 'relative', height: laneCount * LANE_H + 2, marginBottom: 8 }}>
+          {raceMarkers.map((r, i) => {
+            const lane = dateLanes[i];
+            const col = r.isPast ? C.green : C.orange;
+            const tx = r.pct < 0.06 ? '0' : r.pct > 0.94 ? '-100%' : '-50%';
+            return (
+              <div key={i}>
+                <div style={{ position: 'absolute', left: `${r.pct * 100}%`, top: 0, width: 1, height: lane * LANE_H + 4, background: col, opacity: 0.25, transform: 'translateX(-0.5px)' }} />
+                <div style={{
+                  position: 'absolute', left: `${r.pct * 100}%`, top: lane * LANE_H, transform: `translateX(${tx})`,
+                  fontSize: 8, fontWeight: 600, color: col, whiteSpace: 'nowrap',
+                }}>
+                  {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -2373,6 +2310,16 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
     return Math.round((rd - todayMid) / 86400000);
   })();
   const raceLabel = nextRace ? `${nextRace.name || 'Race'}` : '';
+  // Predicted finish for the race pill — same model as the Race Predictor tile.
+  const raceFinishStr = (() => {
+    try {
+      const p = predictRaceFinish(nextRace, unifiedActivities);
+      const s = p && p.seconds;
+      if (!s) return null;
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60);
+      return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+    } catch { return null; }
+  })();
 
   // ── Hero stats (all from hook) ──
   const heroStats = [
@@ -2502,7 +2449,35 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
     }
     let activePrompts = [];
     try { activePrompts = getTopCoachingPrompts(5) || []; } catch {}
-    return { sessionType, activePrompts, today, tileCtx, maxSlots: 4 };
+
+    // ── Intelligence Hub takes over promotion (Step: hub-driven Start) ──
+    // The hub is the single decider of which tiles fill the open Start slots;
+    // manual pins still win (resolver-level). We hand it hub state + today's
+    // conditions so it can match learned sensitivities against what's true now.
+    let hubState = null;
+    try { hubState = buildHubFromStorage().state; } catch {}
+    // Today's conditions the hub reasons over: temperature of today's run (heat),
+    // last night's sleep hours (recovery). Missing → the sensitivity still gives a
+    // small base pull, just no "today is adverse" spike.
+    const tempC = acts.map(a => Number(a.avgTemperature ?? a.tempC ?? a.weatherTempC)).find(Number.isFinite);
+    const sleepArr = (() => { try { return cleanSleepForAveraging(storage.get('sleep') || []); } catch { return []; } })();
+    // cleanSleepForAveraging returns entries UNSORTED → sort by date desc for last night.
+    // Canonical field is totalSleepMinutes (verified in coachSignals/insights); fall
+    // back to totalSleepHours / totalSleepSecs. (Earlier guess used .hours — wrong.)
+    const lastSleep = sleepArr.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+    const sleepMins = lastSleep ? Number(lastSleep.totalSleepMinutes ?? lastSleep.durationMinutes) : NaN;
+    const sleepHrs = Number.isFinite(sleepMins) ? sleepMins / 60
+      : (lastSleep && Number.isFinite(Number(lastSleep.totalSleepHours))) ? Number(lastSleep.totalSleepHours)
+      : (lastSleep && Number.isFinite(Number(lastSleep.totalSleepSecs))) ? Number(lastSleep.totalSleepSecs) / 3600
+      : undefined;
+    const races = (() => { try { return storage.get('races') || []; } catch { return []; } })();
+
+    return {
+      sessionType, activePrompts, today, tileCtx, maxSlots: 4,
+      // hub-driven promotion: scoreFn replaces the heuristic scoreTile entirely.
+      scoreFn: hubScoreTile,
+      hubState, conditions: { tempC, sleepHrs }, races, deriveStatus,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageVersion, tileCtx]);
 
@@ -2687,7 +2662,17 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   const weeklyWorkoutsTarget = weeklyRunsTarget
     + (parseFloat(G.weeklyStrengthTarget) || 2)
     + (parseFloat(G.weeklyOtherSessionsTarget) || 1);
-  const annualRunMiGoal    = Math.round((totalMi || 0)       + weeklyMiTarget       * weeksLeftThisYear);
+  // Phase 4r.goals.annualproj.2 (A2) — feed ACTUAL planned miles into the projection:
+  // when the planner has a real week, project from its run mileage; else fall back to
+  // the weekly run-distance goal. A build/taper plan that differs from the flat target
+  // now moves the year-end projection.
+  const _RUN_TYPES = new Set(['easy_run','long_run','tempo','intervals','race']);
+  const plannedWeekRunMi = (() => {
+    try { const wk = getPlannerWeek(weekKey()); return (wk?.days||[]).reduce((s,d)=>s+dayRunMiles(d),0); }
+    catch { return 0; }
+  })();
+  const projRunRate = plannedWeekRunMi > 0 ? plannedWeekRunMi : weeklyMiTarget;
+  const annualRunMiGoal    = Math.round((totalMi || 0)       + projRunRate          * weeksLeftThisYear);
   const annualWorkoutsGoal = Math.round((totalSessions || 0) + weeklyWorkoutsTarget * weeksLeftThisYear);
 
   // ── Races from localStorage ──
@@ -2964,6 +2949,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         raceName={raceLabel}
         raceDate={nextRace?.date}
         raceDistance={nextRace?.distanceMi ? `${nextRace.distanceMi} mi` : nextRace?.distanceKm ? `${nextRace.distanceKm} km` : ''}
+        raceFinish={raceFinishStr}
       />
 
       {/* ── Phase 4p.plan — Planned Workout Tile (mobile only) ──
@@ -3234,73 +3220,22 @@ const SYSTEM_PNGS = {
 };
 
 // Keys must match system IDs from healthSystems.js: brain, heart, bones, gut, immune, energy, longevity, sleep, metabolism, endurance
-const SYSTEM_ICONS_M = {
-  brain: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8 2 5 5 5 9c0 2 .5 3.5 1.5 5 .8 1.2 1 2.5 1 4h9c0-1.5.2-2.8 1-4 1-1.5 1.5-3 1.5-5 0-4-3-7-7-7z"/><path d="M9 18h6v2a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2z"/><path d="M12 2v16"/><path d="M6.5 8c2 1 3.5 1.5 5.5 1.5s3.5-.5 5.5-1.5"/><path d="M7 12.5c1.5.8 3 1 5 1s3.5-.2 5-1"/></svg>,
-  heart: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"/></svg>,
-  bones: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="9" width="4" height="6" rx="1"/><rect x="18" y="9" width="4" height="6" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/><rect x="5" y="7" width="2" height="10" rx="0.5"/><rect x="17" y="7" width="2" height="10" rx="0.5"/></svg>,
-  gut: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4h10c1.5 0 2.5 1 2.5 2.5S18.5 9 17 9H7c-1.5 0-2.5 1-2.5 2.5S6 14 7 14h10"/><path d="M17 14c1.5 0 2.5 1 2.5 2.5S18.5 19 17 19H7"/><circle cx="5" cy="19" r="1.2" fill={c} stroke="none"/></svg>,
-  immune: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/></svg>,
-  energy: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>,
-  longevity: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>,
-  sleep: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
-  metabolism: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h4l2-8 4 16 2-8h4"/></svg>,
-  endurance: (c) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c4-6 8-6 12 0s8 6 12 0"/></svg>,
-};
+// Phase 0.3/3.2 — SYSTEM_ICONS_M removed; the mobile tiles use the shared
+// SYSTEM_ICONS (./systemIcons.jsx) at size 14 (the prior @14px copy was the same
+// paths as the @16px web copy). Imported at the top.
 
+// Phase 3.2 — thin wrapper over the shared HealthTileBase. Resolves the MOBILE
+// icon maps (mobile PNGs → mobile SVG fallback) and maps the active/tap props.
 function MobileSystemTile({ sys, isActive, onTap }) {
-  const statusColor = sys.status === 'good' ? '#4ade80' : sys.status === 'focus' ? '#fbbf24' : '#f87171';
-  const fillTint = sys.status === 'good' ? 'rgba(74,222,128,0.12)'
-    : sys.status === 'focus' ? 'rgba(251,191,36,0.12)' : 'rgba(248,113,113,0.15)';
-  // Prefer Gemini PNG icon; fall back to the inline SVG set if a system id
-  // isn't covered yet (e.g., a future system added without a matching PNG).
-  const pngSrc = SYSTEM_PNGS[sys.id];
-  const svgIcon = SYSTEM_ICONS_M[sys.id]?.(sys.color) || null;
   return (
-    <div onClick={() => onTap(sys.id)} style={{
-      position: 'relative', background: CARD_BG,
-      border: isActive ? `1.5px solid ${sys.color}` : `1px solid ${BORDER}`,
-      borderRadius: 12, padding: '10px 4px 8px', overflow: 'hidden',
-      cursor: 'pointer', transition: 'border 0.2s ease',
-      boxShadow: isActive ? `0 0 8px ${sys.color}33` : 'none',
-    }}>
-      {/* Top accent line */}
-      <div style={{ position: 'absolute', top: 0, left: 6, right: 6, height: 2, borderRadius: '0 0 2px 2px', background: sys.color, opacity: 0.6 }} />
-      <div style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0,
-        height: `${Math.max(8, sys.pct)}%`,
-        background: `linear-gradient(180deg, transparent, ${fillTint})`,
-        borderRadius: '0 0 12px 12px', transition: 'height 0.6s ease', zIndex: 0,
-      }} />
-      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
-        <div style={{
-          width: 36, height: 36, margin: '0 auto 5px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {pngSrc
-            ? <img src={pngSrc} alt={sys.name} width={36} height={36} style={{ display: 'block' }} />
-            : svgIcon}
-        </div>
-        {/* Tile name — wraps to 2 lines on narrow mobile widths so the full
-            name renders (Brain/Cognition, Energy/Strength, etc.) instead of
-            ellipsis-truncating. The zero-width space (​) after the slash
-            gives the browser an explicit break opportunity at the slash —
-            without it the browser treats "Brain/Cognition" as a single
-            unbreakable word. minHeight reserves two text-lines so tiles stay
-            aligned whether the name wraps or not. */}
-        <div style={{
-          fontSize: 11, fontWeight: 700, color: T2,
-          lineHeight: 1.15, marginBottom: 3,
-          minHeight: 28,
-          whiteSpace: 'normal',
-          overflowWrap: 'break-word',
-          padding: '0 2px',
-          textAlign: 'center',
-        }}>
-          {sys.name.replace(' & ', '/​')}
-        </div>
-        <div style={{ fontSize: 15, fontWeight: 800, color: statusColor }}>{sys.pct}%</div>
-      </div>
-    </div>
+    <HealthTileBase
+      sys={sys}
+      variant="mobile"
+      active={isActive}
+      onClick={() => onTap(sys.id)}
+      pngSrc={SYSTEM_PNGS[sys.id]}
+      svgIcon={SYSTEM_ICONS[sys.id]?.(sys.color, 14) || null}
+    />
   );
 }
 
@@ -3351,7 +3286,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
   const { system, details: nutrients } = detail;
   const signals = SYSTEM_SIGNALS[systemId] || { training: [], body: [], blood: [] };
   const pngSrc = SYSTEM_PNGS[systemId];
-  const svgIcon = SYSTEM_ICONS_M[systemId]?.(system.color) || null;
+  const svgIcon = SYSTEM_ICONS[systemId]?.(system.color, 14) || null;
   const icon = pngSrc
     ? <img src={pngSrc} alt={system.name} width={42} height={42} style={{ display: 'block' }} />
     : svgIcon;
@@ -3404,7 +3339,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
     if (name === 'Weekly Hours') return { value: (wk7.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600).toFixed(1), unit: 'hrs' };
     if (name === 'Strength Sessions') return { value: wk7Str.length, unit: 'this wk' };
     if (name === 'Avg Pace') { const p = wk7Runs.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean); return p.length ? { value: `${Math.floor(p.reduce((s, v) => s + v, 0) / p.length / 60)}:${String(Math.round(p.reduce((s, v) => s + v, 0) / p.length % 60)).padStart(2, '0')}`, unit: '/mi' } : { value: '—', unit: '' }; }
-    if (name === 'Weight') return { value: recentWeight[0]?.weightLbs?.toFixed(1) || '—', unit: 'lbs' };
+    if (name === 'Weight') return { value: currentTrueWeightLbs(recentWeight)?.toFixed(1) || '—', unit: 'lbs' };
     if (name === 'Body Fat %') return { value: recentWeight[0]?.bodyFatPct?.toFixed(1) || '—', unit: '%' };
     if (name === 'Lean Mass') return { value: recentWeight[0]?.skeletalMuscleMassLbs?.toFixed(1) || '—', unit: 'lbs' };
     return { value: '—', unit: '' };
@@ -4266,7 +4201,7 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
   const wk7Weight = weightData
     .filter(w => w.date && new Date(w.date + 'T12:00:00') >= d7cut && w.weightLbs)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const latestWeight = recentWeight.find(w => w.weightLbs)?.weightLbs || null;
+  const latestWeight = currentTrueWeightLbs(recentWeight);
   const weightDelta = wk7Weight.length >= 2
     ? +(wk7Weight[wk7Weight.length - 1].weightLbs - wk7Weight[0].weightLbs).toFixed(1)
     : null;
@@ -4370,13 +4305,13 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
       <div style={sectionHeader}>Health Systems
         <div style={{ display: 'flex', gap: 6, fontSize: 10, color: T3, marginLeft: 'auto' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ade80' }} />{goodCount}
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: healthStatusColor('good') }} />{goodCount}
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />{focusCount}
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: healthStatusColor('focus') }} />{focusCount}
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#f87171' }} />{defCount}
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: healthStatusColor('def') }} />{defCount}
           </span>
         </div>
       </div>

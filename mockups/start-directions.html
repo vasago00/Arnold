@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Arnold — Start, three polished directions</title>
+<style>
+  :root{
+    --ink:#eef0f3; --t2:#a2a6b0; --t3:#6d7280; --tnum:#f4f6f9;
+    --good:#52e08b; --warn:#ffc24a; --bad:#ff6b6b;
+    --cyan:#37e0e0; --lime:#b6f23a; --blue:#5aa2ff; --purple:#b08bff; --orange:#ff8a3d; --red:#ff5d5d; --teal:#33d6c0;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#06080b;color:var(--ink);font-family:var(--font);-webkit-font-smoothing:antialiased;
+    padding:28px 16px;font-variant-numeric:tabular-nums;
+    background-image:radial-gradient(1100px 620px at 82% -12%,rgba(90,162,255,.06),transparent),
+                     radial-gradient(820px 520px at -6% 112%,rgba(176,139,255,.05),transparent);}
+  .frame{max-width:1180px;margin:0 auto}
+  .cap{margin-bottom:20px}
+  .cap .pill{display:inline-block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);
+    border:1px solid rgba(51,214,192,.35);background:rgba(51,214,192,.07);padding:3px 11px;border-radius:20px}
+  .cap h1{font-size:19px;font-weight:650;margin:10px 0 5px;letter-spacing:.01em}
+  .cap p{font-size:12.5px;color:var(--t2);line-height:1.55;max-width:900px}
+  .row{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+  .col{display:flex;flex-direction:column;align-items:center;gap:10px;width:300px}
+  .label{text-align:center}
+  .label .n{font-size:13px;font-weight:650}
+  .label .d{font-size:11px;color:var(--t3);line-height:1.5;margin-top:3px}
+
+  /* phone shell */
+  .ph{width:300px;border-radius:38px;padding:11px;position:relative;overflow:hidden;
+      box-shadow:0 36px 90px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.04)}
+  .notch{width:96px;height:6px;border-radius:6px;background:rgba(255,255,255,.10);margin:3px auto 12px}
+  .nav{display:flex;justify-content:space-between;padding:11px 8px 4px;margin-top:11px;border-top:1px solid rgba(255,255,255,.06)}
+  .nav .t{font-size:8px;color:var(--t3);text-align:center;flex:1}
+  .nav .t .d{font-size:15px;display:block;margin-bottom:2px;opacity:.6}
+  .nav .t.on{color:#fff}
+  .topbar{display:flex;justify-content:space-between;align-items:center;padding:0 6px 12px}
+  .topbar .br{font-size:12px;font-weight:750;letter-spacing:.06em}
+  .topbar .dt{font-size:10px;color:var(--t3)}
+  .lbl{font-size:8px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--t3)}
+
+  /* ════════ DIRECTION A — INSTRUMENT ════════ */
+  .dA{background:#080a0e;background-image:linear-gradient(180deg,#0b0e13,#080a0e);}
+  .dA .topbar .br b{color:var(--cyan)}
+  .dA .card{background:#0e1218;border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:11px}
+  .dA .heroC{background:radial-gradient(160% 120% at 50% -20%,rgba(55,224,224,.10),transparent 60%),#0c1016;
+    border:1px solid rgba(55,224,224,.16);border-radius:14px;padding:12px;text-align:center;margin-bottom:9px}
+  .dA .hnum{font-size:46px;font-weight:300;letter-spacing:-.02em;line-height:.9;color:#fff}
+  .dA .hnum em{font-size:13px;font-style:normal;color:var(--t3);font-weight:400}
+  .dA .hword{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);margin-top:7px;font-weight:600}
+  .dA .hctx{font-size:9px;color:var(--t3);margin-top:6px;letter-spacing:.04em}
+  .dA .hctx b{color:var(--t2)}
+  .dA .matrix{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:9px;
+    background:#0e1218;border:1px solid rgba(255,255,255,.06);border-radius:12px;overflow:hidden}
+  .dA .mx{display:flex;align-items:center;gap:6px;padding:8px 9px;border-bottom:1px solid rgba(255,255,255,.045)}
+  .dA .mx:nth-child(odd){border-right:1px solid rgba(255,255,255,.045)}
+  .dA .mx .k{flex:1;font-size:8.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em}
+  .dA .mx .v{font-size:13px;font-weight:600;color:var(--tnum)}
+  .dA .mx .v.warn{color:var(--warn)} .dA .mx .v.bad{color:var(--bad)}
+  .dA .mx svg{flex:0 0 26px;height:11px;opacity:.85}
+  .dA .plan{display:flex;align-items:center;gap:9px;background:#0e1218;border:1px solid rgba(255,255,255,.06);border-left:2px solid var(--cyan);border-radius:12px;padding:10px;margin-bottom:9px}
+  .dA .plan .fig{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#13202b,#0c141b);display:flex;align-items:center;justify-content:center;font-size:17px}
+  .dA .plan .ttl{font-size:12.5px;font-weight:600}
+  .dA .plan .sub{font-size:9px;color:var(--t2);margin-top:2px}
+  .dA .plan .badge{margin-left:auto;font-size:8px;font-weight:700;color:var(--warn);border:1px solid rgba(255,194,74,.3);background:rgba(255,194,74,.1);padding:2px 6px;border-radius:5px}
+  .dA .duo{display:flex;gap:9px;margin-bottom:9px}
+  .dA .duo .x{flex:1;background:#0e1218;border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:9px}
+  .dA .duo .x .top{display:flex;justify-content:space-between;align-items:center}
+  .dA .duo .x .st{font-size:8px;font-weight:700;letter-spacing:.06em}
+  .dA .duo .x .big{font-size:15px;font-weight:600;margin-top:5px}
+  .dA .duo .x .mn{font-size:8.5px;color:var(--t3);margin-top:2px}
+  .dA .duo .x .pips{display:flex;gap:3px;margin-top:7px}
+  .dA .duo .x .pips i{height:4px;border-radius:2px;flex:1;background:rgba(255,255,255,.1)}
+  .dA .coach{font-family:Georgia,serif;font-style:italic;font-size:10px;color:var(--ink);line-height:1.45;
+    border:1px solid rgba(51,214,192,.22);background:rgba(51,214,192,.04);border-radius:11px;padding:9px}
+  .dA .coach b{display:block;font-style:normal;font-family:var(--font);font-size:7px;font-weight:700;letter-spacing:.16em;color:var(--teal);margin-bottom:3px}
+  .dA .nav .t.on{color:var(--cyan)}
+
+  /* ════════ DIRECTION B — EDITORIAL ════════ */
+  .dB{background:#0c0c0f;background-image:linear-gradient(180deg,#131216,#0c0c0f);}
+  .dB .topbar .br b{color:var(--teal)}
+  .dB .hero{position:relative;padding:6px 4px 14px;text-align:center;margin-bottom:6px}
+  .dB .ring{position:relative;width:168px;height:168px;margin:4px auto 0}
+  .dB .ring .mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .dB .ring .mid .n{font-size:58px;font-weight:200;letter-spacing:-.03em;line-height:.85;color:#fff}
+  .dB .ring .mid .w{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--good);font-weight:600;margin-top:6px}
+  .dB .ring .mid .c{font-size:9px;color:var(--t3);margin-top:5px}
+  .dB .why{padding:2px 2px 10px}
+  .dB .why .r{display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .dB .why .nm{flex:0 0 64px;font-size:11px;color:var(--ink)}
+  .dB .why .track{flex:1;height:4px;border-radius:3px;background:rgba(255,255,255,.07);position:relative;overflow:hidden}
+  .dB .why .track i{position:absolute;top:0;bottom:0;border-radius:3px}
+  .dB .why .d{flex:0 0 40px;text-align:right;font-size:11px;font-weight:600}
+  .dB .card{background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:13px;margin-bottom:9px}
+  .dB .card .lbl{margin-bottom:7px}
+  .dB .plan{display:flex;align-items:center;gap:11px}
+  .dB .plan .fig{width:42px;height:42px;border-radius:12px;background:radial-gradient(circle at 35% 30%,#2a2f3a,#15171d);display:flex;align-items:center;justify-content:center;font-size:21px}
+  .dB .plan .ttl{font-size:14px;font-weight:600}
+  .dB .plan .sub{font-size:10px;color:var(--t2);margin-top:2px}
+  .dB .plan .badge{margin-left:auto;font-size:8.5px;color:var(--warn)}
+  .dB .duo{display:flex;gap:9px;margin-bottom:9px}
+  .dB .duo .x{flex:1;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:11px;text-align:center}
+  .dB .duo .x .dial{width:54px;height:54px;margin:2px auto 6px;position:relative}
+  .dB .duo .x .dial .pc{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
+  .dB .duo .x .nm{font-size:9px;color:var(--t2)}
+  .dB .coach{font-family:Georgia,serif;font-style:italic;font-size:11.5px;color:var(--ink);line-height:1.5;padding:4px 2px}
+  .dB .coach b{display:block;font-style:normal;font-family:var(--font);font-size:8px;font-weight:700;letter-spacing:.16em;color:var(--teal);margin-bottom:4px}
+  .dB .nav .t.on{color:var(--teal)}
+
+  /* ════════ DIRECTION C — FACETED ENERGY ════════ */
+  .dC{background:#0a0809;background-image:radial-gradient(150% 90% at 50% -10%,rgba(255,138,61,.10),transparent 55%),linear-gradient(180deg,#120d0c,#0a0809);}
+  .dC .topbar .br b{color:var(--orange)}
+  .dC .hero{text-align:center;margin-bottom:10px;position:relative}
+  .dC .hero .gw{position:relative;width:182px;height:150px;margin:0 auto}
+  .dC .hero .num{position:absolute;left:0;right:0;top:34px;font-size:50px;font-weight:800;letter-spacing:-.03em;
+    background:linear-gradient(180deg,#ffd24a,#ff7a2f);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .dC .hero .word{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--orange);margin-top:-6px}
+  .dC .hero .ctx{font-size:9px;color:var(--t3);margin-top:6px}
+  .dC .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:9px}
+  .dC .tile{background:linear-gradient(160deg,#1a1411,#120d0c);border:1px solid rgba(255,138,61,.14);border-radius:12px;padding:9px 6px;text-align:center}
+  .dC .tile .v{font-size:17px;font-weight:800}
+  .dC .tile .v.up{color:var(--good)} .dC .tile .v.dn{color:var(--bad)} .dC .tile .v.fl{color:var(--ink)}
+  .dC .tile .l{font-size:7.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-top:3px}
+  .dC .plan{background:linear-gradient(120deg,rgba(255,138,61,.12),rgba(182,242,58,.06));border:1px solid rgba(255,138,61,.22);border-radius:13px;padding:11px;display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .dC .plan .fig{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#ff8a3d,#b6f23a);display:flex;align-items:center;justify-content:center;font-size:19px;color:#1a0f08}
+  .dC .plan .ttl{font-size:13px;font-weight:700} .dC .plan .sub{font-size:9px;color:var(--t2);margin-top:2px}
+  .dC .plan .badge{margin-left:auto;font-size:8px;font-weight:800;color:#1a0f08;background:var(--warn);padding:3px 7px;border-radius:6px}
+  .dC .duo{display:flex;gap:8px;margin-bottom:9px}
+  .dC .duo .x{flex:1;background:linear-gradient(160deg,#161013,#100b0c);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px}
+  .dC .duo .x .st{font-size:8px;font-weight:800;letter-spacing:.05em}
+  .dC .duo .x .big{font-size:16px;font-weight:800;margin-top:5px}
+  .dC .duo .x .mn{font-size:8.5px;color:var(--t3);margin-top:2px}
+  .dC .duo .x .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.09);margin-top:7px;overflow:hidden}
+  .dC .duo .x .bar i{display:block;height:100%;border-radius:3px}
+  .dC .coach{font-family:Georgia,serif;font-style:italic;font-size:10.5px;line-height:1.45;color:var(--ink);
+    border-left:2px solid var(--orange);padding:4px 0 4px 9px}
+  .dC .coach b{display:block;font-style:normal;font-family:var(--font);font-size:7px;font-weight:800;letter-spacing:.16em;color:var(--orange);margin-bottom:3px}
+  .dC .nav .t.on{color:var(--orange)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="cap">
+    <span class="pill">Start screen · three polished directions</span>
+    <h1>Same dense content, three visual languages</h1>
+    <p>All three are the <b>Start</b> screen (both platforms), data-dense by design — readiness + the why + today's plan + Play/Fuel status + Coach, all above the fold. They differ only in <b>visual craft</b>: how the density is rendered. Pick a direction (or mix) and I'll take it to full fidelity and apply it across the platform.</p>
+  </div>
+
+  <div class="row">
+
+    <!-- ░░░░░ A — INSTRUMENT ░░░░░ -->
+    <div class="col">
+      <div class="ph dA">
+        <div class="notch"></div>
+        <div class="topbar"><span class="br">A<b>°</b> START</span><span class="dt">Sun · Jun 14</span></div>
+        <div class="heroC">
+          <div class="lbl" style="color:var(--cyan)">Readiness</div>
+          <div class="hnum" style="margin-top:6px">72<em> /100</em></div>
+          <div class="hword">Go strong</div>
+          <div class="hctx">7d <b>68</b> · 30d <b>64</b> · A:C <b>1.08</b> · conf <b>76%</b></div>
+        </div>
+        <div class="matrix">
+          <div class="mx"><span class="k">HRV</span><svg viewBox="0 0 26 11"><path d="M0 8 L9 6 L17 5 L26 3" fill="none" stroke="var(--good)" stroke-width="1.2"/></svg><span class="v">64</span></div>
+          <div class="mx"><span class="k">Sleep</span><svg viewBox="0 0 26 11"><path d="M0 4 L9 6 L17 8 L26 9" fill="none" stroke="var(--bad)" stroke-width="1.2"/></svg><span class="v bad">6.2</span></div>
+          <div class="mx"><span class="k">RHR</span><svg viewBox="0 0 26 11"><path d="M0 6 L9 6 L17 5 L26 5" fill="none" stroke="var(--cyan)" stroke-width="1.2"/></svg><span class="v">48</span></div>
+          <div class="mx"><span class="k">Load 7d</span><svg viewBox="0 0 26 11"><path d="M0 7 L9 6 L17 7 L26 5" fill="none" stroke="var(--cyan)" stroke-width="1.2"/></svg><span class="v">312</span></div>
+          <div class="mx"><span class="k">Cal left</span><svg viewBox="0 0 26 11"><path d="M0 4 L9 6 L17 5 L26 7" fill="none" stroke="var(--warn)" stroke-width="1.2"/></svg><span class="v warn">540</span></div>
+          <div class="mx"><span class="k">Protein</span><svg viewBox="0 0 26 11"><path d="M0 7 L9 6 L17 7 L26 5" fill="none" stroke="var(--warn)" stroke-width="1.2"/></svg><span class="v warn">−38</span></div>
+        </div>
+        <div class="plan">
+          <div class="fig">🏃</div>
+          <div><div class="ttl">Tempo run</div><div class="sub">5.0 mi · 8:40/mi</div></div>
+          <span class="badge">EASED Z2</span>
+        </div>
+        <div class="duo">
+          <div class="x"><div class="top"><span class="lbl">Play</span><span class="st" style="color:var(--good)">✓ POSTED</span></div><div class="big">5.0 mi</div><div class="mn">load 57 · Z2 68%</div></div>
+          <div class="x"><div class="top"><span class="lbl">Fuel</span><span class="st" style="color:var(--warn)">2/3</span></div><div class="big">1,860</div><div class="mn">540 to go</div>
+            <div class="pips"><i style="background:var(--good)"></i><i style="background:var(--good)"></i><i></i></div></div>
+        </div>
+        <div class="coach"><b>COACH</b>Fresh engine, short night — eased today. Close the carbs. ↗</div>
+        <div class="nav">
+          <div class="t on"><span class="d">◆</span>Start</div><div class="t"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t"><span class="d">⚡</span>Play</div><div class="t"><span class="d">🍎</span>Fuel</div><div class="t"><span class="d">▦</span>Cal</div>
+        </div>
+      </div>
+      <div class="label"><div class="n">A · Instrument</div><div class="d">Precision cockpit — hairline grid, tick gauge, surgical density. Bloomberg × WHOOP.</div></div>
+    </div>
+
+    <!-- ░░░░░ B — EDITORIAL ░░░░░ -->
+    <div class="col">
+      <div class="ph dB">
+        <div class="notch"></div>
+        <div class="topbar"><span class="br">A<b>°</b> START</span><span class="dt">Sunday, Jun 14</span></div>
+        <div class="hero">
+          <div class="lbl">Am I ready</div>
+          <div class="ring">
+            <svg width="168" height="168" viewBox="0 0 168 168">
+              <circle cx="84" cy="84" r="74" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="6"/>
+              <circle cx="84" cy="84" r="74" fill="none" stroke="url(#gB)" stroke-width="6" stroke-linecap="round"
+                stroke-dasharray="465" stroke-dashoffset="130" transform="rotate(-90 84 84)"/>
+              <defs><linearGradient id="gB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#33d6c0"/><stop offset="1" stop-color="#52e08b"/></linearGradient></defs>
+            </svg>
+            <div class="mid"><div class="n">72</div><div class="w">Go strong</div><div class="c">76% confidence</div></div>
+          </div>
+        </div>
+        <div class="why">
+          <div class="r"><span class="nm">HRV</span><span class="track"><i style="left:50%;width:24%;background:var(--good)"></i></span><span class="d" style="color:var(--good)">+8%</span></div>
+          <div class="r"><span class="nm">Sleep</span><span class="track"><i style="right:50%;width:30%;background:var(--bad)"></i></span><span class="d" style="color:var(--bad)">−18%</span></div>
+          <div class="r"><span class="nm">Heat</span><span class="track"><i style="left:50%;width:10%;background:var(--t2)"></i></span><span class="d" style="color:var(--t2)">mild</span></div>
+        </div>
+        <div class="card">
+          <div class="lbl">Today · from Plan</div>
+          <div class="plan"><div class="fig">🏃</div><div><div class="ttl">Tempo → eased Z2</div><div class="sub">5.0 mi · sleep-debt trim</div></div><span class="badge">eased</span></div>
+        </div>
+        <div class="duo">
+          <div class="x"><div class="dial"><svg width="54" height="54" viewBox="0 0 54 54"><circle cx="27" cy="27" r="22" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="5"/><circle cx="27" cy="27" r="22" fill="none" stroke="var(--good)" stroke-width="5" stroke-linecap="round" stroke-dasharray="138" stroke-dashoffset="0" transform="rotate(-90 27 27)"/></svg><div class="pc" style="color:var(--good)">✓</div></div><div class="nm">Play · posted</div></div>
+          <div class="x"><div class="dial"><svg width="54" height="54" viewBox="0 0 54 54"><circle cx="27" cy="27" r="22" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="5"/><circle cx="27" cy="27" r="22" fill="none" stroke="var(--warn)" stroke-width="5" stroke-linecap="round" stroke-dasharray="138" stroke-dashoffset="46" transform="rotate(-90 27 27)"/></svg><div class="pc">66%</div></div><div class="nm">Fuel · 2 of 3</div></div>
+        </div>
+        <div class="coach"><b>COACH</b>"Your engine's fresh but you're a night short — I eased the tempo so you bank the work without digging a hole."</div>
+        <div class="nav">
+          <div class="t on"><span class="d">◆</span>Start</div><div class="t"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t"><span class="d">⚡</span>Play</div><div class="t"><span class="d">🍎</span>Fuel</div><div class="t"><span class="d">▦</span>Cal</div>
+        </div>
+      </div>
+      <div class="label"><div class="n">B · Editorial</div><div class="d">Premium &amp; calm — big light type, one elegant ring, breathing room inside the density. Oura-tier polish.</div></div>
+    </div>
+
+    <!-- ░░░░░ C — FACETED ENERGY ░░░░░ -->
+    <div class="col">
+      <div class="ph dC">
+        <div class="notch"></div>
+        <div class="topbar"><span class="br">A<b>°</b> START</span><span class="dt">SUN · JUN 14</span></div>
+        <div class="hero">
+          <div class="gw">
+            <svg width="182" height="150" viewBox="0 0 182 150">
+              <defs><linearGradient id="gC" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd24a"/><stop offset=".5" stop-color="#ff7a2f"/><stop offset="1" stop-color="#ff4d4d"/></linearGradient></defs>
+              <path d="M91 14 L150 50 L150 104 L91 140 L32 104 L32 50 Z" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="9"/>
+              <path d="M91 14 L150 50 L150 104 L91 140" fill="none" stroke="url(#gC)" stroke-width="9" stroke-linecap="round"/>
+              <path d="M91 140 L32 104" fill="none" stroke="url(#gC)" stroke-width="9" stroke-linecap="round" opacity=".55"/>
+            </svg>
+            <div class="num">72</div>
+          </div>
+          <div class="word">Go strong</div>
+          <div class="ctx">7d 68 · 30d 64 · 76% sure</div>
+        </div>
+        <div class="tiles">
+          <div class="tile"><div class="v up">+8%</div><div class="l">HRV</div></div>
+          <div class="tile"><div class="v dn">6.2h</div><div class="l">Sleep</div></div>
+          <div class="tile"><div class="v fl">1.08</div><div class="l">A:C</div></div>
+        </div>
+        <div class="plan"><div class="fig">🏃</div><div><div class="ttl">Tempo run</div><div class="sub">5.0 mi · eased to Z2</div></div><span class="badge">EASED</span></div>
+        <div class="duo">
+          <div class="x"><div class="st" style="color:var(--good)">PLAY ✓</div><div class="big">5.0 mi</div><div class="mn">load 57 · posted</div><div class="bar"><i style="width:100%;background:var(--good)"></i></div></div>
+          <div class="x"><div class="st" style="color:var(--warn)">FUEL 2/3</div><div class="big">1,860</div><div class="mn">540 kcal to go</div><div class="bar"><i style="width:66%;background:var(--warn)"></i></div></div>
+        </div>
+        <div class="coach"><b>COACH</b>Fresh legs, short night — eased today, attack tomorrow. Close the carbs. ↗</div>
+        <div class="nav">
+          <div class="t on"><span class="d">◆</span>Start</div><div class="t"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t"><span class="d">⚡</span>Play</div><div class="t"><span class="d">🍎</span>Fuel</div><div class="t"><span class="d">▦</span>Cal</div>
+        </div>
+      </div>
+      <div class="label"><div class="n">C · Faceted Energy</div><div class="d">Brand-forward — low-poly facet gauge, vivid heat-gradient, bold athletic punch. Ownable, unmistakably Arnold.</div></div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

@@ -605,6 +605,21 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
       if (ga.activityType?.typeKey)        parsed.garminTypeKey       = ga.activityType.typeKey;
       if (ga.activityType?.parentTypeKey)  parsed.garminParentTypeKey = ga.activityType.parentTypeKey;
 
+      // Per-session VO2max + respiration usually live on the activity DTO, not
+      // the FIT session — backfill them when the FIT parse didn't find them.
+      if (parsed.estimatedVo2Max == null) {
+        const v = parseFloat(ga.vO2MaxValue ?? ga.vo2MaxValue ?? ga.vo2Max);
+        if (Number.isFinite(v) && v >= 10 && v < 90) parsed.estimatedVo2Max = Math.round(v * 10) / 10;
+      }
+      if (parsed.avgRespirationRate == null) {
+        const r = parseFloat(ga.avgRespirationRate ?? ga.averageRespirationRate);
+        if (Number.isFinite(r) && r > 0 && r < 80) parsed.avgRespirationRate = Math.round(r * 10) / 10;
+      }
+      if (parsed.maxRespirationRate == null) {
+        const r = parseFloat(ga.maxRespirationRate ?? ga.maxAvgRespirationRate);
+        if (Number.isFinite(r) && r > 0 && r < 80) parsed.maxRespirationRate = Math.round(r * 10) / 10;
+      }
+
       // Phase 4r.intel.9 — Weather lookup at sync time.
       // Best-effort: skip outdoor-but-no-GPS, indoor sports, or Open-Meteo
       // outages. Attaches tempC + avgHumidity so expectedRanges.js can widen

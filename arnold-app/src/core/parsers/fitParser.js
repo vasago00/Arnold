@@ -75,6 +75,10 @@ export async function parseFITFile(file, opts = {}) {
   const RUN_SUB      = /^(treadmill|trail|track|street|virtual_run|indoor_running|road)$/;
   const HIIT_SUB     = /^(hiit|cardio_training|interval_training|interval|cardio)$/;
   const STRENGTH_SUB = /^(strength_training|cardio_strength|crossfit)$/;
+  // Cycling sub-sports incl. indoor/virtual trainers. Garmin reports indoor rides
+  // as sport=cycling, but also sometimes sport=training/fitness_equipment with the
+  // real modality in subSport — so we match the subSport too.
+  const CYCLING_SUB  = /^(indoor_cycling|cycling|spin|spinning|virtual_activity|virtual_ride|road_cycling|gravel_cycling|mountain_biking|mountain|cyclocross|track_cycling|indoor_biking|e_bike_fitness|e_bike_mountain|commuting|bmx)$/;
   const fileName     = file?.name || '';
   const nameRunHint  = /\b(run|jog|hiit|interval|tempo|speed|track)\b/i.test(fileName);
   const nameStrHint  = /\b(strength|lift|push|pull|squat|deadlift|bench|gym)\b/i.test(fileName);
@@ -109,15 +113,21 @@ export async function parseFITFile(file, opts = {}) {
     activityType = 'HIIT';
   } else if (RUN_SUB.test(subSport) || (sport === 'training' && nameRunHint)) {
     activityType = 'Run (outdoor)';
+  } else if (
+    sport === 'cycling' ||
+    CYCLING_SUB.test(subSport) ||                              // indoor/virtual ride under sport=training/fitness_equipment
+    (sport === 'fitness_equipment' && CYCLING_SUB.test(subSport))
+  ) {
+    // Cycling, incl. indoor trainers / spin / virtual rides. MUST come before the
+    // generic sport='training'→Strength fallback, or an indoor ride gets mislabeled.
+    activityType = 'Cycling';
+  } else if (sport === 'swimming' || /^(lap_swimming|open_water)$/.test(subSport)) {
+    activityType = 'Swimming';
   } else if (sport === 'training') {
     // Generic structured training with no specific subSport or name hint —
     // fall back to Strength as the most common case for sport=training,
     // then let the Garmin Worker's name-based post-process refine if needed.
     activityType = nameStrHint ? 'Strength' : 'Strength';
-  } else if (sport === 'cycling') {
-    activityType = 'Cycling';
-  } else if (sport === 'swimming') {
-    activityType = 'Swimming';
   }
 
   // HIIT runs count as runs for distance/pace tracking AND as workouts for
@@ -220,6 +230,19 @@ export async function parseFITFile(file, opts = {}) {
   const trainingStressScore = session.trainingStressScore ? parseFloat(session.trainingStressScore) : null;
   const aerobicTrainingEffect = session.totalTrainingEffect ? parseFloat(session.totalTrainingEffect) : null;
   const anaerobicTrainingEffect = session.totalAnaerobicTrainingEffect ? parseFloat(session.totalAnaerobicTrainingEffect) : null;
+
+  // Respiration rate (breaths/min) — newer Garmin FITs record it (enhanced* or
+  // plain fields). Sanity-bounded (1–80 br/min). An internal-load signal.
+  const _resp = (raw) => { const n = parseFloat(raw); return (Number.isFinite(n) && n > 0 && n < 80) ? Math.round(n * 10) / 10 : null; };
+  const avgRespirationRate = _resp(session.enhancedAvgRespirationRate ?? session.avgRespirationRate);
+  const maxRespirationRate = _resp(session.enhancedMaxRespirationRate ?? session.maxRespirationRate);
+  // VO2max — per-session estimate. Rarely in the FIT session message itself; the
+  // Garmin activities client backfills it from the activity DTO (vO2MaxValue)
+  // when present. Sanity-bounded (10–90 ml/kg/min).
+  const estimatedVo2Max = (() => {
+    const n = parseFloat(session.vo2Max ?? session.estimatedVo2Max ?? session.vO2MaxValue);
+    return (Number.isFinite(n) && n >= 10 && n < 90) ? Math.round(n * 10) / 10 : null;
+  })();
 
   // Stride length and vertical metrics (running)
   // Phase 4r.viz.4 — FIT spec stores vertical oscillation in mm (with internal
@@ -636,6 +659,9 @@ export async function parseFITFile(file, opts = {}) {
     trainingStressScore,
     aerobicTrainingEffect,
     anaerobicTrainingEffect,
+    avgRespirationRate,
+    maxRespirationRate,
+    estimatedVo2Max,
 
     // Running biomechanics
     avgStrideLength,

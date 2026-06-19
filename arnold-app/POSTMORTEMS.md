@@ -26,6 +26,20 @@ the most important field — it's how the doc earns its keep.
 
 ---
 
+## 2026-06-16 — Fuel buttons "grossly oversized"; many rounds of inline-height edits did nothing
+
+**Symptom**
+On mobile Fuel, the AM/Noon/PM supplement pills and the +250ml/+1L water buttons rendered far too tall. Across ~6 rounds I changed their inline `height` (30→22→18) and the user kept reporting the same oversized buttons; widget previews of the exact styles looked correct, so the disconnect was baffling.
+
+**Root cause**
+`src/mobile.css` line ~233: `button:not(.arnold-compact-btn) { min-height: 42px !important; }` — a global Apple-HIG touch-target floor. `min-height` with `!important` overrides an element's inline `height`, so every inline `height: 18px` I set on the `SlotBtn` and water buttons was silently clamped back up to 42px. The buttons were ALWAYS 42px; none of my height edits could ever take effect. The `show_widget` previews looked right because they don't load `mobile.css`.
+
+**Fix** (Phase 4r.fuel.compactbtn)
+Added `className="arnold-compact-btn"` to the `SlotBtn` button and the +250ml/+1L buttons in `NutritionInput.jsx`, opting them out of the 42px floor so their inline `height: 18px` applies. (The opt-out class already existed for exactly this purpose — used by dense calendar/race controls.)
+
+**What would have prevented it**
+When an inline style "isn't taking effect" on a real device but looks right in an isolated render, check the global stylesheet for an `!important` rule on that element/property BEFORE iterating on the inline value — I burned many rounds tuning a number the CSS was discarding. More durable: the design-lift `<Pill>`/`<Button>` primitives should carry the compact opt-out by default, and a lint/grep guard could flag inline `height` on a bare `<button>` (no `.arnold-compact-btn`) on mobile surfaces, since it's guaranteed dead.
+
 ## 2026-05-31 — Coach Play wrap-up said "Tomorrow: race" when tomorrow was mobility
 
 **Symptom**
@@ -559,3 +573,16 @@ fix fast; a future polish pass can collapse the two.
   the Daily smoke section would have surfaced the blank tab
   immediately. I marked Phase A done without running smokes.
   Mea culpa.
+
+## 2026-06-18 — Cronometer `export_http_403` was upstream, not Arnold
+**Symptom:** Cronometer sync fails with `cronometer_upstream_failed (export_http_403[server=cloudflare;ray=...;mit=;ct=])`. Worker login + GWT `authenticate` + `generateAuthorizationToken` all succeed; only `GET /export` 403s with an empty body, `server=cloudflare`, no `cf-mitigated`.
+**Investigation:** Added browser UA + Referer + `Sec-Fetch-*` trio to the export request (note: CF Workers strips `Sec-*` outbound anyway) — no change. Matched `gocronometer`'s exact request shape — still 403.
+**Root cause (confirmed by Emil):** Cronometer's `/export` denies the request **in Emil's own logged-in browser** — Gold account, valid 32-hex nonce, `generate=dailySummary`, correct date range → `Access to cronometer.com was denied / HTTP ERROR 403` (Jetty error page). So it's a **Cronometer-side breakage of their export endpoint**, not Arnold's worker. Full re-login did not fix it. Emil emailed Cronometer support.
+**Worker changes kept (harmless/beneficial):** `cronoExport` now sends browser-ish headers + surfaces `server/ray/mit/ct` diagnostics on failure; a `403`/`429` on export no longer deletes the session and re-logs-in (this retry storm previously caused the "Too Many Attempts" account lockout).
+**Fallback if Cronometer doesn't fix it:** pull daily macros via the diary's GWT data call (works from the worker — GWT auth already succeeds) instead of the CSV `/export`. Requires a browser capture of that diary GWT request to reverse-engineer the payload.
+
+## 2026-06-18 — DCY fuel-N = 1 ("Strongly Absorbing") on an empty SETTLED day
+**Symptom:** With zero nutrition logged all day (Cronometer down), the daily score read "Strongly Absorbing" and the DCY panel showed `FUEL — N 100%` (Calories 0/2077, Protein 0/170).
+**Root cause:** `fuelAdequacy()` distinguishes tracker (≥3 days history → empty day = N 0) from non-tracker (no history → empty day = N 1, don't penalize). But the history check read `eff.baseline`, which `effectiveIntake()` only populates when `state.isPartial` (an in-progress day). After bedtime or on any historical/settled day, `partialDayState` returns `isPartial:false` → `baseline = null` → `hasBaselineHistory` false → every empty *tracked* day fell through to the non-tracker `N = 1` "assume normal" branch.
+**Fix (Phase 4r.dcy.3):** Resolve the tracker history independent of partial-day state — lazily call `nutritionBaseline(date)` when the empty-day / N==null branches actually need it, instead of relying on the partial-only `baseline`. Empty tracked day now correctly returns N=0 (DCY goes depleting, FUEL N shows 0%). `nutritionBaseline` only counts days with ≥ minKcal within the 14-day lookback, so a non-tracker still gets N=1.
+**Caveat:** if Cronometer stays down >14 days the baseline empties and the user reads as a non-tracker again (N=1). Acceptable for now.

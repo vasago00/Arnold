@@ -13,6 +13,10 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { STATUS } from '../core/semantics.js';
 import { getGoals } from '../core/goals.js';
+import { HealthTileBase } from './HealthSystemTile.jsx';
+import { SYSTEM_ICONS } from './systemIcons.jsx';
+import Button from './ui/Button.jsx';
+import Pill from './ui/Pill.jsx';
 // Phase 4r.dataspine.4 — all macro reads route through goalModel.
 // Legacy getDynamicMacroTarget + resolveCalorieTarget imports removed
 // (their consumers in this file now read getEffectiveTargets fields
@@ -350,27 +354,16 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
     const done = entries.length > 0 && slotTaken === entries.length;
     const sc = slotColors[slot.id];
     return (
-      <button
-        onClick={() => !done && onTakeAll(slot.id)}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
-          flex: inline ? 1 : undefined, width: inline ? undefined : '100%',
-          padding: inline ? '5px 4px' : '5px 8px', borderRadius: 7,
-          cursor: done ? 'default' : 'pointer',
-          border: `0.5px solid ${done ? sc + '40' : 'var(--border-default)'}`,
-          background: done ? sc + '18' : 'rgba(255,255,255,0.03)',
-          color: done ? sc : 'var(--text-secondary)',
-          fontSize: 9, fontWeight: 600,
-          transition: 'all 0.15s',
-          opacity: entries.length === 0 ? 0.4 : 1,
-        }}>
-        <span style={{ fontSize: 11 }}>{slot.icon}</span>
-        <span>{slotShort[slot.id]}</span>
-        <span style={{ fontSize: 8, opacity: 0.85 }}>
-          {slotTaken}/{entries.length}
-        </span>
-        {done && <span style={{ fontSize: 8 }}>✓</span>}
-      </button>
+      <Pill
+        icon={slot.icon}
+        label={slotShort[slot.id]}
+        value={`${slotTaken}/${entries.length}`}
+        done={done}
+        color={done ? sc : '#94a3b8'}
+        width={inline ? 74 : undefined}
+        onClick={() => { if (!done) onTakeAll(slot.id); }}
+        style={{ flex: inline ? '0 0 auto' : undefined, cursor: done ? 'default' : 'pointer', opacity: entries.length === 0 ? 0.4 : 1 }}
+      />
     );
   };
 
@@ -395,39 +388,34 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
   // ─── MOBILE: two rows stacked — hydration row, then stack row ───
   if (isNarrow) {
     return (
-      <div style={panelStyle} ref={containerRef}>
+      <div style={{ ...panelStyle, padding: '8px 12px' }} ref={containerRef}>
         {/* Row 1: Hydration — big bottle left, liters + % + buttons right */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <WaterBottle w={28} h={36} />
+          <WaterBottle w={16} h={22} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee', fontFamily: 'var(--font-mono)' }}>
               {(waterMl / 1000).toFixed(1)}<span style={{ fontSize: 8, color: 'var(--text-muted)', marginLeft: 1 }}>L</span>
             </div>
             <div style={{ fontSize: 8, color: 'var(--text-muted)' }}>{Math.round(pct * 100)}%</div>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-              <button onClick={() => logAmount(GLASS_ML)} style={{
-                padding: '5px 8px', background: 'rgba(34,211,238,0.08)',
-                border: '0.5px solid rgba(34,211,238,0.25)', borderRadius: 6,
-                color: '#22d3ee', fontSize: 9, fontWeight: 600, cursor: 'pointer',
-              }}>+250ml</button>
-              <button onClick={() => logAmount(BOTTLE_ML)} style={{
-                padding: '5px 8px', background: 'rgba(34,211,238,0.08)',
-                border: '0.5px solid rgba(34,211,238,0.25)', borderRadius: 6,
-                color: '#22d3ee', fontSize: 9, fontWeight: 600, cursor: 'pointer',
-              }}>+1L</button>
+            <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'rgba(34,211,238,0.10)', overflow: 'hidden', minWidth: 24 }}>
+              <div style={{ width: `${Math.min(pct * 100, 100)}%`, height: '100%', borderRadius: 3, background: '#22d3ee', opacity: 0.55 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <Button color="#22d3ee" size="chip" onClick={() => logAmount(GLASS_ML)}>+250ml</Button>
+              <Button color="#22d3ee" size="chip" onClick={() => logAmount(BOTTLE_ML)}>+1L</Button>
             </div>
           </div>
         </div>
 
         {/* Row 2: Stack — big pill left, count + 3 inline slot buttons right */}
         {hasStack && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, paddingTop: 8, borderTop: '0.5px solid var(--border-subtle)' }}>
-            <span style={{ fontSize: 28, flexShrink: 0, lineHeight: 1 }}>💊</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, paddingTop: 6, borderTop: '0.5px solid var(--border-subtle)' }}>
+            <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1 }}>💊</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
               <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', flexShrink: 0 }}>
                 {takenCount}/{totalCount}{allDone ? ' ✓' : ''}
               </span>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+              <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', gap: 4, marginLeft: 8 }}>
                 {TIME_SLOTS.map(slot => <SlotBtn key={slot.id} slot={slot} inline />)}
               </div>
             </div>
@@ -447,12 +435,12 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
       </div>
       <div style={{ fontSize: 8, color: 'var(--text-muted)' }}>{Math.round(pct * 100)}%</div>
       <div style={{ display: 'flex', gap: 5 }}>
-        <button onClick={() => logAmount(GLASS_ML)} style={{
+        <button className="arnold-compact-btn" onClick={() => logAmount(GLASS_ML)} style={{
           padding: '5px 10px', background: 'rgba(34,211,238,0.08)',
           border: '0.5px solid rgba(34,211,238,0.25)', borderRadius: 7,
           color: '#22d3ee', fontSize: 9, fontWeight: 600, cursor: 'pointer',
         }}>+250ml</button>
-        <button onClick={() => logAmount(BOTTLE_ML)} style={{
+        <button className="arnold-compact-btn" onClick={() => logAmount(BOTTLE_ML)} style={{
           padding: '5px 10px', background: 'rgba(34,211,238,0.08)',
           border: '0.5px solid rgba(34,211,238,0.25)', borderRadius: 7,
           color: '#22d3ee', fontSize: 9, fontWeight: 600, cursor: 'pointer',
@@ -468,7 +456,7 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
         <span style={{ fontSize: 9, fontWeight: 500, color: allDone ? '#a78bfa' : 'var(--text-muted)', flexShrink: 0 }}>
           {takenCount}/{totalCount}{allDone ? ' ✓' : ''}
         </span>
-        <div style={{ display: 'flex', gap: 5, flex: 1 }}>
+        <div style={{ display: 'flex', gap: 5 }}>
           {TIME_SLOTS.map(slot => <SlotBtn key={slot.id} slot={slot} inline />)}
         </div>
       </>}
@@ -479,76 +467,19 @@ function DailyLogStrip({ dateStr, totalWater, onUpdate }) {
 // ═════════════════════════════════════════════════════════════════════════════
 // Health Systems — 10 tiles in 5×2 grid, fill from 0→100% based on nutrients
 // ═════════════════════════════════════════════════════════════════════════════
-const SYSTEM_ICONS = {
-  brain: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8 2 5 5 5 9c0 2 .5 3.5 1.5 5 .8 1.2 1 2.5 1 4h9c0-1.5.2-2.8 1-4 1-1.5 1.5-3 1.5-5 0-4-3-7-7-7z"/><path d="M9 18h6v2a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2z"/><path d="M12 2v16"/><path d="M6.5 8c2 1 3.5 1.5 5.5 1.5s3.5-.5 5.5-1.5"/><path d="M7 12.5c1.5.8 3 1 5 1s3.5-.2 5-1"/></svg>,
-  heart: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"/></svg>,
-  bones: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="9" width="4" height="6" rx="1"/><rect x="18" y="9" width="4" height="6" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/><rect x="5" y="7" width="2" height="10" rx="0.5"/><rect x="17" y="7" width="2" height="10" rx="0.5"/></svg>,
-  gut: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4h10c1.5 0 2.5 1 2.5 2.5S18.5 9 17 9H7c-1.5 0-2.5 1-2.5 2.5S6 14 7 14h10"/><path d="M17 14c1.5 0 2.5 1 2.5 2.5S18.5 19 17 19H7"/><circle cx="5" cy="19" r="1.2" fill={c} stroke="none"/></svg>,
-  immune: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/></svg>,
-  energy: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>,
-  longevity: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>,
-  sleep: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
-  metabolism: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h4l2-8 4 16 2-8h4"/></svg>,
-  endurance: (c) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12c4-6 8-6 12 0s8 6 12 0"/></svg>,
-};
+// Phase 0.3/3.2 — SYSTEM_ICONS now shared (was byte-identical here and in
+// Arnold.jsx). Imported at the top of this file.
 
+// Phase 3.2 — thin wrapper over the shared HealthTileBase. The Nutrition grid is
+// the non-clickable, boxed-SVG-icon variant; the skeleton lives once in
+// components/HealthSystemTile.jsx.
 function HealthSystemTile({ sys }) {
-  const { pct, status, comment, color, name, id } = sys;
-  const statusColor = status === 'good' ? '#4ade80' : status === 'focus' ? '#fbbf24' : '#f87171';
-  const fillTint = status === 'good' ? 'rgba(74,222,128,0.15)'
-    : status === 'focus' ? 'rgba(251,191,36,0.15)'
-    : 'rgba(248,113,113,0.18)';
-  const icon = SYSTEM_ICONS[id] ? SYSTEM_ICONS[id](color) : null;
-
   return (
-    <div style={{
-      position: 'relative',
-      background: 'var(--bg-elevated)',
-      border: '0.5px solid var(--border-subtle)',
-      borderRadius: 12,
-      padding: '10px 6px 9px',
-      overflow: 'hidden',
-      minHeight: 0,
-    }}>
-      {/* Fill layer — fills from bottom up based on pct */}
-      <div style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0,
-        height: `${Math.max(8, pct)}%`,
-        background: `linear-gradient(180deg, transparent, ${fillTint})`,
-        borderRadius: '0 0 12px 12px',
-        transition: 'height 0.6s ease',
-        zIndex: 0,
-      }} />
-      {/* Content */}
-      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
-        <div style={{
-          width: 26, height: 26, margin: '0 auto 5px',
-          borderRadius: 7,
-          background: 'var(--bg-elevated)',
-          border: '0.5px solid var(--border-subtle)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {icon}
-        </div>
-        <div style={{
-          fontSize: 9, fontWeight: 600, color: 'var(--text-primary)',
-          lineHeight: 1.15, marginBottom: 3, minHeight: 22,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>{name.replace(' & ', '/')}</div>
-        <div style={{
-          fontSize: 13, fontWeight: 700, color: statusColor,
-          fontFamily: 'var(--font-mono)', marginBottom: 3,
-        }}>{pct}%</div>
-        <div style={{
-          fontSize: 8, color: 'var(--text-muted)',
-          lineHeight: 1.25, minHeight: 20,
-          overflow: 'hidden', textOverflow: 'ellipsis',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-        }}>{comment}</div>
-      </div>
-    </div>
+    <HealthTileBase
+      sys={sys}
+      variant="nutrition"
+      svgIcon={SYSTEM_ICONS[sys.id] ? SYSTEM_ICONS[sys.id](sys.color) : null}
+    />
   );
 }
 
@@ -1163,7 +1094,7 @@ function LogFoodPanel({ dateStr, onSaved, onCancel }) {
               <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, textAlign: 'center', fontSize: 11, color: 'var(--text-secondary)', textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
                 Point at barcode — scanning...
               </div>
-              <button onClick={stopScanner} style={{
+              <button className="arnold-compact-btn" onClick={stopScanner} style={{
                 position: 'absolute', top: 8, right: 8, width: 32, height: 32, borderRadius: '50%',
                 background: 'rgba(0,0,0,0.5)', border: 'none', color: 'var(--text-primary)', fontSize: 16, cursor: 'pointer',
               }}>×</button>
@@ -1374,6 +1305,17 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
     onUpdate?.();
   };
 
+  // Surface background syncs (Cronometer live pull etc.) without a manual tap —
+  // Arnold dispatches `arnold:synced` after each successful full-sync. Re-subscribe
+  // on dateStr so the handler always reads the current day.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const h = () => refresh();
+    window.addEventListener('arnold:synced', h);
+    return () => window.removeEventListener('arnold:synced', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateStr]);
+
   const handleDelete = (id) => {
     deleteEntry(id);
     refresh();
@@ -1570,13 +1512,12 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
         )}
 
         {!hasAnyData && !showAdd && (
-          <div style={{
-            textAlign: 'center', padding: '18px 0 4px',
-            fontSize: 11, color: 'var(--text-muted)',
-            lineHeight: 1.5,
-          }}>
-            Log food or tick a supplement to see today's macros
-            and micronutrient breakdown.
+          <div style={{ textAlign: 'center', padding: '12px 8px 6px' }}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.85 }}>
+              <path d="M7 3v7a2 2 0 0 0 4 0V3M9 10v11M17 3c-1.5 1-2 3-2 6s0 5 2 6V3z" />
+            </svg>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginTop: 6 }}>Fuel up</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Macros + micronutrients fill in here as Cronometer syncs.</div>
           </div>
         )}
       </div>
@@ -1584,23 +1525,9 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
       {/* ═════ INPUT — Hydration + Stack strip (always visible) ═════ */}
       <DailyLogStrip dateStr={dateStr} totalWater={totals.water} onUpdate={refresh} />
 
-      {/* ═════ INPUT — Log Food button (always visible) ═════ */}
-      {!showAdd && (
-        <button onClick={() => setShowAdd(true)} style={{
-          padding: '13px', cursor: 'pointer', textAlign: 'center',
-          fontSize: 12, fontWeight: 600,
-          background: 'linear-gradient(135deg, rgba(96,165,250,0.15), rgba(167,139,250,0.15))',
-          border: '1px solid rgba(96,165,250,0.3)',
-          borderRadius: 14, color: '#60a5fa',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          transition: 'transform 0.15s ease',
-        }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-          Log Food
-        </button>
-      )}
+      {/* Log Food button removed (Emil 2026-06-10) — the manual logging UI is
+          deferred; the LogFoodPanel below stays dormant for future development.
+          Cronometer live-sync still populates nutrition. */}
 
       {showAdd && (
         <LogFoodPanel

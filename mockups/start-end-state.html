@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Arnold — Start screen, proposed end state</title>
+<style>
+  :root{
+    --bg:#0a0c10; --surface:#12151c; --elevated:#171b24; --input:#1d222c;
+    --border:#262c38; --border-subtle:#1c212b;
+    --t1:#eceae4; --t2:#a8a59f; --t3:#74716a; --muted:#6b6f78;
+    --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    --blue:#60a5fa; --purple:#a78bfa; --orange:#fb923c; --teal:#2dd4bf;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#05070a;color:var(--t1);font-family:var(--font);
+    -webkit-font-smoothing:antialiased;padding:32px 16px;
+    background-image:radial-gradient(900px 500px at 80% -10%,rgba(96,165,250,.07),transparent),
+                     radial-gradient(700px 500px at -10% 110%,rgba(167,139,250,.06),transparent);}
+  .wrap{max-width:1120px;margin:0 auto;display:flex;gap:40px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+  .pagehdr{width:100%;text-align:center;margin-bottom:8px}
+  .pagehdr h1{font-size:19px;font-weight:600;letter-spacing:.01em}
+  .pagehdr p{color:var(--t2);font-size:13px;margin-top:6px;line-height:1.5}
+  .pagehdr .pill{display:inline-block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--teal);border:1px solid rgba(45,212,191,.35);background:rgba(45,212,191,.08);
+    padding:3px 10px;border-radius:20px;margin-bottom:12px}
+
+  /* phone */
+  .phone{width:390px;flex:0 0 390px;background:var(--bg);border:1px solid var(--border);
+    border-radius:34px;padding:14px 12px 18px;box-shadow:0 30px 80px rgba(0,0,0,.55);position:relative}
+  .notch{width:120px;height:6px;background:#2a2f3a;border-radius:6px;margin:2px auto 14px}
+  .topnav{display:flex;justify-content:space-between;align-items:center;padding:0 6px 12px}
+  .topnav .brand{font-size:13px;font-weight:700;letter-spacing:.04em}
+  .topnav .brand b{color:var(--teal)}
+  .topnav .date{font-size:11px;color:var(--t3)}
+  .scroll{padding:0 4px}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:12px}
+  .sechdr{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);margin:0 2px 8px}
+
+  /* ── Transparency hero ── */
+  .hero{background:linear-gradient(180deg,#141925, #10141c);border:1px solid #28303f;position:relative;overflow:hidden}
+  .hero:before{content:"";position:absolute;inset:0;background:radial-gradient(420px 200px at 18% 0%,rgba(74,222,128,.10),transparent)}
+  .hero .row{display:flex;gap:14px;align-items:center;position:relative}
+  .gauge{flex:0 0 96px;width:96px;height:96px;position:relative}
+  .gauge .num{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .gauge .num .v{font-size:30px;font-weight:700;line-height:1;color:var(--good)}
+  .gauge .num .s{font-size:9px;color:var(--t3);margin-top:2px;letter-spacing:.08em}
+  .verdict{flex:1;min-width:0}
+  .verdict .word{font-size:20px;font-weight:700;color:var(--good);line-height:1.05}
+  .verdict .sub{font-size:12px;color:var(--t2);margin-top:4px;line-height:1.45}
+  .conf{margin-top:9px}
+  .conf .lbl{display:flex;justify-content:space-between;font-size:9px;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px}
+  .conf .bar{height:5px;border-radius:4px;background:var(--input);overflow:hidden}
+  .conf .bar i{display:block;height:100%;width:76%;background:linear-gradient(90deg,var(--teal),var(--blue));border-radius:4px}
+
+  /* why contributors */
+  .why{margin-top:13px;position:relative}
+  .why .h{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);margin-bottom:7px}
+  .why .item{display:flex;align-items:center;gap:9px;padding:5px 0}
+  .why .ic{flex:0 0 22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px}
+  .why .nm{flex:1;font-size:12.5px;color:var(--t1)}
+  .why .nm span{color:var(--t3);font-size:11px}
+  .why .delta{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+  .why .mini{flex:0 0 64px;height:8px;border-radius:4px;background:var(--input);overflow:hidden;position:relative}
+  .why .mini i{position:absolute;top:0;bottom:0;left:50%;width:1px;background:#39414f}
+  .why .mini b{position:absolute;top:1px;bottom:1px;border-radius:3px;display:block}
+  .neg{color:var(--bad)} .pos{color:var(--good)} .neu{color:var(--t2)}
+
+  .morebtn{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:11px;
+    font-size:11px;color:var(--t2);border:1px dashed #333a47;border-radius:9px;padding:7px;cursor:default}
+
+  /* today / plan */
+  .today{display:flex;gap:12px;align-items:center}
+  .fig{flex:0 0 54px;height:54px;border-radius:12px;background:radial-gradient(circle at 35% 30%,#243042,#161b24);
+    display:flex;align-items:center;justify-content:center;font-size:26px}
+  .today .body{flex:1;min-width:0}
+  .today .ttl{font-size:14px;font-weight:600}
+  .today .meta{font-size:11.5px;color:var(--t2);margin-top:3px}
+  .badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    padding:2px 7px;border-radius:6px;margin-left:6px;vertical-align:middle}
+  .badge.eased{color:var(--warn);background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3)}
+
+  /* coach */
+  .coach{border:1px solid rgba(45,212,191,.28);background:rgba(45,212,191,.04)}
+  .coach .sig{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+  .coach .sig .a{width:18px;height:18px;border-radius:6px;background:rgba(45,212,191,.16);color:var(--teal);
+    display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+  .coach .sig .nm{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--teal)}
+  .coach p{font-family:Georgia,"Times New Roman",serif;font-style:italic;font-size:13.5px;line-height:1.5;color:var(--t1)}
+  .coach .more{font-style:italic;font-size:11px;color:var(--teal);margin-top:6px}
+
+  /* fuel for tomorrow */
+  .fuel .grid{display:flex;gap:7px}
+  .fuel .b{flex:1;background:var(--elevated);border-radius:10px;padding:9px 6px;text-align:center}
+  .fuel .b .v{font-size:15px;font-weight:700}
+  .fuel .b .l{font-size:8.5px;color:var(--t3);margin-top:3px;letter-spacing:.05em;text-transform:uppercase}
+  .fuel .ea{margin-top:9px;display:flex;align-items:center;gap:7px;font-size:11px;color:var(--warn);
+    background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.22);border-radius:8px;padding:7px 9px}
+
+  /* health systems compact */
+  .sys{display:flex;gap:7px}
+  .sys .s{flex:1;background:var(--elevated);border-radius:10px;padding:9px 4px;text-align:center;position:relative;overflow:hidden}
+  .sys .s i{position:absolute;left:0;right:0;bottom:0;height:3px;display:block}
+  .sys .s .v{font-size:14px;font-weight:700}
+  .sys .s .l{font-size:8px;color:var(--t3);margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+
+  .tabbar{display:flex;justify-content:space-around;padding:12px 4px 2px;margin-top:4px;border-top:1px solid var(--border-subtle)}
+  .tabbar .t{font-size:9px;color:var(--t3);text-align:center;letter-spacing:.04em}
+  .tabbar .t.on{color:var(--teal)}
+  .tabbar .t .d{font-size:15px;margin-bottom:3px;opacity:.8}
+  .tabbar .t.on .d{opacity:1}
+
+  /* legend */
+  .legend{flex:1;min-width:280px;max-width:420px;padding-top:6px}
+  .legend h2{font-size:14px;font-weight:600;margin-bottom:4px}
+  .legend .lead{font-size:12.5px;color:var(--t2);line-height:1.55;margin-bottom:16px}
+  .legend .L{display:flex;gap:11px;margin-bottom:15px}
+  .legend .dot{flex:0 0 24px;height:24px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;color:#0a0c10}
+  .legend .L h3{font-size:12.5px;font-weight:600;margin-bottom:3px}
+  .legend .L p{font-size:12px;color:var(--t2);line-height:1.5}
+  .legend .foot{font-size:11px;color:var(--t3);line-height:1.5;border-top:1px solid var(--border-subtle);padding-top:12px;margin-top:4px}
+</style>
+</head>
+<body>
+  <div class="pagehdr">
+    <div class="pill">Proposed end state · mobile Start</div>
+    <h1>Arnold — transparency as the hero</h1>
+    <p>A concrete mock of the §3–§4 recommendations: one hero per screen, the learned "why + confidence" promoted to the headline, progressive disclosure, and the fuel-for-tomorrow card — in Arnold's existing dark/neon brand. Illustrative values.</p>
+  </div>
+
+  <div class="wrap">
+    <!-- PHONE -->
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="topnav">
+        <div class="brand">A<b>°</b> ARNOLD</div>
+        <div class="date">Sun · Jun 14</div>
+      </div>
+      <div class="scroll">
+
+        <!-- TRANSPARENCY HERO -->
+        <div class="card hero">
+          <div class="row">
+            <div class="gauge">
+              <svg width="96" height="96" viewBox="0 0 96 96">
+                <circle cx="48" cy="48" r="42" fill="none" stroke="#1d222c" stroke-width="7"/>
+                <circle cx="48" cy="48" r="42" fill="none" stroke="#4ade80" stroke-width="7"
+                  stroke-linecap="round" stroke-dasharray="264" stroke-dashoffset="74"
+                  transform="rotate(-90 48 48)"/>
+              </svg>
+              <div class="num"><div class="v">72</div><div class="s">READY</div></div>
+            </div>
+            <div class="verdict">
+              <div class="word">Go strong</div>
+              <div class="sub">Recovery is ahead of load — today's a day to push.</div>
+              <div class="conf">
+                <div class="lbl"><span>Confidence</span><span>76% sure</span></div>
+                <div class="bar"><i></i></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="why">
+            <div class="h">Why — what's driving it</div>
+            <div class="item">
+              <div class="ic" style="background:rgba(74,222,128,.14);color:var(--good)">＋</div>
+              <div class="nm">HRV <span>· 7‑night high</span></div>
+              <div class="mini"><i></i><b class="pos" style="left:50%;right:18%;background:var(--good)"></b></div>
+              <div class="delta pos">+8%</div>
+            </div>
+            <div class="item">
+              <div class="ic" style="background:rgba(248,113,113,.14);color:var(--bad)">－</div>
+              <div class="nm">Sleep <span>· 6h12 vs 7h30</span></div>
+              <div class="mini"><i></i><b class="neg" style="right:50%;left:26%;background:var(--bad)"></b></div>
+              <div class="delta neg">−18%</div>
+            </div>
+            <div class="item">
+              <div class="ic" style="background:rgba(96,165,250,.14);color:var(--blue)">≈</div>
+              <div class="nm">Heat strain <span>· learned +1.4%/°C</span></div>
+              <div class="mini"><i></i><b class="neu" style="left:50%;right:40%;background:var(--t2)"></b></div>
+              <div class="delta neu">mild</div>
+            </div>
+          </div>
+          <div class="morebtn">▾ More drivers &amp; 7‑day trend</div>
+        </div>
+
+        <!-- TODAY / PLAN (one hero secondary) -->
+        <div class="card">
+          <div class="sechdr">Today</div>
+          <div class="today">
+            <div class="fig">🏃</div>
+            <div class="body">
+              <div class="ttl">Tempo run <span class="badge eased">eased → Z2</span></div>
+              <div class="meta">5.0 mi · target 8:40/mi · trimmed −15% for sleep debt</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- COACH (one voice) -->
+        <div class="card coach">
+          <div class="sig"><div class="a">A°</div><div class="nm">Coach</div></div>
+          <p>"Your HRV says the engine's fresh, but you're carrying a short night — I eased the tempo to Z2 so you bank the aerobic work without digging a hole. Fuel the carbs below and you're set."</p>
+          <div class="more">open ↗</div>
+        </div>
+
+        <!-- FUEL FOR TOMORROW -->
+        <div class="card fuel">
+          <div class="sechdr">Fuel for tomorrow · long run</div>
+          <div class="grid">
+            <div class="b"><div class="v" style="color:var(--orange)">95g</div><div class="l">pre‑carbs</div></div>
+            <div class="b"><div class="v" style="color:var(--blue)">60g/h</div><div class="l">during</div></div>
+            <div class="b"><div class="v" style="color:var(--purple)">28g</div><div class="l">recovery pro</div></div>
+          </div>
+          <div class="ea">⚠ Energy availability low yesterday (28 kcal/kg) — add a carb‑anchored breakfast.</div>
+        </div>
+
+        <!-- HEALTH SYSTEMS (compact, drill-down) -->
+        <div class="card">
+          <div class="sechdr">Health systems · tap to expand</div>
+          <div class="sys">
+            <div class="s"><div class="v">88</div><div class="l">Cardio</div><i style="background:var(--good)"></i></div>
+            <div class="s"><div class="v">71</div><div class="l">Metabolic</div><i style="background:var(--good)"></i></div>
+            <div class="s"><div class="v">54</div><div class="l">Recovery</div><i style="background:var(--warn)"></i></div>
+            <div class="s"><div class="v">90</div><div class="l">Body</div><i style="background:var(--good)"></i></div>
+          </div>
+        </div>
+
+      </div>
+      <div class="tabbar">
+        <div class="t on"><div class="d">◆</div>Start</div>
+        <div class="t"><div class="d">◈</div>EdgeIQ</div>
+        <div class="t"><div class="d">⚡</div>Play</div>
+        <div class="t"><div class="d">🍎</div>Fuel</div>
+        <div class="t"><div class="d">▦</div>Plan</div>
+      </div>
+    </div>
+
+    <!-- LEGEND -->
+    <div class="legend">
+      <h2>What changed &amp; why</h2>
+      <p class="lead">Same engine, same brand — re‑sequenced so the screen answers <b>what · why · how‑sure</b> in one glance, the thing every competitor (WHOOP, Oura, even with Oura's own advisor calling the scores "made up") fails to do.</p>
+
+      <div class="L"><div class="dot" style="background:var(--good)">1</div>
+        <div><h3>Transparency is the hero</h3><p>State + the top 2–3 weighted contributors + a confidence bar, from the existing <code>attribution.js</code> / <code>hubFacts</code> / LearnedHero. This is the demo that wins — Athlytic markets "why your score is what it is"; Arnold can show it deeper.</p></div></div>
+
+      <div class="L"><div class="dot" style="background:var(--blue)">2</div>
+        <div><h3>One hero per screen</h3><p>Working memory tops out at ~3–5 items; cluttered dashboards measured 12 min→insight vs 3 min optimized. The 12‑tile EdgeIQ rail collapses to hero + a few + "More."</p></div></div>
+
+      <div class="L"><div class="dot" style="background:var(--purple)">3</div>
+        <div><h3>Progressive disclosure (≤2 levels)</h3><p>Summary → trend → raw. "More drivers", "open ↗", and "tap to expand" defer detail instead of stacking it — NN/G's key mobile guideline.</p></div></div>
+
+      <div class="L"><div class="dot" style="background:var(--teal)">4</div>
+        <div><h3>One Coach voice + prescriptive fuel</h3><p>The teal serif Coach speaks once about what changed (already best practice). The "fuel for tomorrow" card + EA flag finally makes the Cronometer data pay off — MAVR/Fuelin's whitespace.</p></div></div>
+
+      <div class="L"><div class="dot" style="background:var(--warn)">5</div>
+        <div><h3>Color does one job, paired with shape</h3><p>Green/amber/red = status only; the ＋ / － / ≈ glyphs carry the same meaning for accessibility. Brand/category accents stay separate (tokens already encode this).</p></div></div>
+
+      <p class="foot">Illustrative mock for direction, not pixel spec. Build path = Phase B (transparency hero) + Phase C (density) + Phase E (fuel) in <code>UX_UI_REVIEW_2026‑06.md</code>. Verify on device.</p>
+    </div>
+  </div>
+</body>
+</html>

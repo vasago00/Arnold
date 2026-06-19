@@ -24,6 +24,7 @@
 //     - Use 7700 kcal/kg in metric; here we use 3500/lb.
 
 import { storage } from './storage.js';
+import { currentTrueWeightLbs } from './bodyWeight.js';
 import { dailyTotals } from './nutrition.js';
 import { getGoals } from './goals.js';
 import { allActivities as allActivitiesDeduped } from './dcyMath.js';
@@ -39,6 +40,9 @@ const TEF_RATIO       = 0.10;          // 10% of intake (mixed diet, Westerterp)
 const NEAT_FACTOR_DEFAULT = 0.13;      // ~13% of RMR for moderately active
 const NEAT_FACTOR_MIN     = 0.08;      // sedentary floor
 const NEAT_FACTOR_MAX     = 0.25;      // very active ceiling
+// Steps-derived NEAT (Tudor-Locke/Bassett, +/-20% vs DLW). Phase 4r.energy.6 —
+// used instead of the flat factor when a real daily step count exists.
+const NEAT_KCAL_PER_STEP_PER_KG = 0.0005;  // per-kg (Phase 4r.energy.7)
 
 // Phase 4r.utc.2 — localDate / ymd now imported from ./time.js
 // (canonical). Use localDate() for today, ymd(d) for any Date.
@@ -62,13 +66,13 @@ export function getCurrentBodyComp() {
   const profile = storage.get('profile') || {};
   const goals   = storage.get('goals')   || {};
 
-  // Most recent weight (any source)
+  // Body weight = most recent MORNING-FASTED reading only (core/bodyWeight.js).
+  // Post-workout/intraday readings are dehydrated; they go to the sweat/hydration
+  // path, never the body-weight trend (which feeds RMR + body-comp).
   const weights = storage.get('weight') || [];
   const sortedWeights = [...weights].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const latestWeight = sortedWeights[0];
   const weightLbs =
-    parseFloat(latestWeight?.weightLbs)
-    || (parseFloat(latestWeight?.weightKg) * LB_PER_KG)
+    currentTrueWeightLbs(weights)
     || parseFloat(profile.weight)
     || parseFloat(goals.targetWeight)
     || 175;
@@ -244,7 +248,25 @@ export function computeTDEE(dateStr, opts = {}) {
   const { rmr } = computeRMR();
   const activityKcal = dailyActivityCalories(date);
   const neatFactor = Math.max(NEAT_FACTOR_MIN, Math.min(NEAT_FACTOR_MAX, opts.neatFactor ?? NEAT_FACTOR_DEFAULT));
-  const neatKcal = Math.round(rmr * neatFactor);
+  // Phase 4r.energy.6 — prefer ACTUAL movement. When a real daily step count is
+  // available (Garmin daily summary -> hcDailyEnergy), NEAT = steps x 0.04 x bodyMassKg,
+  // so a 3k-step day and an 18k-step day no longer get the same NEAT. Falls back to the
+  // flat RMR x factor estimate when steps are missing. (Known limitation: steps during a
+  // logged workout overlap slightly with activityKcal — accepted estimate, consistent
+  // with dcy.js tier-2.)
+  let neatKcal, neatSource;
+  const _steps = (() => {
+    try { const r = (storage.get('hcDailyEnergy') || []).find(x => x && x.date === date); return Number(r?.steps) || 0; }
+    catch { return 0; }
+  })();
+  if (_steps >= 500) {
+    const _massKg = (Number(getCurrentBodyComp()?.weightLbs) || 175) * KG_PER_LB;
+    neatKcal = Math.round(_steps * NEAT_KCAL_PER_STEP_PER_KG * _massKg);
+    neatSource = 'steps';
+  } else {
+    neatKcal = Math.round(rmr * neatFactor);
+    neatSource = 'estimate';
+  }
 
   // TEF requires intake; pull from canonical dailyTotals
   let intakeKcal = 0;
@@ -255,12 +277,17 @@ export function computeTDEE(dateStr, opts = {}) {
 
   return {
     tdee: rmr + activityKcal + neatKcal + tefKcal,
+    // restingTdee — non-exercise baseline (RMR + steps-NEAT + TEF), EXCLUDING workouts.
+    // The calorie target uses THIS and adds workouts once via eat-back (no double-count).
+    restingTdee: rmr + neatKcal + tefKcal,
     rmr,
     activityKcal,
     neatKcal,
     tefKcal,
     intakeKcal: Math.round(intakeKcal),
     neatFactor,
+    neatSource,
+    steps: _steps,
   };
 }
 

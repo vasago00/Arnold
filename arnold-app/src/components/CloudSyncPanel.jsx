@@ -490,27 +490,34 @@ export default function CloudSyncPanel() {
       <div style={{ marginBottom: 10 }}>
         <button style={btnStyle} onClick={handlePush} disabled={busy === 'push'}>{busy === 'push' ? 'Pushing…' : 'Push now'}</button>
         <button style={btnStyle} onClick={handlePull} disabled={busy === 'pull'}>{busy === 'pull' ? 'Pulling…' : 'Pull now'}</button>
-        <button
-          style={{
-            ...btnSecondary,
-            color: '#fbbf24',
-            borderColor: '#fbbf24',
-          }}
-          onClick={handleForcePull}
-          disabled={busy === 'forcepull'}
-          title="Bypass LWW — overwrite local data with whatever's in the cloud. Use when this device has drifted from remote (bad migration, stale state, etc).">
-          {busy === 'forcepull' ? 'Force pulling…' : '⚠ Force pull'}
-        </button>
         {/* Always-available re-enter button so the user can fix a
             passphrase mismatch without going through Unpair. */}
         <ReEnterPassphraseButton onResolved={() => setStatus(getSyncStatus())} />
         <button style={btnSecondary} onClick={handleUnpair}>Unpair</button>
       </div>
 
+      {/* Phase 0.5 (settings cleanup) — destructive/power control tucked into a
+          collapsed Advanced (per Emil). Force pull overwrites local data with the
+          cloud copy, so it doesn't belong in the everyday button row. */}
+      <details style={{ marginBottom: 10 }}>
+        <summary style={{ fontSize: 11, color: '#9aa0a6', textTransform: 'uppercase', letterSpacing: '0.08em', cursor: 'pointer', userSelect: 'none' }}>▸ Advanced</summary>
+        <div style={{ marginTop: 8 }}>
+          <button
+            style={{
+              ...btnSecondary,
+              color: '#fbbf24',
+              borderColor: '#fbbf24',
+            }}
+            onClick={handleForcePull}
+            disabled={busy === 'forcepull'}
+            title="Bypass LWW — overwrite local data with whatever's in the cloud. Use when this device has drifted from remote (bad migration, stale state, etc).">
+            {busy === 'forcepull' ? 'Force pulling…' : '⚠ Force pull'}
+          </button>
+        </div>
+      </details>
+
       <CronometerAuthSection />
       <GarminAuthSection />
-
-      <HealthConnectStatusSection />
 
       <details style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>
         <summary>Pair-a-second-device values (copy these to your other device)</summary>
@@ -983,6 +990,12 @@ function GarminAuthSection() {
           <button style={btn} type="button" onClick={handleTest} disabled={busy === 'test'}>
             {busy === 'test' ? 'Testing…' : 'Test pull'}
           </button>
+          {/* Phase 0.5 (settings cleanup) — Garmin maintenance/power buttons
+              tucked into a collapsed Advanced (per Emil). "Test pull" + credential
+              management stay visible above; these are occasional repair tools. */}
+          <details style={{ marginTop: 8, marginBottom: 4 }}>
+            <summary style={{ fontSize: 11, color: '#9aa0a6', textTransform: 'uppercase', letterSpacing: '0.08em', cursor: 'pointer', userSelect: 'none' }}>▸ Advanced · maintenance</summary>
+            <div style={{ marginTop: 8 }}>
           <button style={btnSec} type="button" onClick={() => handleBackfill(false)} disabled={busy === 'backfill' || busy === 'force'}>
             {busy === 'backfill' ? 'Backfilling…' : 'Backfill 14 days'}
           </button>
@@ -998,6 +1011,8 @@ function GarminAuthSection() {
                   title="For each activity in the last 30 days that's missing HR zones or training load, fetch Garmin's server-computed details. Unlocks Z2 Weekly / EPOC / Pace:HR tiles when FIT files don't include zone data.">
             {busy === 'enrich' ? 'Enriching…' : 'Enrich activity data'}
           </button>
+            </div>
+          </details>
           {/* Credential management — keep these next to the action buttons so
               "Edit" is obviously the way to re-enter the Garmin password when
               the session ticket expires, not buried below the VO₂Max card. */}
@@ -1118,14 +1133,35 @@ function HealthConnectStatusSection() {
     try {
       const result = await hcSyncAll();
       setStatus(getHcSyncStatus());
+
+      // Per-stream errors: syncAll() runs the streams under Promise.allSettled,
+      // so a thrown sub-stream surfaces as { error } on that stream instead of
+      // failing the whole run. Collect them so a partial failure isn't masked
+      // as "up-to-date".
+      const streamErrors = ['sleep', 'weight', 'heartRate', 'dailyEnergy']
+        .filter(k => result?.[k]?.error)
+        .map(k => `${k}: ${result[k].error}`);
+
+      // Fresh read of today's movement row — the sync may have just written it,
+      // so the render-time `hasData` above could be stale.
+      const freshRow = (() => {
+        try { return (storage.get('hcDailyEnergy') || []).find(r => r && r.date === todayStr) || null; }
+        catch { return null; }
+      })();
+      const freshHasData = (Number(freshRow?.steps) || 0) > 0 || (Number(freshRow?.totalCalories) || 0) > 0;
+
       if (result?.permissionDenied) {
-        setMsg({ kind: 'err', text: `Health Connect permissions missing: ${(result.denied || []).slice(0, 3).join(', ')}${(result.denied || []).length > 3 ? '…' : ''}` });
-      } else if (result?.totalSynced > 0) {
-        setMsg({ kind: 'ok', text: `Synced ${result.totalSynced} records.` });
+        setMsg({ kind: 'err', text: `Permissions missing — Health Connect is blocking: ${(result.denied || []).slice(0, 4).join(', ')}${(result.denied || []).length > 4 ? '…' : ''}. Open the Health Connect app → App permissions → Arnold and enable them.` });
       } else if (result?.skipped) {
         setMsg({ kind: 'err', text: `Skipped: ${result.reason || 'already syncing'}` });
+      } else if (streamErrors.length) {
+        setMsg({ kind: 'err', text: `Some streams errored — ${streamErrors.join(' · ')}` });
+      } else if (result?.totalSynced > 0) {
+        setMsg({ kind: 'ok', text: `Synced ${result.totalSynced} new record${result.totalSynced === 1 ? '' : 's'}.` });
+      } else if (freshHasData) {
+        setMsg({ kind: 'ok', text: 'Up-to-date — no new records since the last sync.' });
       } else {
-        setMsg({ kind: 'ok', text: 'Already up-to-date.' });
+        setMsg({ kind: 'err', text: 'Connected & permitted, but Health Connect returned no data to read. Check that Garmin Connect (or your source app) is set to write into Health Connect on this phone.' });
       }
     } catch (e) {
       setMsg({ kind: 'err', text: String(e?.message || e) });

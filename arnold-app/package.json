@@ -9,7 +9,9 @@
     "build:mobile": "cross-env CAPACITOR_BUILD=true vite build && npx cap sync android",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node tests/classifyActivityForHyrox.test.mjs"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:legacy": "node tests/classifyActivityForHyrox.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",
@@ -28,6 +30,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "jsdom": "^25.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
@@ -37,6 +42,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
     "typescript": "^6.0.2",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "vitest": "^3.2.0"
   }
 }

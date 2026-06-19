@@ -40,3 +40,15 @@ export function ringColor(s) {
   if (s >= 45)   return '#fbbf24';
   return '#f87171';
 }
+
+// Readiness score (0–100) → plain-language verdict (the hero's "one read") +
+// its accent color. ONE definition so the web Daily hero and the mobile Play
+// hero can't drift — Phase 3.1 originally inlined this in both and they had to
+// be edited twice. `word` is null on empty days (score ≤ 0) so callers can hide
+// the line. Color tracks ringColor's 70/45 bands exactly.
+export function readinessVerdict(s) {
+  if (s == null || s <= 0) return { word: null, color: 'var(--text-muted)' };
+  if (s >= 70) return { word: 'Go strong', color: '#4ade80' };
+  if (s >= 45) return { word: 'Go steady', color: '#fbbf24' };
+  return { word: 'Dial back', color: '#f87171' };
+}

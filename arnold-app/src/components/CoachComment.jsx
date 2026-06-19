@@ -25,6 +25,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { storage } from '../core/storage.js';
+import { allActivities as _allActivities } from '../core/dcyMath.js';
 import { getGoals } from '../core/goals.js';
 import { safeCompute } from '../core/safeCompute.js';
 import { computeUserState, synthesizeRecommendations } from '../core/intelligence.js';
@@ -33,6 +34,9 @@ import { activityLabel, activityKind } from '../core/activityClass.js';
 import { useStorageVersion } from '../hooks/useStorageVersion.js';
 import { CoachSigil } from './CoachSigil.jsx';
 import { getIFProfile, isInFastingWindow } from '../core/intermittentFasting.js';
+import { hubFacts } from '../core/hub/hubFacts.js';
+import { racePredictionOpts } from '../core/derive/tileMetrics.js';
+import { hubCoachInsights } from '../core/hub/coachInsights.js';
 
 const COACH_TEAL = '#5eead4';
 
@@ -663,7 +667,11 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
 
   const computed = useMemo(() => safeCompute('CoachComment:compute', () => {
     const data = {
-      activities:   storage.get('activities')   || [],
+      // Unified activity universe (stored activities + dailyLog FIT uploads),
+      // the same set the card/gauge use — so a FIT-uploaded run isn't invisible
+      // to the Coach (which previously read raw storage('activities') and so
+      // thought "today's workout didn't happen" for FIT-only sessions).
+      activities:   (() => { try { return _allActivities() || []; } catch { return storage.get('activities') || []; } })(),
       sleep:        storage.get('sleep')        || [],
       hrv:          storage.get('hrv')          || [],
       weight:       storage.get('weight')       || [],
@@ -686,11 +694,55 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     const raceHorizon  = us?.coachSignals?.raceHorizon  || null;
     const nowMs = Date.now();
     const hour  = new Date().getHours();
-    return { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour };
+    // Hub voice: surface the hub's learned insights (heat strain, …) when today's
+    // conditions trigger them. Read the PERSISTED hub state (light — no rebuild) and
+    // pull tempC from today's logged session. The hub speaks through the Coach here.
+    let hubInsights = [];
+    try {
+      const hubState = storage.get('hub:state');
+      if (hubState) {
+        const facts = hubFacts(hubState, racePredictionOpts(data.activities)); // canonical opts → one race number everywhere
+        const tempC = (sessions || []).map(a => Number(a.avgTemperature ?? a.tempC ?? a.weatherTempC)).find(Number.isFinite);
+        // Session length (for the sweat target) + the next race (for race readiness).
+        const sessionMins = ((sessions || []).reduce((m, a) => Math.max(m, Number(a.durationSecs) || 0), 0) / 60) || null;
+        const _todayMid = new Date(new Date().setHours(0, 0, 0, 0));
+        const _next = (storage.get('races') || [])
+          .filter(r => r && r.date && new Date(`${r.date}T12:00:00`) >= _todayMid)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
+        let race = null;
+        if (_next) {
+          const km = Number(_next.distance_km ?? _next.distanceKm) || (Number(_next.distanceMi) ? Number(_next.distanceMi) * 1.60934 : null);
+          const _parseGoal = g => {
+            if (g == null) return null;
+            if (Number.isFinite(+g)) return +g;
+            const m = String(g).match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+            return m ? (+(m[1] || 0)) * 3600 + (+m[2]) * 60 + (+m[3]) : null;
+          };
+          race = { label: _next.name || 'race', distanceKm: km, goalSecs: _parseGoal(_next.goalSecs ?? _next.goalSeconds ?? _next.goalTime ?? _next.targetTime) };
+        }
+        hubInsights = hubCoachInsights(facts, { tempC, sessionMins, race });
+      }
+    } catch {}
+    // DEBUG (Phase 4r.coach.plandone) — surface why a logged session may still
+    // read "on the plan". Run `window.__coachPlanDebug` in the console.
+    if (typeof window !== 'undefined') {
+      try {
+        const up = us?.coachSignals?.upcomingPlan;
+        window.__coachPlanDebug = {
+          today: us?.asOf,
+          plannerTodayType: up?.next7Days?.[0]?.planned?.type ?? null,
+          todayDoneFlag: up?.next7Days?.[0]?.done ?? null,
+          intensityClass: up?.next7Days?.[0]?.intensityClass ?? null,
+          todaySessions: (sessions || []).map(a => ({ date: a.date, type: a.activityType, kind: (() => { try { return activityKind(a); } catch { return '?'; } })() })),
+          activitiesCount: (data.activities || []).length,
+        };
+      } catch {}
+    }
+    return { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights };
   }, null), [storageVersion, tick]);
 
   if (!computed) return null;
-  const { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour } = computed;
+  const { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights } = computed;
   const cfg = SURFACE_CONFIG[surface] || SURFACE_CONFIG.edgeiq;
 
   // ── Resolve the single comment for this surface ──
@@ -762,7 +814,19 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     const lp = narrative?.leveragePoint;
     const story = narrative?.story;
     const aligned = narrative?.alignedFallback || !lp;
-    if (aligned) {
+    // Phase 1.2 (living coach) — TIME-OF-DAY orientation on Start/EdgeIQ. In the
+    // MORNING with a planned, not-done session and nothing trained yet, lead
+    // FORWARD with today's session (the warm, already-tested Play-state line)
+    // instead of a backward sleep/recovery leverage point — the "sleep at 8am"
+    // fix. The Play/Fuel/Digest surfaces already orient by time; this closes the
+    // gap on the leverage surface so the Coach faces forward in the morning.
+    const _ps = classifyPlayState({ sessions, upcomingPlan, nowMs, hour });
+    if (_ps.kind === 'planned_morning' && sessions.length === 0) {
+      const _line = composePlayLine(_ps);
+      tag = _line.tag;
+      dot = COACH_TEAL;
+      body = _line.body;
+    } else if (aligned) {
       // Affirming read — name what's holding up, don't go silent.
       tag = 'On track';
       dot = '#4ade80';
@@ -787,6 +851,30 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
   }
 
   if (!body) return null;
+
+  // ── Hub brain → Coach voice ───────────────────────────────────────────────
+  // Weave in the most relevant hub-LEARNED insight for THIS surface (the hub is
+  // the brain; the Coach is its voice). Each surface gets the insight kind that
+  // fits its job: Play/Fuel → today's heat + hydration; Plan/Trend → race
+  // readiness; the Daily digest is a paragraph so it can carry the top two.
+  const HUB_KINDS_FOR = {
+    playState:  ['heat', 'sweat'],
+    fuelState:  ['sweat', 'heat'],
+    planState:  ['fitness', 'sensitivity'],
+    trendState: ['fitness'],
+    leverage:   ['fitness', 'sensitivity'],
+    digest:     ['heat', 'sweat', 'fitness', 'sensitivity'],
+  };
+  const _hubOrder = HUB_KINDS_FOR[cfg.mode] || [];
+  if (_hubOrder.length && Array.isArray(hubInsights) && hubInsights.length) {
+    const picked = [];
+    for (const k of _hubOrder) {
+      const m = hubInsights.find(i => i.kind === k);
+      if (m && !picked.includes(m)) picked.push(m);
+      if (picked.length >= (isDigest ? 2 : 1)) break;   // digest carries up to 2
+    }
+    for (const m of picked) body += ' ' + m.text;
+  }
 
   // Phase 4r.narrative.5.fix.30 — single-flow layout per user feedback:
   //   [sigil]  TAG: message…

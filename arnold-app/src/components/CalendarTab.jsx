@@ -23,12 +23,16 @@ import { useSwipeNav } from "./MobileHome.jsx";
 import { storage } from "../core/storage.js";
 import { getRaces, saveRaces } from "../core/memory.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
-import { isRun, isStrength, isHIIT, isExplicitHIIT, isHybridWorkout, isMobility, isCycling, isSwim } from "../core/activityClass.js";
-import { getPlannerWeek, savePlannerWeek, weekKey } from "../core/planner.js";
+import { isRun, isStrength, isHIIT, isExplicitHIIT, isHybridWorkout, isMobility, isCycling, isSwim, isSki, isWalk } from "../core/activityClass.js";
+import { getPlannerWeek, savePlannerWeek, weekKey, DAY_TYPES, daySessions, makeDay, dayRunMiles, dayWorkoutCount, weekPlanTotals } from "../core/planner.js";
+import { analyzePlannedWeek, analyzeSeason } from "../core/planLoad.js";
+import { CoachSigil } from "./CoachSigil.jsx";
+import { morningWeightRows } from "../core/bodyWeight.js";
 import { fetchAndParseICS } from "../core/parsers/icsParser.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
 import { PredictedBandsCard } from "./PredictedBandsCard.jsx";
 import { plannedMinutes } from "./PlannedWorkoutTile.jsx";
+import { sigSrc as sigSrcOf } from "../core/activitySignatures.js";
 import { predictRaceFinish } from "../core/derive/tileMetrics.js";
 // Phase 4r.dataspine.4 — calorie/macro target reads route through
 // goalModel.js (the canonical Layer 3 surface). resolveCalorieTarget
@@ -119,7 +123,12 @@ function activityFamily(a) {
     // Run flag set but no distance — treadmill incidents, very-short laps.
     return 'run';
   }
-  if (isCycling(a) || isSwim(a)) return 'cross';
+  // Phase 4r.sports / 0.3b — cycling/swim/ski/walk are first-class disciplines,
+  // each with its own figure/color. Detection centralized in activityClass.
+  if (isSki(a))     return 'ski';
+  if (isCycling(a)) return 'cycle';
+  if (isSwim(a))    return 'swim';
+  if (isWalk(a))    return 'walk';
   return 'rest';
 }
 
@@ -312,6 +321,15 @@ export function CalendarTab({ showToast }) {
   // Phase 4r.calendar.4 — daily goals + sleep + nutrition for the
   // 3-domain (Act / Fuel / Body) strip in each tile.
   const goals       = useMemo(() => getGoals(), [tick]);
+  // Coach watches the calendar: read the in-view week's shape (volume, intensity,
+  // rest) → a verdict (heavy / light / imbalanced / balanced) + suggestion.
+  const planLoad = useMemo(() => {
+    try {
+      const ref = selectedDate || new Date().toISOString().slice(0, 10);
+      const wk = weekKey(new Date(ref + 'T12:00:00'));
+      return analyzePlannedWeek(getPlannerWeek(wk), { weeklyRunMilesGoal: goals?.weeklyRunDistanceTarget });
+    } catch { return null; }
+  }, [selectedDate, goals, tick]);
   const sleepRows   = useMemo(() => storage.get('sleep') || [], [tick]);
   const hrvRows     = useMemo(() => storage.get('hrv')   || [], [tick]);
   const sleepByDate = useMemo(() => {
@@ -424,6 +442,93 @@ export function CalendarTab({ showToast }) {
         onPrev={goPrev} onNext={goNext} onToday={goToday}
       />
 
+      {/* Weekly RUN (actual) + PLANNED vs goal, labeled by week, + a projection
+          (past = what you ran, future = what's planned) against the goal. */}
+      {(() => {
+        const weeks = [];
+        for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+        const wGoal = Number(goals?.weeklyRunDistanceTarget) || null;
+        const mp = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`;
+        const runMi = d => (activitiesByDate.get(d) || []).reduce((s, a) => s + (isRun(a) && Number(a.distanceMi) > 0 ? Number(a.distanceMi) : 0), 0);
+        const r1 = x => Math.round(x * 10) / 10;
+        const rows = weeks.map(w => {
+          const d0 = new Date(w[0].date + 'T12:00:00');
+          return {
+            label: `${d0.getMonth() + 1}/${d0.getDate()}`,
+            actual: r1(w.reduce((s, c) => s + runMi(c.date), 0)),
+            planned: r1(w.reduce((s, c) => s + (dayRunMiles(plannerByDate.get(c.date)) + (racesByDate.get(c.date) || []).reduce((rs, r) => rs + (Number(r.distanceMi) || 0), 0)), 0)),
+            inMonth: w.some(c => c.date && c.date.startsWith(mp)),
+            current: w.some(c => c.date === todayStr),
+          };
+        });
+        const inMonthWeeks = rows.filter(r => r.inMonth).length;
+        // Projection: past days = actual, today+future = planned.
+        let proj = 0;
+        for (const c of cells) {
+          if (!c.date || !c.date.startsWith(mp)) continue;
+          proj += c.date < todayStr ? runMi(c.date) : (dayRunMiles(plannerByDate.get(c.date)) + (racesByDate.get(c.date) || []).reduce((rs, r) => rs + (Number(r.distanceMi) || 0), 0));
+        }
+        proj = r1(proj);
+        const target = wGoal ? wGoal * inMonthWeeks : null;
+        const pct = target ? Math.round((proj / target) * 100) : null;
+        return (
+          <div style={{ margin: '4px 2px 8px' }}>
+            <div style={{ display: 'flex', alignItems: 'stretch', gap: 4, marginBottom: 5 }}>
+              {rows.map((r, i) => {
+                const hit = wGoal ? (r.actual + r.planned) >= wGoal * 0.9 : null;
+                return (
+                  <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, padding: '3px 2px', borderRadius: r.current ? 999 : 5, background: r.current ? 'rgba(94,234,212,0.07)' : 'rgba(255,255,255,0.03)', border: r.current ? '1px solid rgba(94,234,212,0.45)' : '0.5px solid var(--border-subtle)', opacity: r.inMonth ? 1 : 0.45 }}>
+                    <span style={{ fontSize: 8, color: r.current ? '#5eead4' : 'var(--text-faint)' }}>{r.label}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)', color: hit == null ? 'var(--text-secondary)' : hit ? '#5eead4' : '#60a5fa', lineHeight: 1 }}>{r.actual}<span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>/{r.planned}</span></span>
+                  </div>
+                );
+              })}
+            </div>
+            {target != null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Projected</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{proj}<span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>/{target} mi</span></span>
+                <div style={{ flex: 1, maxWidth: 130, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min(pct || 0, 100)}%`, height: '100%', background: pct >= 90 ? '#5eead4' : pct >= 70 ? '#60a5fa' : 'var(--text-muted)', opacity: 0.7 }} />
+                </div>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{pct}%</span>
+                {wGoal ? <span style={{ fontSize: 9, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>goal {wGoal}/wk</span> : null}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Coach — SEASON trajectory (across weeks + toward races) + this week's shape. */}
+      {planLoad && (() => {
+        const season = (() => {
+          try {
+            const weeks = [];
+            for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+            const runMi = d => (activitiesByDate.get(d) || []).reduce((s, a) => s + (isRun(a) && Number(a.distanceMi) > 0 ? Number(a.distanceMi) : 0), 0);
+            const sw = weeks.map(w => ({ start: w[0].date, end: w[w.length - 1].date, actual: w.reduce((s, c) => s + runMi(c.date), 0), planned: w.reduce((s, c) => s + (dayRunMiles(plannerByDate.get(c.date)) + (racesByDate.get(c.date) || []).reduce((rs, r) => rs + (Number(r.distanceMi) || 0), 0)), 0) }));
+            return analyzeSeason(sw, { weeklyRunMilesGoal: goals?.weeklyRunDistanceTarget, today: todayStr, races });
+          } catch { return null; }
+        })();
+        return (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 6px', padding: '8px 10px', borderRadius: 8, background: 'var(--bg-surface)', border: '0.5px solid var(--border-subtle)' }}>
+            <CoachSigil size={16} style={{ marginTop: 1, flexShrink: 0 }} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 3 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5eead4' }}>
+                  Coach{season ? (season.mode === 'taper' ? ' · race week' : season.behind ? ' · behind plan' : ' · on track') : ''}
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                  wk {planLoad.runMiles}{planLoad.milesGoal ? `/${planLoad.milesGoal}` : ''} mi · {planLoad.verdict}
+                </span>
+              </div>
+              {season && <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4, marginBottom: 3 }}>{season.message}</div>}
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>This week: {planLoad.message}</div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Phase 4r.calendar.13 — responsive 2-column layout on wide
           screens (grid left, day drawer right). Phase 4r.calendar.14
           — when the drawer is collapsed (toggled off via re-click or
@@ -474,7 +579,7 @@ export function CalendarTab({ showToast }) {
               races={racesByDate.get(selectedDate) || []}
               onClose={() => setDrawerOpen(false)}
               onAddRace={() => setPickerOpen(true)}
-              onAddPlan={() => setPlanPickerOpen(true)}
+              onAddPlan={() => setPlanPickerOpen(true)} onPlanChange={() => setTick(t => t + 1)}
               onManualAdd={() => setManualOpen(true)}
               onIcsImport={() => setIcsOpen(true)}
               onDeleteRace={(id) => {
@@ -504,7 +609,7 @@ export function CalendarTab({ showToast }) {
             planned={plannerByDate.get(selectedDate) || null}
             races={racesByDate.get(selectedDate) || []}
             onAddRace={() => setPickerOpen(true)}
-            onAddPlan={() => setPlanPickerOpen(true)}
+            onAddPlan={() => setPlanPickerOpen(true)} onPlanChange={() => setTick(t => t + 1)}
             onManualAdd={() => setManualOpen(true)}
             onIcsImport={() => setIcsOpen(true)}
             onDeleteRace={(id) => {
@@ -519,7 +624,7 @@ export function CalendarTab({ showToast }) {
         <PlanPickerModal
           dateStr={selectedDate}
           onClose={() => setPlanPickerOpen(false)}
-          onPick={(type, distanceMi) => {
+          onPick={(type, distanceMi, slot) => {
             try {
               const wk = weekKey(new Date(selectedDate + 'T12:00:00'));
               const week = getPlannerWeek(wk);
@@ -530,18 +635,23 @@ export function CalendarTab({ showToast }) {
               if (idx >= 0 && idx < 7) {
                 const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
                 while (days.length < 7) days.push({ type: 'rest' });
-                // Phase 4r.plan.distance — persist optional planned distance.
-                // Clear any stale distance when none given or type isn't a run.
-                const entry = { ...(days[idx] || {}), type };
-                if (Number(distanceMi) > 0) entry.distanceMi = Number(distanceMi);
-                else delete entry.distanceMi;
-                days[idx] = entry;
+                if (type === 'rest') {
+                  // Rest = clear the day's sessions.
+                  days[idx] = makeDay([]);
+                } else {
+                  // APPEND a session (multi-session days — hybrid). Optional
+                  // AM/PM/EVE slot + planned distance.
+                  const session = { type };
+                  if (Number(distanceMi) > 0) session.distanceMi = Number(distanceMi);
+                  if (slot) session.slot = slot;
+                  days[idx] = makeDay([...daySessions(days[idx]), session]);
+                }
                 savePlannerWeek(wk, { ...week, days });
               }
             } catch (e) { console.warn('[calendar] plan save failed:', e); }
             setPlanPickerOpen(false);
             setTick(t => t + 1);
-            showToast?.(`Planned ${prettyFamily(type)}${Number(distanceMi) > 0 ? ` · ${distanceMi} mi` : ''}`);
+            showToast?.(type === 'rest' ? 'Set to rest' : `Added ${prettyFamily(type)}${slot ? ` · ${slot}` : ''}${Number(distanceMi) > 0 ? ` · ${distanceMi} mi` : ''}`);
           }}
         />
       )}
@@ -722,25 +832,14 @@ const FAMILY_SHORT = {
   run: 'Run', long_run: 'Long', tempo: 'Tempo', intervals: 'Int',
   hiit: 'HIIT', strength: 'Lift', mobility: 'Mob',
   cross: 'Cross', race: 'Race', rest: 'Rest',
+  cycle: 'Bike', swim: 'Swim', ski: 'Ski', walk: 'Walk',
 };
 
-// Session-signature PNG path per family (Phase 4r.calendar.5).
-// Mirrors the SIGNATURE_SRC map in PlannedWorkoutTile.jsx but kept local
-// so the calendar can use the same imagery as the Performance card.
-// Phase 4r.calendar.8 — `run` now uses easy-run.png (run.png doesn't
-// exist on disk; the canonical generic-run image is easy-run.png).
-const SIG_VERSION = 'v11';
-const SIG_FILE = {
-  run: 'easy-run.png', long_run: 'easy-run.png', easy_run: 'easy-run.png',
-  tempo: 'tempo.png', intervals: 'speed.png', speed_run: 'speed.png',
-  ski: 'ski.png',
-  hiit: 'hiit.png', strength: 'strength.png',
-  mobility: 'mobility.png', cross: 'cross.png',
-  race: 'race.png',
-};
+// Phase 0.3 — signature map/version moved to the single source
+// `core/activitySignatures.js`. Local wrapper preserves the prior behavior of
+// always returning *some* figure (unknown/rest families fell back to easy-run).
 function sigSrc(family) {
-  const f = SIG_FILE[family] || SIG_FILE.easy_run;
-  return `/session-signatures/${f}?${SIG_VERSION}`;
+  return sigSrcOf(family) || sigSrcOf('easy_run');
 }
 
 // Phase 4r.calendar.18 — per-family visual scale boost so mobility and
@@ -748,13 +847,15 @@ function sigSrc(family) {
 // figure pose, not framing) appear the same on-screen size as the
 // upright running figures. Applied as a CSS transform on the <img>.
 const SIG_SCALE = {
-  mobility: 1.22,
-  race:     1.18,
-  // Phase 4r.calendar.fix.5 — hiit.png figure is framed smaller inside its
-  // canvas than the running figures (speed.png, easy-run.png), so HIIT tiles
-  // visually read smaller than adjacent run tiles. Modest boost normalizes it.
-  hiit:     1.12,
-  // everything else = 1.0
+  // Retuned 2026-06-17 (Emil): the wide-pose figures (mobility warrior, cyclist,
+  // lifter) read LARGER than the upright runners, not smaller — so the run family
+  // is the baseline (1.0) and the wide ones scale DOWN. First pass; fine-tune by eye.
+  mobility: 0.95,
+  cycle:    0.82,
+  strength: 0.85,
+  race:     1.05,
+  hiit:     1.05,
+  // run / easy_run / long_run / tempo / intervals / swim / ski / walk = 1.0 baseline
 };
 
 // Phase 4r.calendar.18 — pretty label for any activity / planner type.
@@ -833,6 +934,11 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const totalMi   = completed.reduce((s, a) => s + (Number(a.distanceMi) || 0), 0);
   const totalSecs = completed.reduce((s, a) => s + (Number(a.durationSecs) || 0), 0);
   const totalLoad = completed.reduce((s, a) => s + estActivityLoad(a), 0);
+
+  // Run miles — planned vs actually run, shown on running-day tiles (Emil).
+  const plannedRunMi = (() => { try { return dayRunMiles(planned) + (races || []).reduce((s, r) => s + (Number(r.distanceMi) || 0), 0); } catch { return 0; } })();
+  const actualRunMi = completed.reduce((s, a) => s + (isRun(a) && Number(a.distanceMi) > 0 ? Number(a.distanceMi) : 0), 0);
+  const isRunningDay = plannedRunMi > 0 || actualRunMi > 0;
 
   // Fuel — pull daily nutrition totals + compare to calorie target.
   // Show calorie target hit %; null when nothing was logged.
@@ -968,6 +1074,19 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
           }}>{headline}</span>
         ) : null}
       </div>
+
+      {/* Run miles: actual run / planned (Emil — see daily planned + run). */}
+      {isRunningDay && (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 2, lineHeight: 1, flexShrink: 0 }}>
+          <span style={{ fontSize: 9, fontWeight: 600, fontFamily: 'var(--font-mono)', color: actualRunMi > 0 ? '#60a5fa' : 'var(--text-muted)' }}>
+            {actualRunMi > 0 ? actualRunMi.toFixed(1) : '–'}
+          </span>
+          {plannedRunMi > 0 && (
+            <span style={{ fontSize: 8, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>/{plannedRunMi.toFixed(1)}</span>
+          )}
+          <span style={{ fontSize: 7, color: 'var(--text-faint)' }}>mi</span>
+        </div>
+      )}
 
       {/* COCKPIT BODY: image stays size-locked regardless of secondary
           activities. Phase 4r.calendar.10 — image container is always
@@ -1159,8 +1278,12 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
   // priority-based dominant-pick fix, mobility could be at index 0 with
   // a higher-priority HIIT/run at index 1. Now: mobility is "secondary"
   // whenever it's present AND it's not the dominant family on the tile.
-  const hasMobilitySecondary = hasCompleted && family !== 'mobility' &&
-    completed.some(a => activityFamily(a) === 'mobility');
+  const hasMobilitySecondary = (
+    (hasCompleted && family !== 'mobility' && completed.some(a => activityFamily(a) === 'mobility')) ||
+    (isPlannedOnly && family !== 'mobility' &&
+      daySessions(planned).some(s => s.type === 'mobility') &&
+      daySessions(planned).some(s => s.type !== 'mobility' && s.type !== 'rest'))
+  );
 
   const sigImg = (hasRace || hasCompleted || isPlannedOnly) ? sigSrc(family) : null;
 
@@ -1181,9 +1304,28 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
   // duration otherwise. Null when nothing completed.
   const totalMi   = completed.reduce((s, a) => s + (Number(a.distanceMi) || 0), 0);
   const totalSecs = completed.reduce((s, a) => s + (Number(a.durationSecs) || 0), 0);
-  const headlineMetric = hasCompleted
-    ? (totalMi >= 0.5 ? `${totalMi.toFixed(1)}mi` : totalSecs >= 60 ? `${Math.round(totalSecs / 60)}m` : null)
-    : null;
+  // Run miles — actual run / planned, on running days (Emil — see both per tile).
+  const plannedRunMi = (() => { try { return dayRunMiles(planned) + (races || []).reduce((s, r) => s + (Number(r.distanceMi) || 0), 0); } catch { return 0; } })();
+  const actualRunMi = completed.reduce((s, a) => s + (isRun(a) && Number(a.distanceMi) > 0 ? Number(a.distanceMi) : 0), 0);
+  const isRunningDay = plannedRunMi > 0 || actualRunMi > 0;
+  const headlineMetric = isRunningDay
+    ? `${actualRunMi > 0 ? actualRunMi.toFixed(1) : '–'}${plannedRunMi > 0 ? '/' + plannedRunMi.toFixed(1) : ''}mi`
+    : hasCompleted
+      ? (totalMi >= 0.5 ? `${totalMi.toFixed(1)}mi` : totalSecs >= 60 ? `${Math.round(totalSecs / 60)}m` : null)
+      : null;
+
+  // Glyph-only cells (Emil pick B): one small signature per distinct
+  // session on the day. Races first, then completed families, else the
+  // planned session families. Deduped; capped at 3 in render.
+  const glyphFamilies = (() => {
+    const out = [];
+    const push = (gf) => { if (gf && gf !== 'rest' && !out.includes(gf)) out.push(gf); };
+    if (hasRace) { push('race'); completed.forEach(a => push(activityFamily(a))); }
+    else if (hasCompleted) { completed.forEach(a => push(activityFamily(a))); }
+    else if (isPlannedOnly) { daySessions(planned).forEach(s => push(s.type)); }
+    if (!out.length && (hasRace || hasCompleted || isPlannedOnly)) push(family);
+    return out;
+  })();
 
   // Phase 4r.calendar.27 — today gets a much more pronounced
   // highlight: stronger blue tint, thicker glowing border, and
@@ -1259,12 +1401,12 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
         )}
       </div>
 
-      {/* Signature image centered. SIG_SCALE keeps mobility/race
-          visually matched in size to the upright runners. */}
+      {/* Dominant figure fills the tile — bigger now that the miles line is
+          gone (Emil). Full per-session figures + metrics live in the drawer. */}
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         minHeight: 0,
-        opacity: isPlannedOnly && !hasCompleted ? 0.55 : 1,
+        opacity: isPlannedOnly && !hasCompleted ? 0.6 : 1,
       }}>
         {sigImg && (
           <img src={sigImg} alt={family}
@@ -1279,26 +1421,14 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
         )}
       </div>
 
-      {/* Bottom row: headline metric (mileage or minutes). Phase
-          4r.calendar.22 — bumped to 9px and given a clearer prefix
-          arrow so users can tell the value represents the day's
-          total at a glance. Renders only when there's data. */}
-      {headlineMetric && (
-        <div style={{
-          fontSize: 9, fontWeight: 600, color: style.color,
-          textAlign: 'center', lineHeight: 1, marginTop: 1,
-          letterSpacing: '-0.02em',
-        }}>{headlineMetric}</div>
-      )}
-
-      {/* Mobility-done indicator — bottom-right (uses the same
-          PersonSimpleTaiChi glyph as the desktop secondary rail). */}
+      {/* Mobility add-on (warrior) — small figure on the mid-right edge when
+          mobility is a secondary session, not the dominant one (Emil). */}
       {hasMobilitySecondary && (
         <span style={{
-          position: 'absolute', bottom: 1, right: 2, zIndex: 2,
-          display: 'flex', lineHeight: 1,
+          position: 'absolute', top: '50%', right: 1, transform: 'translateY(-50%)',
+          zIndex: 2, display: 'flex', lineHeight: 1,
         }}>
-          <MobilityDoneIcon size={10} color="#5eead4"/>
+          <MobilityDoneIcon size={13} color="#5eead4"/>
         </span>
       )}
     </button>
@@ -1353,7 +1483,7 @@ function ThreeDomainCell({ label, value, color }) {
 
 // ── Day drawer ──────────────────────────────────────────────────────────────
 
-function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose }) {
+function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose, onPlanChange }) {
   const d = new Date(dateStr + 'T12:00:00');
   const dateLabel = d.toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
@@ -1363,6 +1493,24 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
   // irrelevant). Compare local-date strings, not Date objects, to
   // dodge timezone drift.
   const isPast = dateStr < localDate();
+
+  // Remove one planned session from this day, then refresh the calendar.
+  const removeSession = (idx) => {
+    try {
+      const wk = weekKey(d);
+      const week = getPlannerWeek(wk);
+      const monday = new Date(wk + 'T12:00:00');
+      const dIdx = Math.floor((d - monday) / 86400000);
+      if (dIdx < 0 || dIdx >= 7) return;
+      const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
+      while (days.length < 7) days.push({ type: 'rest' });
+      const sessions = daySessions(days[dIdx]);
+      sessions.splice(idx, 1);
+      days[dIdx] = makeDay(sessions);
+      savePlannerWeek(wk, { ...week, days });
+      onPlanChange?.();
+    } catch (e) { console.warn('[calendar] remove session failed:', e); }
+  };
 
   // Recovery snapshot
   // Phase 4r.calendar.32 — live Garmin worker stores total sleep as
@@ -1390,7 +1538,9 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
     ...(storage.get('weight') || []),
     ...(storage.get('arnold:garmin-weight') || []),
   ].filter(w => w?.date && (w.weightLbs != null || w.weightKg != null));
-  const weightForDate = allWeights.find(w => w.date === dateStr) || null;
+  // Morning-fasted reading for the day (not a post-workout/intraday one). Same
+  // exact-date philosophy — no weigh-in that morning → no Weight cell.
+  const weightForDate = morningWeightRows(allWeights).find(w => w.date === dateStr) || null;
   const weightLbs = weightForDate
     ? (weightForDate.weightLbs != null
         ? parseFloat(weightForDate.weightLbs)
@@ -1504,52 +1654,42 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{dateLabel}</div>
           {(() => {
-            // Phase 4r.calendar.35 — on mobile, hide the "Planned: X" line
-            // when the Expected Today card is going to show it inside. The
-            // race info still renders, since the card doesn't carry races.
-            const hasPlan = planned?.type && planned.type !== 'rest';
             const hasRace = races.length > 0 && races[0].distanceMi;
-            if (isMobile && hasPlan && !hasRace && !isPast) return null;
-            // Phase 4r.run.expectedtime — for a planned EASY or LONG run,
-            // append expected distance + predicted duration (e.g.
-            // "Planned: Easy run · 6 mi · ~52 min"). Predicted time is shown
-            // ONLY for easy/long runs: for intervals/tempo/HIIT, time is not
-            // the goal (the work is the reps/effort), so a duration would
-            // misrepresent the session. Duration via shared plannedMinutes()
-            // (now history-derived). Distance always shown when present.
-            const TIMED_RUN_TYPES = new Set(['easy_run', 'long_run']);
-            const planExtra = (() => {
-              if (!hasPlan) return '';
-              const mi = Number(planned.distanceMi) || 0;
-              const mins = TIMED_RUN_TYPES.has(planned.type)
-                ? (() => { try { return plannedMinutes({ planned, profile: storage.get('profile') || {} }); } catch { return null; } })()
-                : null;
-              const parts = [];
-              if (mi > 0) parts.push(`${mi} mi`);
-              if (mins) parts.push(`~${mins} min`);
-              return parts.length ? ` · ${parts.join(' · ')}` : '';
-            })();
-            // Phase 4r.race.allraces — predicted finish for a pure-running
-            // race on this day (null for hyrox/tri/other). Anchored on the
-            // user's empirical race/long-run anchor via Riegel.
-            const racePred = hasRace
-              ? (() => { try { return predictRaceFinish(races[0], getUnifiedActivities() || []); } catch { return null; } })()
-              : null;
-            const racePredStr = (() => {
+            if (hasRace) {
+              const racePred = (() => { try { return predictRaceFinish(races[0], getUnifiedActivities() || []); } catch { return null; } })();
               const s = racePred?.seconds;
-              if (s == null || !Number.isFinite(s) || s <= 0) return null;
-              const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60);
-              return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
-                           : `${m}:${String(sec).padStart(2, '0')}`;
-            })();
-            const text = hasRace
-              ? `${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}${racePredStr ? ` · ⏱ ~${racePredStr} predicted` : ''}`
-              : hasPlan
-                ? `Planned: ${prettyFamily(planned.type)}${planExtra}`
-                : 'No plan';
+              const racePredStr = (s != null && Number.isFinite(s) && s > 0)
+                ? (() => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60); return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; })()
+                : null;
+              return (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {`${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}${racePredStr ? ` · ⏱ ~${racePredStr} predicted` : ''}`}
+                </div>
+              );
+            }
+            // Each PLANNED session shown as its own chip with a remove ✕, so a
+            // day can hold several and you can swap/remove any of them (Emil).
+            const sessions = daySessions(planned);
+            if (!sessions.length) {
+              return <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>No plan</div>;
+            }
+            const TIMED = new Set(['easy_run', 'long_run']);
             return (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                {text}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 3 }}>
+                {sessions.map((s, i) => {
+                  const mi = Number(s.distanceMi) || 0;
+                  const mins = TIMED.has(s.type) ? (() => { try { return plannedMinutes({ planned: s, profile: storage.get('profile') || {} }); } catch { return null; } })() : null;
+                  const extra = [mi > 0 ? `${mi} mi` : null, mins ? `~${mins} min` : null].filter(Boolean).join(' · ');
+                  return (
+                    <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '2px 3px 2px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)', border: '0.5px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                      {s.slot ? <span style={{ fontSize: 8, color: 'var(--text-faint)' }}>{s.slot}</span> : null}
+                      <span>{prettyFamily(s.type)}{extra ? ` · ${extra}` : ''}</span>
+                      {!isPast && (
+                        <button onClick={() => removeSession(i)} className="arnold-compact-btn" style={{ all: 'unset', cursor: 'pointer', color: '#f87171', fontSize: 12, lineHeight: 1, padding: '0 3px' }} title="Remove this session">✕</button>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
             );
           })()}
@@ -2030,17 +2170,19 @@ function EmptyHint({ children }) {
 // tapping one saves it to the planner for the selected date.
 
 function PlanPickerModal({ dateStr, onClose, onPick }) {
-  const OPTIONS = [
-    { type: 'easy_run',  label: 'Easy run',  color: '#60a5fa', desc: 'Z2 aerobic base' },
-    { type: 'long_run',  label: 'Long run',  color: '#60a5fa', desc: 'Endurance' },
-    { type: 'tempo',     label: 'Tempo',     color: '#fbbf24', desc: 'Threshold work' },
-    { type: 'intervals', label: 'Intervals', color: '#fbbf24', desc: 'Speed reps' },
-    { type: 'hiit',      label: 'HIIT',      color: '#fb7185', desc: 'High intensity' },
-    { type: 'strength',  label: 'Strength',  color: '#a78bfa', desc: 'Resistance' },
-    { type: 'mobility',  label: 'Mobility',  color: '#5eead4', desc: 'Yoga / stretch' },
-    { type: 'cross',     label: 'Cross',     color: '#22d3ee', desc: 'Cycle / swim' },
-    { type: 'rest',      label: 'Rest',      color: '#94a3b8', desc: 'Recovery day' },
-  ];
+  // Phase 0.3 — the option list is DERIVED from planner.DAY_TYPES (the single
+  // source), so any discipline added there auto-appears in this picker. This kills
+  // the second hardcoded list that caused the "new sports missing from the drawer"
+  // miss. Picker-only copy (the one-line descriptions) lives in DESC.
+  const DESC = {
+    easy_run: 'Z2 aerobic base', long_run: 'Endurance', tempo: 'Threshold work',
+    intervals: 'Speed reps', strength: 'Resistance', hiit: 'High intensity',
+    mobility: 'Yoga / stretch', cross: 'General cross-train', cycle: 'Bike ride',
+    swim: 'Pool / open water', ski: 'Alpine / nordic', walk: 'Walk or hike', rest: 'Recovery day',
+  };
+  const OPTIONS = DAY_TYPES
+    .filter(t => t.id !== 'race') // race is scheduled via the race picker, not here
+    .map(t => ({ type: t.id, label: t.label, color: t.color, desc: DESC[t.id] || '' }));
   // Phase 4r.plan.distance — run-family plans accept an optional distance so
   // the calendar can show expected time + so weekly/annual mileage projections
   // can count planned miles. Selecting a run type reveals a distance field;

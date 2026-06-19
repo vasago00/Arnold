@@ -283,7 +283,7 @@ function activityBurnFor(dateStr) {
 
 // NEAT coefficient — kcal per step per kg body mass. Tudor-Locke /
 // Bassett calibration; accurate to ±20% vs DLW-validated NEAT.
-const NEAT_KCAL_PER_STEP_PER_KG = 0.04;
+const NEAT_KCAL_PER_STEP_PER_KG = 0.0005;  // per-kg (Phase 4r.energy.7: was 0.04 = ~80x too high)
 
 // Body mass in kg with the same fallback chain activityBurnFor() uses so
 // both functions stay consistent on a day the profile weight is missing.
@@ -462,9 +462,20 @@ export function fuelAdequacy(dateStr) {
   //     so DCY drags down until food is logged.
   //   • Non-tracker (no baseline) + 0 intake → N = 1 neutral, so the
   //     score isn't penalized for someone who's not using the feature.
-  const hasBaselineHistory = (baseline?.daysWithData || 0) >= 3;
+  // Phase 4r.dcy.3 — the tracker-vs-non-tracker check must NOT depend on
+  // partial-day state. `baseline` is only populated on in-progress days; on a
+  // SETTLED day (after bedtime, or any historical date) it's null, which made
+  // every empty *tracked* day look like a non-tracker and return N=1
+  // ("assume normal") instead of N=0. Symptom: a day with zero nutrition
+  // logged (e.g. Cronometer down) still scored "fully fuelled / Strongly
+  // Absorbing." Resolve history directly, and only when actually needed.
+  let _histResolved;
+  const hasBaselineHistory = () => {
+    if (_histResolved === undefined) _histResolved = baseline || nutritionBaseline(date);
+    return (_histResolved?.daysWithData || 0) >= 3;
+  };
   const isEmptyDay = intakeCal === 0 && intakeProtein === 0 && intakeWaterL === 0;
-  if (isEmptyDay) return hasBaselineHistory ? 0 : 1;
+  if (isEmptyDay) return hasBaselineHistory() ? 0 : 1;
 
   const goals = getGoals();
   const proteinGoal = Number(goals.dailyProteinTarget) || 0;
@@ -482,7 +493,7 @@ export function fuelAdequacy(dateStr) {
   ]);
   // Same tracker-vs-non-tracker fallback when geomMean has no usable
   // inputs (e.g. user only logged water with no calorie target set).
-  if (N == null) return hasBaselineHistory ? 0 : 1;
+  if (N == null) return hasBaselineHistory() ? 0 : 1;
   return +N.toFixed(3);
 }
 

@@ -1,0 +1,166 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MetricTile (shared primitive) > renders the value, label, and the semicircle gauge 1`] = `
+<div>
+  <div
+    style="background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 8px 10px 6px; margin-bottom: 6px; position: relative; overflow: hidden; cursor: default;"
+  >
+    <div
+      style="position: absolute; top: 0px; left: 12px; right: 12px; height: 2px; border-radius: 0 0 2px 2px; background: rgb(96, 165, 250); opacity: 0.7;"
+    />
+    <div
+      style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: rgb(96, 165, 250); margin-bottom: 4px;"
+    >
+      VO₂max
+    </div>
+    <div
+      style="display: flex; align-items: center;"
+    >
+      <div
+        style="flex: 1 1 0%; min-width: 0;"
+      >
+        <div
+          style="white-space: nowrap;"
+        >
+          <span
+            style="font-size: 26px; font-weight: 800; line-height: 1; color: rgb(255, 255, 255);"
+          >
+            51
+          </span>
+          <span
+            style="font-size: 11px; color: rgba(255, 255, 255, 0.65); margin-left: 2px;"
+          >
+            ml/kg/min
+          </span>
+        </div>
+        <div
+          style="font-size: 10px; font-weight: 600; color: rgb(74, 222, 128); margin-top: 3px; height: 13px; display: flex; align-items: center; gap: 4px;"
+        >
+          <span>
+            +2 vs 30d
+          </span>
+        </div>
+      </div>
+      <div
+        style="flex-shrink: 0; width: 44px; display: flex; flex-direction: column; align-items: center;"
+      >
+        <svg
+          height="26"
+          style="display: block;"
+          viewBox="0 0 44 26"
+          width="44"
+        >
+          <circle
+            cx="22"
+            cy="22"
+            fill="none"
+            r="17"
+            stroke="rgba(255,255,255,0.12)"
+            stroke-dasharray="53.40707511102649 53.40707511102649"
+            stroke-linecap="round"
+            stroke-width="3.5"
+            transform="rotate(180 22 22)"
+          />
+          <circle
+            cx="22"
+            cy="22"
+            fill="none"
+            r="17"
+            stroke="#60a5fa"
+            stroke-dasharray="37.384952577718536 69.42919764433444"
+            stroke-linecap="round"
+            stroke-width="3.5"
+            transform="rotate(180 22 22)"
+          />
+        </svg>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(96, 165, 250); line-height: 1; margin-top: 0px;"
+        >
+          49
+        </div>
+        <div
+          style="font-size: 11px; color: rgba(255, 255, 255, 0.45); font-weight: 600; margin-top: 1px; letter-spacing: 0.04em;"
+        >
+          30d avg
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`MetricTile (shared primitive) > renders without a gauge fill at pct 0 (still deterministic) 1`] = `
+<div>
+  <div
+    style="background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 8px 10px 6px; margin-bottom: 6px; position: relative; overflow: hidden; cursor: default;"
+  >
+    <div
+      style="position: absolute; top: 0px; left: 12px; right: 12px; height: 2px; border-radius: 0 0 2px 2px; background: rgb(167, 139, 250); opacity: 0.7;"
+    />
+    <div
+      style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: rgb(167, 139, 250); margin-bottom: 4px;"
+    >
+      Resting HR
+    </div>
+    <div
+      style="display: flex; align-items: center;"
+    >
+      <div
+        style="flex: 1 1 0%; min-width: 0;"
+      >
+        <div
+          style="white-space: nowrap;"
+        >
+          <span
+            style="font-size: 26px; font-weight: 800; line-height: 1; color: rgb(255, 255, 255);"
+          >
+            48
+          </span>
+          <span
+            style="font-size: 11px; color: rgba(255, 255, 255, 0.65); margin-left: 2px;"
+          >
+            bpm
+          </span>
+        </div>
+        <div
+          style="font-size: 10px; font-weight: 600; color: rgba(255, 255, 255, 0.65); margin-top: 3px; height: 13px; display: flex; align-items: center; gap: 4px;"
+        >
+          <span>
+             
+          </span>
+        </div>
+      </div>
+      <div
+        style="flex-shrink: 0; width: 44px; display: flex; flex-direction: column; align-items: center;"
+      >
+        <svg
+          height="26"
+          style="display: block;"
+          viewBox="0 0 44 26"
+          width="44"
+        >
+          <circle
+            cx="22"
+            cy="22"
+            fill="none"
+            r="17"
+            stroke="rgba(255,255,255,0.12)"
+            stroke-dasharray="53.40707511102649 53.40707511102649"
+            stroke-linecap="round"
+            stroke-width="3.5"
+            transform="rotate(180 22 22)"
+          />
+        </svg>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(167, 139, 250); line-height: 1; margin-top: 0px;"
+        />
+        <div
+          style="font-size: 11px; color: rgba(255, 255, 255, 0.45); font-weight: 600; margin-top: 1px; letter-spacing: 0.04em;"
+        >
+          30d avg
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;

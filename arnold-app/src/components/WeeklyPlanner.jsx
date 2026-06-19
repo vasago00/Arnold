@@ -4,31 +4,17 @@
 // corresponds to its plan type (matches the Start mobile / Performance card
 // look). Falls back to the colored dot if the PNG is missing.
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   weekKey, nextWeekKey, getPlannerWeek, savePlannerWeek, applyTemplate,
   DAY_TYPES, DAY_LABELS, TEMPLATES,
 } from "../core/planner.js";
+import { sigSrc } from "../core/activitySignatures.js";
+import { getTodayAdaptation } from "../core/todayAdaptation.js";
 
 const dayTypeMap = Object.fromEntries(DAY_TYPES.map(t => [t.id, t]));
 
-// Same map + version as PlannedWorkoutTile.jsx — keep in sync if signatures
-// are bumped there. Could be factored out to a shared module later.
-const SIG_VERSION = 'v11';
-const PLAN_SIGNATURE = {
-  easy_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,
-  long_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,
-  tempo:     `/session-signatures/tempo.png?${SIG_VERSION}`,
-  intervals: `/session-signatures/speed.png?${SIG_VERSION}`,
-  speed_run: `/session-signatures/speed.png?${SIG_VERSION}`,
-  ski:       `/session-signatures/ski.png?${SIG_VERSION}`,
-  run:       `/session-signatures/run.png?${SIG_VERSION}`,
-  strength:  `/session-signatures/strength.png?${SIG_VERSION}`,
-  hiit:      `/session-signatures/hiit.png?${SIG_VERSION}`,
-  mobility:  `/session-signatures/mobility.png?${SIG_VERSION}`,
-  cross:     `/session-signatures/cross.png?${SIG_VERSION}`,
-  race:      `/session-signatures/race.png?${SIG_VERSION}`,
-};
+// Phase 0.3 — signature map now lives in core/activitySignatures.js (single source).
 
 export function WeeklyPlanner({ showToast }) {
   const thisWeek = weekKey();
@@ -63,6 +49,33 @@ export function WeeklyPlanner({ showToast }) {
   const wsLabel = wsDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const weDate = new Date(wsDate); weDate.setDate(wsDate.getDate() + 6);
   const weLabel = weDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  // Phase 2.1 — surface TODAY's adaptive prescription on the strip. The index of
+  // today within the displayed week (−1 when the shown week isn't the current one
+  // or today falls outside it).
+  const _today = new Date(); _today.setHours(12, 0, 0, 0);
+  const todayIdx = (() => {
+    if (activeWeek !== thisWeek) return -1;
+    const d = Math.round((_today - wsDate) / 86400000);
+    return d >= 0 && d <= 6 ? d : -1;
+  })();
+  // adapt = the shared today-adaptation (same engine + signals as the daily
+  // pre-workout tile, so the strip can't disagree with it). Only "eased"/"trimmed"
+  // sessions get a marker; a held/cleared plan shows nothing extra.
+  const [todayAdapt, setTodayAdapt] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const entry = todayIdx >= 0 ? (week.days?.[todayIdx] || null) : null;
+    if (!entry || !entry.type || entry.type === 'rest') { setTodayAdapt(null); return; }
+    getTodayAdaptation({
+      planType: entry.type,
+      distanceMi: entry.distanceMi,
+      durationMin: entry.durationMin,
+      label: (dayTypeMap[entry.type] || {}).label || entry.type,
+    }).then(r => { if (!cancelled) setTodayAdapt(r); })
+      .catch(() => { if (!cancelled) setTodayAdapt(null); });
+    return () => { cancelled = true; };
+  }, [todayIdx, week, activeWeek]);
 
   return (
     <div style={{
@@ -102,7 +115,7 @@ export function WeeklyPlanner({ showToast }) {
           const t = dayTypeMap[entry.type] || dayTypeMap.rest;
           const isEditing = editingDay === idx;
           const detail = entry.distanceMi ? `${entry.distanceMi}mi` : entry.durationMin ? `${entry.durationMin}m` : '';
-          const sigSrc = PLAN_SIGNATURE[entry.type];
+          const sig = sigSrc(entry.type);
           return (
             <div key={lbl}
               onClick={() => { setEditingDay(isEditing ? null : idx); if (!expanded) setExpanded(true); }}
@@ -114,9 +127,9 @@ export function WeeklyPlanner({ showToast }) {
                 transition: 'background 0.15s',
               }}>
               <span style={{ fontSize: 8, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>{lbl}</span>
-              {sigSrc ? (
+              {sig ? (
                 <img
-                  src={sigSrc}
+                  src={sig}
                   alt={t.label}
                   width={36} height={36}
                   style={{ display: 'block', flexShrink: 0 }}
@@ -134,6 +147,20 @@ export function WeeklyPlanner({ showToast }) {
               }} />
               <span style={{ fontSize: 8, fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', whiteSpace: 'nowrap' }}>{t.label}</span>
               {detail && <span style={{ fontSize: 7, color: 'var(--text-muted)', lineHeight: 1 }}>{detail}</span>}
+              {/* Phase 2.1 — today's adaptive marker. Shown only when today's
+                  session was eased/trimmed; tap the daily card for the full
+                  reason (kept terse here — the strip is an editor, not a coach). */}
+              {idx === todayIdx && todayAdapt?.eased && (
+                <span title={todayAdapt.reason}
+                  style={{
+                    fontSize: 7, fontWeight: 700, lineHeight: 1, padding: '1px 4px', borderRadius: 4,
+                    color: todayAdapt.action === 'ease' ? '#f87171' : '#fbbf24',
+                    background: todayAdapt.action === 'ease' ? 'rgba(248,113,113,0.14)' : 'rgba(251,191,36,0.14)',
+                    whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                  {todayAdapt.action === 'ease' ? '⤵ eased' : '⤵ trim'}
+                </span>
+              )}
             </div>
           );
         })}

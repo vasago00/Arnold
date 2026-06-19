@@ -37,10 +37,22 @@ const STRENGTH_RE = /\b(strength|weight|lifting|gym|crossfit|circuit|resistance)
 const MOBILITY_RE = /\b(mobility|stretch|stretching|yoga|pilates|flexibility|breathwork|meditation)\b/i;
 const CYCLING_RE  = /\b(cycle|cycling|bike|biking|spin)\b/i;
 const SWIM_RE     = /\b(swim|swimming|pool|open[_ ]water)\b/i;
+// Phase 0.3b — ski/walk detection was copied into CalendarTab, Arnold._resolvePlanType
+// and coachSignals. Centralized here. Ski uses the broader set (the _resolvePlanType
+// variant incl. skate-ski/backcountry/snowboard); walk includes hiking/trekking.
+const SKI_RE      = /\b(ski|skiing|nordic|alpine|skate[_ ]ski|backcountry|snowboard|snowboarding)\b/i;
+const WALK_RE     = /\b(walk|walking|hike|hiking|trekking)\b/i;
 
 function _typ(a) { return String(a?.activityType || ''); }
 function _name(a) { return String(a?.activityName || ''); }
-function _both(a) { return `${_typ(a)} ${_name(a)}`; }
+// Garmin's own type keys (e.g. typeKey 'indoor_cycling', parentTypeKey 'cycling')
+// are the AUTHORITATIVE discipline from the Garmin Activities API, stored by
+// garmin-activities-client even when the FIT parser's local activityType comes
+// out generic (training / fitness_equipment). Fold them into the classification
+// text so every predicate honors them — this is what lets an indoor ride whose
+// activityType isn't "Cycling" still classify as cycling.
+function _gk(a) { return `${a?.garminTypeKey || ''} ${a?.garminParentTypeKey || ''}`; }
+function _both(a) { return `${_typ(a)} ${_name(a)} ${_gk(a)}`; }
 
 /** True if the activity is mobility/yoga/stretching. Highest priority — checked first. */
 export function isMobility(a) {
@@ -125,6 +137,18 @@ export function isCycling(a) {
 export function isSwim(a) {
   if (!a) return false;
   return SWIM_RE.test(_both(a));
+}
+
+// Name-based (no dedicated activityKind — ski/walk fold into 'other' there). Used by
+// the plan-type resolvers + completion matching.
+export function isSki(a) {
+  if (!a) return false;
+  return SKI_RE.test(_both(a));
+}
+
+export function isWalk(a) {
+  if (!a) return false;
+  return WALK_RE.test(_both(a));
 }
 
 /**
@@ -263,6 +287,17 @@ export function isHardSession(a) {
   if (isHIIT(a)) return true;
   // Name-based: "Tempo run", "Speed work", "Sprint intervals", "Track session"
   if (/\b(tempo|sprint|speed|track|threshold)\b/i.test(_both(a))) return true;
+  // DATA-DRIVEN — Garmin often logs an interval/tempo run as a plain "Run".
+  // A real anaerobic stimulus, or meaningful time in the top HR zones, makes it
+  // a hard session regardless of the label (this is what lets a logged interval
+  // run match a planned 'intervals'/'hiit' slot for completion).
+  const anaerTE = Number(a.anaerobicTrainingEffect ?? a.anaerobicTE);
+  if (Number.isFinite(anaerTE) && anaerTE >= 1.5) return true;
+  // Z4+Z5 time ≥ 12% of the session (from the watch's hrZones array or a zones obj).
+  const z = a.zones || (Array.isArray(a.hrZones) && a.hrZones.length === 5
+    ? (() => { const t = a.hrZones.reduce((s, v) => s + (Number(v) || 0), 0); return t > 0 ? { z4: a.hrZones[3] / t * 100, z5: a.hrZones[4] / t * 100 } : null; })()
+    : null);
+  if (z && ((Number(z.z4) || 0) + (Number(z.z5) || 0)) >= 12) return true;
   return false;
 }
 

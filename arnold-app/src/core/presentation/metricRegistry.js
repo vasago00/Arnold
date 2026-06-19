@@ -14,12 +14,16 @@
 // live inline in BOTH the web Daily hero and the mobile Play hero (the source
 // of the "do reps/tempo wrap?" / drift problems).
 
-// Tier color tokens (kept literal to match the existing hero palette exactly).
+import { STATUS } from '../../theme/tokens.js';
+
+// Tier color tokens — Phase 0.1: sourced from the single STATUS token set
+// (src/theme/tokens.js). Rendered values are preserved (this registry's "over"
+// is the high-tier red #f87171 = tokens STATUS.bad, not the deep-red ceiling).
 const COLOR = {
-  good: '#4ade80',
-  warn: '#fbbf24',
-  hot:  '#fb923c',
-  over: '#f87171',
+  good: STATUS.good,   // #4ade80
+  warn: STATUS.warn,   // #fbbf24
+  hot:  STATUS.hot,    // #fb923c
+  over: STATUS.bad,    // #f87171 (preserved)
   muted: 'var(--text-muted)',
   sec:   'var(--text-secondary)',
   prim:  'var(--text-primary)',
@@ -88,6 +92,104 @@ export const METRICS = {
           ? `Efficiency = pace ÷ HR. Today ${EF}, 30-day avg ${b.ef30Avg.toFixed(2)}. Rising over weeks at the same effort = aerobic engine improving.`
           : 'Efficiency = pace ÷ HR. Need ≥3 past runs with HR to compare to your baseline.',
       };
+    },
+  },
+
+  // ── Cycling primary (session quality) ──
+  power: {
+    label: { full: 'Power', short: 'Power' },
+    select: b => {
+      const c = b.cyclingMetrics;
+      if (!c || !(c.avgPowerW > 0)) return null;
+      return {
+        v: `${c.avgPowerW}W`, sub: c.normalizedPower ? `${c.normalizedPower}W NP` : 'avg', subColor: COLOR.muted,
+        tooltip: c.normalizedPower
+          ? `Average ${c.avgPowerW}W · normalized ${c.normalizedPower}W (NP weights surges harder than a flat average).`
+          : `Average power ${c.avgPowerW}W.`,
+      };
+    },
+  },
+  cyclingEffort: {
+    label: { full: 'Effort', short: 'Effort' },
+    select: b => {
+      const c = b.cyclingMetrics;
+      if (!c) return null;
+      if (c.intensityFactor != null) {
+        const { tier, color } = ifTier(c.intensityFactor);
+        return { v: c.intensityFactor, sub: tier, subColor: color, tooltip: `IF ${c.intensityFactor} = NP ÷ FTP (power-based).` };
+      }
+      if (c.hrPctMax != null) {
+        const pct = Math.round(c.hrPctMax * 100);
+        const { tier, color } = ifTier(c.hrPctMax); // same bands applied to HR %-of-max
+        return { v: `${pct}%`, sub: tier, subColor: color, tooltip: `${pct}% of max HR (HR-based — set FTP watts in profile for a power IF).` };
+      }
+      return { v: '—', sub: 'needs power/HR', subColor: COLOR.muted };
+    },
+  },
+  cyclingEff: {
+    label: { full: 'Efficiency', short: 'Effcy' },
+    select: b => {
+      const c = b.cyclingMetrics;
+      if (!c || c.efficiency == null) return null;
+      return {
+        v: c.efficiency, sub: 'W/bpm', subColor: COLOR.sec,
+        tooltip: `Power per heartbeat (avg power ÷ avg HR = ${c.efficiency}). Rising at the same HR over weeks = the aerobic engine improving.`,
+      };
+    },
+  },
+  cyclingLoad: {
+    label: { full: 'Load', short: 'Load' },
+    select: b => {
+      const c = b.cyclingMetrics;
+      if (!c || c.tss == null) return null;
+      return {
+        v: Math.round(c.tss), sub: 'rTSS', subColor: COLOR.muted,
+        tooltip: `Session training load (${Math.round(c.tss)} rTSS). ${c.intensityFactor != null ? 'Power-based' : 'HR-based'} — duration × intensity². Same load the readiness gauge reads.`,
+      };
+    },
+  },
+  cyclingAvgHR: {
+    label: { full: 'Avg HR', short: 'HR' },
+    select: b => {
+      const c = b.cyclingMetrics;
+      if (!c || !(c.avgHR > 0)) return null;
+      return {
+        v: c.avgHR, sub: 'bpm', subColor: COLOR.muted,
+        tooltip: c.maxHR > 0 ? `Average heart rate ${c.avgHR} bpm (peak ${c.maxHR}).` : `Average heart rate ${c.avgHR} bpm.`,
+      };
+    },
+  },
+
+  // ── Universal session metrics (hero right rail — same on EVERY activity) ──
+  // These read b.session (a generic per-day summary), not a sport-specific bag,
+  // so the 3 tiles right of the speedometer never change shape by discipline.
+  sessEffort: {
+    // "HR Effort" — the MEASURED effort (avg HR vs max). Distinct from RPE
+    // (perceived effort) shown on the card; the two are complementary, and a gap
+    // between them is itself a signal (e.g. a weight vest feels harder than HR).
+    label: { full: 'HR Effort', short: 'HR Eff' },
+    select: b => {
+      const s = b.session;
+      if (!s || s.effortPct == null) return null;
+      const pct = Math.round(s.effortPct * 100);
+      const { tier, color } = ifTier(s.effortPct); // same Easy/Aerobic/Tempo/… bands
+      return { v: `${pct}%`, sub: tier, subColor: color, tooltip: `${pct}% of max HR — MEASURED session effort. (Perceived effort/RPE is logged separately on the card.)` };
+    },
+  },
+  sessAvgHR: {
+    label: { full: 'Avg HR', short: 'HR' },
+    select: b => {
+      const s = b.session;
+      if (!s || !(s.avgHR > 0)) return null;
+      return { v: s.avgHR, sub: 'bpm', subColor: COLOR.muted, tooltip: s.maxHR > 0 ? `Average heart rate ${s.avgHR} bpm (peak ${s.maxHR}).` : `Average heart rate ${s.avgHR} bpm.` };
+    },
+  },
+  sessCalories: {
+    label: { full: 'Calories', short: 'Cals' },
+    select: b => {
+      const s = b.session;
+      if (!s || !(s.calories > 0)) return null;
+      return { v: s.calories, sub: 'kcal', subColor: COLOR.muted, tooltip: `Energy burned across today's session(s): ${s.calories} kcal.` };
     },
   },
 

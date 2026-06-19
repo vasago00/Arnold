@@ -8,7 +8,7 @@
 
 import { paceToSecs, secsToFmtPace } from './trainingIntelligence.js';
 import { storage } from './storage.js';
-import { isRun, isStrength } from './activityClass.js';
+import { isRun, isStrength, isCycling } from './activityClass.js';
 // Phase 4r.energy.3 — pulled from dcyMath via dynamic getter to avoid
 // the circular module-load issue (dcyMath imports from this file).
 // Wrapper function evaluates the import at call time, not load time.
@@ -18,6 +18,7 @@ const _allActivitiesDeduped = () => _dcyMathModule.allActivities();
 import { getGoals } from './goals.js';
 import { localDate, ymd } from './time.js';
 import { parseLocalDate } from './dateUtils.js';
+import { srpeEquivRTSS } from './sessionRPE.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -591,6 +592,7 @@ export function computeDailyScore(dateStr) {
   const todayRuns = todayActs.filter(isRun);             // includes HIIT runs
   const todayStrength = todayActs.filter(isStrength);    // excludes HIIT
   const todayHyrox = todayActs.filter(a => /hyrox|circuit/i.test(`${a.activityType||''} ${a.activityName||''}`));
+  const todayCycling = todayActs.filter(isCycling);      // road/indoor/virtual rides
   const ftpPace = goals.functionalThresholdPace || '8:30';
   // Unified maxHR ladder (Phase 4o.daily.22) — same logic in every panel
   // so hrTSS doesn't disagree between Daily / EdgeIQ / Activity tile.
@@ -692,6 +694,57 @@ export function computeDailyScore(dateStr) {
       }
     }
   }
+
+  // ── Cycling load (hrTSS) ──────────────────────────────────────────────────
+  // Bikes (esp. indoor) rarely carry a power-based TSS without a set FTP, so we
+  // use the same HR-derived Load as the strength fallback (duration × (avgHR/
+  // thresholdHR)² scaled to the rTSS benchmark). This is what makes a ride register
+  // on the hero gauge + the day's score instead of reading REST.
+  if (todayCycling.length > 0) {
+    let totalLoad = 0;
+    for (const act of todayCycling) {
+      const tss = Number(act.trainingStressScore);
+      if (tss > 0) { totalLoad += tss; continue; }       // prefer the device's TSS if present
+      const { hrTSS } = computeHrTSS({
+        durationSecs: act.durationSecs,
+        avgHR: act.avgHR || act.avgHeartRate,
+        maxHR, thresholdHR,
+      });
+      if (hrTSS) totalLoad += hrTSS;
+    }
+    if (totalLoad > 0) {
+      const val = Math.min(totalLoad / RTSS_BENCHMARK, 1.2);
+      buckets.activity.push({ val, w: FACTOR_W.rTSS });
+      factors.push({
+        label: 'Load', value: `${Math.round(totalLoad)}`, domain: 'activity',
+        status: val >= 0.8 ? 'good' : val >= 0.5 ? 'warning' : 'poor',
+      });
+      sessionType = sessionType === 'rest' ? 'cross' : (sessionType === 'run' || sessionType === 'strength' ? 'mixed' : sessionType);
+      if (!sessionMetric) sessionMetric = { label: 'Load', value: Math.round(totalLoad) };
+    }
+  }
+
+  // ── Perceived-effort load floor (Session-RPE) ─────────────────────────────
+  // sRPE (RPE×min) is the validated internal-load metric for sessions where HR
+  // understates the true cost (heavy strength, easy-HR-high-effort). We convert
+  // each rated session to an rTSS-equivalent (÷4.5); if the day's PERCEIVED load
+  // exceeds the HR/device-derived load, raise the gauge + score to it. Only ever
+  // a floor — it never lowers a higher HR-derived load.
+  try {
+    let srpeEquiv = 0;
+    for (const a of todayActs) { const e = srpeEquivRTSS(a, today); if (e) srpeEquiv += e; }
+    const hrLoad = (sessionMetric && Number.isFinite(Number(sessionMetric.value))) ? Number(sessionMetric.value) : 0;
+    if (srpeEquiv > hrLoad && srpeEquiv > 0) {
+      const val = Math.min(srpeEquiv / RTSS_BENCHMARK, 1.2);
+      buckets.activity.push({ val, w: FACTOR_W.rTSS });
+      factors.push({
+        label: 'RPE load', value: `${Math.round(srpeEquiv)}`, domain: 'activity',
+        status: val >= 0.8 ? 'good' : val >= 0.5 ? 'warning' : 'poor',
+      });
+      sessionMetric = { label: 'Load', value: Math.round(srpeEquiv) };
+      if (sessionType === 'rest') sessionType = todayStrength.length ? 'strength' : 'mixed';
+    }
+  } catch { /* sessionRPE unavailable → HR-derived load stands */ }
 
   // ── A:C ratio (guardrail — score input only, not shown as pill) ──
   const acr = computeAcuteChronicRatio(activities, today, ftpPace);

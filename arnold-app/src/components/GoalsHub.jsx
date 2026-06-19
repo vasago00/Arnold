@@ -257,7 +257,8 @@ function daysFromNow(dateStr) {
   if (!iso) return null;
   try {
     const ms = new Date(iso + 'T00:00:00').getTime();
-    return Math.round((ms - Date.now()) / 86400000);
+    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0); // midnight->midnight: was Date.now(), which drifted DOWN through the day (4d->3d vs EdgeIQ).
+    return Math.round((ms - todayMid.getTime()) / 86400000);
   } catch { return null; }
 }
 
@@ -1006,7 +1007,7 @@ function PlanHeroRail({ goalsV2 }) {
     return [...cs].sort((a, b) => (a.priority || 3) - (b.priority || 3))[0];
   })();
   const nextRace = (() => {
-    const now = Date.now();
+    const now = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })(); // midnight, matches daysFromNow / EdgeIQ
     return (goalsV2.races || [])
       .map(r => {
         const iso = normalizeDate(r.date);

@@ -377,6 +377,7 @@ function CategorySection({ category, metrics, selected, onToggle, onMove, ctx })
                   paddingRight: 4, gap: 1, flexShrink: 0,
                 }}>
                   <button
+                    className="arnold-compact-btn"
                     onClick={(e) => { e.stopPropagation(); if (canMoveUp) onMove(category.id, m.id, 'up'); }}
                     disabled={!canMoveUp}
                     aria-label="Move earlier"
@@ -391,6 +392,7 @@ function CategorySection({ category, metrics, selected, onToggle, onMove, ctx })
                     }}
                   >▲</button>
                   <button
+                    className="arnold-compact-btn"
                     onClick={(e) => { e.stopPropagation(); if (canMoveDown) onMove(category.id, m.id, 'down'); }}
                     disabled={!canMoveDown}
                     aria-label="Move later"

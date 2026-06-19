@@ -17,6 +17,11 @@ export const STORY = {
   run:      { headline: 'load', primary: ['pace', 'effortIF', 'efficiency'] },
   strength: { headline: 'load', primary: ['density', 'workRest', 'effortPct'] },
   hybrid:   { headline: 'load', primary: ['density', 'workRest', 'effortPct'] },
+  // Cycling cluster: quality metrics only — the gauge already expresses Load, so
+  // we do NOT repeat it here (that "rTSS Load" tile next to the speedometer was
+  // redundant). Power leads when a meter is present (Power · Effort · Efficiency);
+  // a power-less indoor ride falls back to Effort · Avg HR.
+  cycling:  { headline: 'load', primary: ['power', 'cyclingEffort', 'cyclingEff', 'cyclingAvgHR'] },
   mobility: { headline: 'load', primary: [] },
   rest:     { headline: 'load', primary: [] },
 };
@@ -26,6 +31,7 @@ export const STORY = {
 // drives the strength story. Mirrors the heroes' existing run-vs-strength gate.
 export function kindFromBag(bag) {
   if (bag.runMetrics && bag.runMetrics.rTSS) return 'run';
+  if (bag.cyclingMetrics) return 'cycling';
   if (bag.strengthMetrics) return 'strength';
   return 'rest';
 }

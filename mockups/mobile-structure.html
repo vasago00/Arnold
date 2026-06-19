@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Arnold — mobile structure (per IA contract)</title>
+<style>
+  :root{
+    --bg:#0a0c10; --surface:#12151c; --elevated:#171b24; --input:#1d222c;
+    --border:#262c38; --bsub:#1b202a;
+    --t1:#eceae4; --t2:#9b988f; --t3:#6f6c64;
+    --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    --blue:#60a5fa; --purple:#a78bfa; --orange:#fb923c; --teal:#2dd4bf;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#05070a;color:var(--t1);font-family:var(--font);-webkit-font-smoothing:antialiased;padding:26px 16px;
+    background-image:radial-gradient(1000px 560px at 85% -10%,rgba(96,165,250,.06),transparent),
+                     radial-gradient(760px 480px at -5% 110%,rgba(167,139,250,.05),transparent);}
+  .frame{max-width:1180px;margin:0 auto}
+  .cap{margin-bottom:18px}
+  .cap .pill{display:inline-block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);
+    border:1px solid rgba(45,212,191,.35);background:rgba(45,212,191,.08);padding:3px 10px;border-radius:20px}
+  .cap h1{font-size:18px;font-weight:600;margin:9px 0 5px}
+  .cap p{font-size:12.5px;color:var(--t2);line-height:1.55;max-width:900px}
+  .cap code{color:var(--t1);background:var(--input);padding:1px 5px;border-radius:4px;font-size:11.5px}
+
+  .row{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
+  .col{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .col .name{font-size:12px;font-weight:600}
+  .col .name b{color:var(--teal)}
+  .col .dens{font-size:9.5px;color:var(--t3);letter-spacing:.04em;text-transform:uppercase}
+
+  .phone{width:232px;background:var(--bg);border:1px solid var(--border);border-radius:26px;padding:9px 8px 6px;
+    box-shadow:0 22px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;height:478px}
+  .notch{width:74px;height:5px;background:#2a2f3a;border-radius:5px;margin:1px auto 8px}
+  .tb{display:flex;justify-content:space-between;align-items:center;padding:0 5px 7px}
+  .tb .br{font-size:10px;font-weight:700;letter-spacing:.04em}
+  .tb .br b{color:var(--teal)}
+  .tb .dt{font-size:8.5px;color:var(--t3)}
+  .scr{flex:1;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:0 3px}
+
+  /* structural block */
+  .blk{background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:7px 8px}
+  .blk .h{font-size:7.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--t3)}
+  .blk .big{font-size:13px;font-weight:700;margin-top:2px}
+  .blk .sm{font-size:9px;color:var(--t2);margin-top:2px}
+  .accent{border-left:2px solid var(--teal)}
+  .hero{background:linear-gradient(180deg,#141a25,#10141c);border-color:#28303f;text-align:center;padding:9px}
+  .gnum{font-size:24px;font-weight:700;color:var(--good);line-height:1}
+  .gword{font-size:11px;font-weight:700;color:var(--good);margin-top:1px}
+  .bar{height:4px;border-radius:3px;background:var(--input);margin-top:6px;overflow:hidden}
+  .bar i{display:block;height:100%;width:76%;background:linear-gradient(90deg,var(--teal),var(--blue))}
+
+  .rowflex{display:flex;gap:5px}
+  .rowflex .c{flex:1}
+  .mini{background:var(--elevated);border-radius:7px;padding:5px 4px;text-align:center}
+  .mini .v{font-size:11px;font-weight:700}
+  .mini .l{font-size:7px;color:var(--t3);text-transform:uppercase;margin-top:1px}
+  .flag{color:var(--warn)}
+  .chiprow{display:flex;gap:4px}
+  .chip{flex:1;background:var(--elevated);border-radius:6px;padding:4px 5px;font-size:8.5px;color:var(--t2);display:flex;justify-content:space-between;align-items:center}
+  .chip b{font-size:9px}
+  .ok{color:var(--good)} .am{color:var(--warn)}
+
+  .why .r{display:flex;align-items:center;gap:5px;font-size:9px;padding:2px 0}
+  .why .g{width:13px;height:13px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;flex:0 0 13px}
+  .why .n{flex:1;color:var(--t1)}
+  .why .d{font-weight:600}
+
+  .clu{padding:6px 8px}
+  .clu .top{display:flex;justify-content:space-between;align-items:baseline}
+  .clu .top .nm{font-size:8px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  .clu .top .sc{font-size:15px;font-weight:700}
+  .drv{display:flex;align-items:center;gap:5px;font-size:8.5px;padding:2px 0;border-top:1px solid var(--bsub);margin-top:3px}
+  .drv .k{flex:1;color:var(--t2)} .drv .v{font-weight:600}
+  .spark{flex:0 0 34px;height:9px}
+  .wall{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+  .wcell{background:var(--elevated);border-radius:6px;padding:4px}
+  .wcell .t{font-size:6.5px;color:var(--t3);text-transform:uppercase;display:flex;justify-content:space-between}
+  .wcell .t b{font-size:8px}
+  .sysg{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+  .sysg .s{background:var(--elevated);border-radius:5px;padding:4px 1px;text-align:center;position:relative;overflow:hidden}
+  .sysg .s .v{font-size:9px;font-weight:700} .sysg .s .l{font-size:5.5px;color:var(--t3);text-transform:uppercase}
+  .sysg .s i{position:absolute;left:0;right:0;bottom:0;height:2px}
+
+  .seg{display:flex;background:var(--input);border-radius:7px;padding:2px;font-size:9px}
+  .seg div{flex:1;text-align:center;padding:3px;border-radius:5px;color:var(--t3)}
+  .seg div.on{background:var(--elevated);color:var(--t1);font-weight:600}
+  .rings{display:flex;gap:6px;justify-content:center;padding:4px 0}
+  .ring{width:38px;height:38px;border-radius:50%;border:4px solid var(--input);position:relative;display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--t2)}
+  .ring.g{border-color:var(--good)} .ring.b{border-color:var(--blue)} .ring.o{border-color:var(--orange)} .ring.a{border-top-color:var(--warn);border-right-color:var(--warn)}
+
+  .cal .wk{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}
+  .cal .wk .d{background:var(--elevated);border-radius:5px;padding:5px 1px;font-size:8px;color:var(--t2)}
+  .cal .wk .d.today{border:1px solid var(--teal);color:var(--t1)}
+  .cal .ev{font-size:8.5px;color:var(--t2);padding:3px 0;border-top:1px solid var(--bsub);display:flex;gap:5px;align-items:center}
+  .cal .ev .dot{width:6px;height:6px;border-radius:2px}
+
+  .coach{border:1px solid rgba(45,212,191,.28);background:rgba(45,212,191,.04);font-family:Georgia,serif;font-style:italic;font-size:9px;color:var(--t1);padding:6px 8px;border-radius:9px;line-height:1.4}
+  .coach b{font-style:normal;font-family:var(--font);font-weight:700;color:var(--teal);font-size:7px;letter-spacing:.12em;display:block;margin-bottom:2px}
+
+  /* bottom nav */
+  .nav{display:flex;justify-content:space-around;padding:7px 2px 3px;border-top:1px solid var(--bsub);margin-top:6px}
+  .nav .t{font-size:7px;color:var(--t3);text-align:center}
+  .nav .t.on{color:var(--teal)}
+  .nav .t .d{font-size:13px;display:block;margin-bottom:1px}
+
+  .note{margin-top:20px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  @media(max-width:820px){.note{grid-template-columns:repeat(2,1fr)}}
+  .note .L{background:var(--surface);border:1px solid var(--bsub);border-radius:10px;padding:11px}
+  .note .L h3{font-size:11px;margin-bottom:4px}
+  .note .L p{font-size:11px;color:var(--t2);line-height:1.45}
+  .note .L .k{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="cap">
+    <span class="pill">Mobile structure · per IA contract</span>
+    <h1>How the mobile app is structured</h1>
+    <p>Bottom-nav spine <code>Today · EdgeIQ · Daily · Calendar · More</code> (Plan is web-only; glanced via Today/Calendar). Each surface is a vertical scroll of governed blocks — density set by the surface's job. Coach is ambient (woven in), not a tab. Wireframe — structure &amp; hierarchy, not final pixels.</p>
+  </div>
+
+  <div class="row">
+
+    <!-- TODAY -->
+    <div class="col">
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="tb"><span class="br">A<b>°</b> Today</span><span class="dt">Sun · Jun 14</span></div>
+        <div class="scr">
+          <div class="blk hero">
+            <div class="h">Today · am I ready</div>
+            <div class="gnum">72</div><div class="gword">Go strong</div>
+            <div class="bar"><i></i></div>
+            <div class="sm" style="font-size:7px">confidence 76%</div>
+          </div>
+          <div class="blk why">
+            <div class="h">Why</div>
+            <div class="r"><span class="g" style="background:rgba(74,222,128,.14);color:var(--good)">＋</span><span class="n">HRV</span><span class="d" style="color:var(--good)">+8%</span></div>
+            <div class="r"><span class="g" style="background:rgba(248,113,113,.14);color:var(--bad)">－</span><span class="n">Sleep 6h12</span><span class="d" style="color:var(--bad)">−18%</span></div>
+            <div class="r"><span class="g" style="background:rgba(96,165,250,.14);color:var(--blue)">≈</span><span class="n">Heat strain</span><span class="d" style="color:var(--t2)">mild</span></div>
+          </div>
+          <div class="blk accent"><div class="h">Today's plan · from Plan</div><div class="big">Tempo → <span style="color:var(--warn)">eased Z2</span></div><div class="sm">5.0 mi · sleep-debt trim</div></div>
+          <div class="chiprow">
+            <div class="chip">Activity <b class="ok">✓ posted</b></div>
+            <div class="chip">Fuel <b class="am">2 / 3 lit</b></div>
+          </div>
+          <div class="coach"><b>COACH</b>Fresh engine, short night — eased today, fuel the carbs. ↗</div>
+        </div>
+        <div class="nav">
+          <div class="t on"><span class="d">◆</span>Today</div>
+          <div class="t"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t"><span class="d">⚡</span>Daily</div>
+          <div class="t"><span class="d">▦</span>Cal</div>
+          <div class="t"><span class="d">⋯</span>More</div>
+        </div>
+      </div>
+      <div class="name"><b>1 · Today</b> (home)</div>
+      <div class="dens">medium · synthesis + decision</div>
+    </div>
+
+    <!-- EDGEIQ -->
+    <div class="col">
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="tb"><span class="br">A<b>°</b> EdgeIQ</span><span class="dt">165 days in</span></div>
+        <div class="scr">
+          <div class="blk hero" style="padding:6px"><div class="h">Daily score</div><div class="gnum" style="font-size:18px">72</div><div class="sm" style="font-size:7px">7d 68 · 30d 64 · A:C 1.08</div></div>
+          <div class="blk clu"><div class="top"><span class="nm" style="color:var(--blue)">Activity</span><span class="sc" style="color:var(--blue)">74</span></div>
+            <div class="drv"><span class="k">ACWR</span><svg class="spark" viewBox="0 0 34 9" preserveAspectRatio="none"><path d="M0 6 L11 5 L22 4 L34 5" fill="none" stroke="#60a5fa" stroke-width="1"/></svg><span class="v">1.08</span></div>
+            <div class="drv"><span class="k">rTSS</span><svg class="spark" viewBox="0 0 34 9" preserveAspectRatio="none"><path d="M0 7 L11 3 L22 6 L34 2" fill="none" stroke="#60a5fa" stroke-width="1"/></svg><span class="v">57</span></div></div>
+          <div class="blk clu"><div class="top"><span class="nm" style="color:var(--good)">Nutrition</span><span class="sc" style="color:var(--good)">61</span></div>
+            <div class="drv"><span class="k">Cal left</span><svg class="spark" viewBox="0 0 34 9" preserveAspectRatio="none"><path d="M0 4 L11 6 L22 5 L34 7" fill="none" stroke="#4ade80" stroke-width="1"/></svg><span class="v flag">+540</span></div>
+            <div class="drv"><span class="k">Protein</span><svg class="spark" viewBox="0 0 34 9" preserveAspectRatio="none"><path d="M0 6 L11 5 L22 6 L34 4" fill="none" stroke="#4ade80" stroke-width="1"/></svg><span class="v flag">−38g</span></div></div>
+          <div class="blk clu"><div class="top"><span class="nm" style="color:var(--purple)">Body</span><span class="sc" style="color:var(--purple)">83</span></div>
+            <div class="drv"><span class="k">HRV</span><svg class="spark" viewBox="0 0 34 9" preserveAspectRatio="none"><path d="M0 7 L11 5 L22 4 L34 3" fill="none" stroke="#a78bfa" stroke-width="1"/></svg><span class="v">64</span></div>
+            <div class="drv"><span class="k">Sleep</span><svg class="spark" viewBox="0 0 34 9" preserveAspectRatio="none"><path d="M0 4 L11 6 L22 8 L34 9" fill="none" stroke="#a78bfa" stroke-width="1"/></svg><span class="v flag">6.2h</span></div></div>
+          <div class="blk" style="padding:6px 7px"><div class="h" style="margin-bottom:4px">Trend wall</div>
+            <div class="wall">
+              <div class="wcell"><div class="t"><span>MI</span><b>34</b></div></div>
+              <div class="wcell"><div class="t"><span>HRV</span><b>64</b></div></div>
+              <div class="wcell"><div class="t"><span>SLEEP</span><b class="flag">6.2</b></div></div>
+            </div></div>
+          <div class="blk" style="padding:6px 7px"><div class="h" style="margin-bottom:4px">Systems</div>
+            <div class="sysg">
+              <div class="s"><div class="v">88</div><div class="l">Cd</div><i style="background:var(--good)"></i></div>
+              <div class="s"><div class="v">71</div><div class="l">Mt</div><i style="background:var(--good)"></i></div>
+              <div class="s"><div class="v flag">54</div><div class="l">Rc</div><i style="background:var(--warn)"></i></div>
+              <div class="s"><div class="v">90</div><div class="l">Bd</div><i style="background:var(--good)"></i></div>
+              <div class="s"><div class="v">82</div><div class="l">Hm</div><i style="background:var(--good)"></i></div>
+            </div></div>
+        </div>
+        <div class="nav">
+          <div class="t"><span class="d">◆</span>Today</div>
+          <div class="t on"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t"><span class="d">⚡</span>Daily</div>
+          <div class="t"><span class="d">▦</span>Cal</div>
+          <div class="t"><span class="d">⋯</span>More</div>
+        </div>
+      </div>
+      <div class="name"><b>2 · EdgeIQ</b> (intelligence)</div>
+      <div class="dens">high · governed density</div>
+    </div>
+
+    <!-- DAILY -->
+    <div class="col">
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="tb"><span class="br">A<b>°</b> Daily</span><span class="dt">Sun · Jun 14</span></div>
+        <div class="scr">
+          <div class="seg"><div class="on">Activity</div><div>Fuel</div></div>
+          <div class="blk accent"><div class="h">Logged ✓ · posted</div><div class="big">Tempo run · 5.0 mi</div><div class="sm">8:31/mi · 152 bpm · load 57 · Z2 68%</div></div>
+          <div class="blk"><div class="h">Post-workout</div>
+            <div class="rowflex" style="margin-top:4px">
+              <div class="c mini"><div class="v">8:31</div><div class="l">pace</div></div>
+              <div class="c mini"><div class="v">152</div><div class="l">avg hr</div></div>
+              <div class="c mini"><div class="v">57</div><div class="l">load</div></div>
+            </div></div>
+          <div class="blk"><div class="h">Fuel · targets illuminating</div>
+            <div class="rings">
+              <div class="ring g">cal</div><div class="ring b">pro</div><div class="ring a">carb</div>
+            </div>
+            <div class="sm" style="text-align:center">2 of 3 lit · 540 kcal to go</div></div>
+          <div class="coach"><b>COACH</b>Session banked. Close the carb ring tonight. ↗</div>
+        </div>
+        <div class="nav">
+          <div class="t"><span class="d">◆</span>Today</div>
+          <div class="t"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t on"><span class="d">⚡</span>Daily</div>
+          <div class="t"><span class="d">▦</span>Cal</div>
+          <div class="t"><span class="d">⋯</span>More</div>
+        </div>
+      </div>
+      <div class="name"><b>3 · Daily</b> (Play + Fuel)</div>
+      <div class="dens">detail + reward loop</div>
+    </div>
+
+    <!-- CALENDAR -->
+    <div class="col">
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="tb"><span class="br">A<b>°</b> Calendar</span><span class="dt">June</span></div>
+        <div class="scr cal">
+          <div class="blk" style="padding:7px"><div class="h" style="margin-bottom:5px">This week</div>
+            <div class="wk">
+              <div class="d">M<br>●</div><div class="d">T<br>●</div><div class="d today">W<br>◉</div><div class="d">T</div><div class="d">F<br>●</div><div class="d">S<br>★</div><div class="d">S</div>
+            </div></div>
+          <div class="blk"><div class="h">Upcoming</div>
+            <div class="ev"><span class="dot" style="background:var(--blue)"></span>Wed · Tempo 5mi (eased)</div>
+            <div class="ev"><span class="dot" style="background:var(--purple)"></span>Fri · Strength</div>
+            <div class="ev"><span class="dot" style="background:var(--warn)"></span>Sat · ★ Brooklyn Half · 12d</div>
+          </div>
+          <div class="blk accent"><div class="h">+ add</div><div class="sm">Race / session entry lives here</div></div>
+          <div class="blk" style="opacity:.6"><div class="h">Plan · web</div><div class="sm">Glance only — edit the plan on web</div></div>
+        </div>
+        <div class="nav">
+          <div class="t"><span class="d">◆</span>Today</div>
+          <div class="t"><span class="d">◈</span>EdgeIQ</div>
+          <div class="t"><span class="d">⚡</span>Daily</div>
+          <div class="t on"><span class="d">▦</span>Cal</div>
+          <div class="t"><span class="d">⋯</span>More</div>
+        </div>
+      </div>
+      <div class="name"><b>4 · Calendar</b> (schedule)</div>
+      <div class="dens">scheduling · + race entry</div>
+    </div>
+
+  </div>
+
+  <div class="note">
+    <div class="L"><h3>Bottom-nav spine</h3><p>Five slots: Today · EdgeIQ · Daily · Calendar · <b>More</b>. More holds Body (Core/Labs), Stack (supplements), Profile, and a Plan glance. Swipe between primary tabs; Coach is ambient, not a tab.</p></div>
+    <div class="L"><h3><span class="k" style="background:var(--good)"></span>Density follows the job</h3><p>Today = medium (hero + why + plan + today's wins). EdgeIQ = high governed density. Daily = detail + reward. Calendar = scheduling. Each fills the screen — no dead gutters.</p></div>
+    <div class="L"><h3><span class="k" style="background:var(--warn)"></span>Color = exceptions</h3><p>Most values neutral; amber/red only on off-target cells (sleep, cal/protein, recovery, carb ring). The signal pops out of the field.</p></div>
+    <div class="L"><h3>Everything reflects the plan</h3><p>Plan (web) is the source; Today shows today's slice, Calendar shows the schedule, Daily shows what you did against it. One plan, surfaced everywhere.</p></div>
+  </div>
+</div>
+</body>
+</html>

@@ -6,7 +6,7 @@
 // Originally imported isHardSession from activityClass too, but coachSignals
 // already has a more sophisticated local isHardSession (TSS / TE / duration
 // thresholds at lines 510+) that we use instead.
-import { activityKind } from './activityClass.js';
+import { activityKind, isSki, isWalk } from './activityClass.js';
 // Phase 4r.utc.2 — local-timezone day string. Replaces the ad-hoc
 // `new Date().toISOString().slice(0,10)` fallback defaults across this file,
 // which silently used UTC and rolled the date forward for users west of UTC
@@ -1613,16 +1613,27 @@ const PLAN_LABEL = {
 function _activityMatchesPlanType(activity, plannedType) {
   if (!activity || !plannedType) return false;
   const cls = activityKind(activity); // 'mobility'|'hiit'|'run'|'strength'|'cycling'|'swim'|'other'
-  const hard = isHardSession(activity);
   switch (plannedType) {
+    // COMPLETION (not grading): a run-quality plan is satisfied by ANY run that
+    // day — Garmin frequently logs interval/tempo runs as a plain "Run", so
+    // requiring a "hard" classification made completed sessions read as missed.
+    // (hard is still used elsewhere for grouping/intensity; here we only care
+    // whether the user did their run session.)
     case 'hiit':
-    case 'intervals': return cls === 'hiit' || (cls === 'run' && hard);
-    case 'tempo':     return cls === 'run' && hard;
+    case 'intervals':
+    case 'tempo':     return cls === 'hiit' || cls === 'run';
     case 'easy_run':
     case 'long_run':  return cls === 'run';
     case 'strength':  return cls === 'strength' || cls === 'hiit'; // hyrox-style counts
     case 'cross':     return cls === 'cycling' || cls === 'swim' || cls === 'other';
     case 'mobility':  return cls === 'mobility';
+    // Phase 4r.sports — first-class disciplines complete their own planned slot.
+    // cycling/swim have their own activityKind; ski/walk fall under 'other', so
+    // disambiguate by name.
+    case 'cycle':     return cls === 'cycling';
+    case 'swim':      return cls === 'swim';
+    case 'ski':       return isSki(activity);
+    case 'walk':      return isWalk(activity);
     case 'race':      return cls === 'run' || cls === 'hiit' || cls === 'strength';
     case 'rest':      return false; // rest "completed" doesn't make sense
     default:          return false;

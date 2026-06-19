@@ -21,6 +21,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { storage } from '../core/storage.js';
+import { allActivities as _allActivities } from '../core/dcyMath.js';
 import { getGoals } from '../core/goals.js';
 import { safeCompute } from '../core/safeCompute.js';
 import { computeUserState } from '../core/intelligence.js';
@@ -97,7 +98,10 @@ export function CoachLine({ tabId, setTab }) {
   // signal computation is memoized inside computeUserState.
   const narrative = useMemo(() => safeCompute('CoachLine:composeNarrative', () => {
     const data = {
-      activities:   storage.get('activities')   || [],
+      // Unified activity set (stored + dailyLog FITs) so a FIT-uploaded session
+      // counts toward plan completion — otherwise the line keeps saying "today is
+      // X on the plan" after the workout is already done.
+      activities:   (() => { try { return _allActivities() || []; } catch { return storage.get('activities') || []; } })(),
       sleep:        storage.get('sleep')        || [],
       hrv:          storage.get('hrv')          || [],
       weight:       storage.get('weight')       || [],

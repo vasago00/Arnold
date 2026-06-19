@@ -34,6 +34,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   PersonSimpleRun, Barbell, Lightning, PersonSimpleTaiChi, Bicycle, Trophy,
+  PersonSimpleBike, PersonSimpleSwim, PersonSimpleHike, Snowflake,
   Drop as PhDrop, Moon as PhMoon,
   BatteryLow, BatteryMedium,
 } from "@phosphor-icons/react";
@@ -41,7 +42,12 @@ import { getPredictedBands } from "../core/predictedBands.js";
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
 import { fetchWeatherForDate } from "../core/pdfParser.js";
-import { isRun, isStrength, isHIIT, isMobility } from "../core/activityClass.js";
+import { isRun, isStrength, isHIIT, isMobility, isCycling, isSwim, isSki, isWalk } from "../core/activityClass.js";
+import { CoachSigil } from "./CoachSigil.jsx";
+import { CATEGORY } from "../theme/tokens.js";
+import { sigSrc } from "../core/activitySignatures.js";
+import { adaptSession } from "../core/adaptPlan.js";
+import { fuelForToday } from "../core/fuelForWork.js";
 // Phase 4r.recover.4 — Hyperice integration removed from the render path.
 // Source files (core/hyperice.js, components/HypericeIcon.jsx) are kept
 // in the codebase but unused — see comment near render site for context.
@@ -70,11 +76,15 @@ const PLAN_TYPE_FAMILY = {
   easy_run: 'run', long_run: 'run', tempo: 'run', intervals: 'run',
   hiit: 'hiit', strength: 'strength', mobility: 'mobility', cross: 'cross',
   race: 'race', rest: 'rest',
+  // Phase 4r.sports — full activity inventory is now plannable. Each new
+  // discipline is its own family (own figure/color/icon/variable set).
+  cycle: 'cycle', swim: 'swim', ski: 'ski', walk: 'walk',
 };
 const PLAN_TYPE_LABEL = {
   easy_run: 'Easy run', long_run: 'Long run', tempo: 'Tempo', intervals: 'Intervals',
   hiit: 'HIIT', strength: 'Strength', mobility: 'Mobility', cross: 'Cross-train',
   race: 'Race', rest: 'Rest',
+  cycle: 'Cycling', swim: 'Swim', ski: 'Ski', walk: 'Walk/Hike',
 };
 const FAMILY_COLOR = {
   // Phase 4r.color.1 — HIIT moved back to coral-pink (#fb7185) so it
@@ -83,8 +93,11 @@ const FAMILY_COLOR = {
   // collapsed tempo-vs-HIIT; coral-pink solves both because it's
   // visually pink (not amber, not deep red). planner.js already had
   // this value — this aligns the whole app.
-  run: '#60a5fa', strength: '#a78bfa', hiit: '#fb7185',
-  mobility: '#5eead4', cross: '#34d399', race: '#ef4444',
+  // Phase 0.1 — sourced from the single token map (src/theme/tokens.js). Values
+  // unchanged; this just removes the duplicate literal definitions.
+  run: CATEGORY.run, strength: CATEGORY.strength, hiit: CATEGORY.hiit,
+  mobility: CATEGORY.mobility, cross: CATEGORY.cross, race: CATEGORY.race,
+  cycle: CATEGORY.cycle, swim: CATEGORY.swim, ski: CATEGORY.ski, walk: CATEGORY.walk,
 };
 
 const T1 = '#e8e6e0';
@@ -232,6 +245,13 @@ function deriveState({ planned, todayActivities, todayDate, nextRace }) {
       return !isRun(a) && !isStrength(a) && !isHIIT(a);
     }
     if (family === 'cross')    return !isRun(a) && !isStrength(a);
+    // Phase 4r.sports — first-class disciplines flip the tile to its
+    // post-workout summary the same way run/strength do. Shared activityClass
+    // predicates so detection matches the gauge/card everywhere else.
+    if (family === 'cycle')    return isCycling(a);
+    if (family === 'swim')     return isSwim(a);
+    if (family === 'ski')      return isSki(a);
+    if (family === 'walk')     return isWalk(a);
     // Phase 4r.race.14 — race family branch. The planner sets type='race'
     // for race day, but the legacy code only flipped to race-complete via
     // raceToday + raceLogged (which relies on nextRace.date matching).
@@ -821,6 +841,16 @@ function summarizeActivity({ activity, profile, allActivities }) {
         maxHR, thresholdHR,
       });
       load = hrTSS;
+    } else if (isCycling(activity) || isSwim(activity) || isSki(activity) || isWalk(activity)) {
+      // Phase 4r.sports — HR-based Load for the non-run disciplines so the
+      // post-workout card shows Effort/Load. hrTSS is the universal fallback
+      // (no run pace to build rTSS from). HR-less manual entries stay null.
+      const { hrTSS } = computeHrTSS({
+        durationSecs: activity.durationSecs,
+        avgHR:        activity.avgHR || activity.avgHeartRate,
+        maxHR, thresholdHR,
+      });
+      load = hrTSS;
     }
   } catch {}
   const loadStr = load ? Math.round(load) : null;
@@ -1135,6 +1165,10 @@ const FamilyHIIT     = ({ c = T2, s = 16 }) => <Lightning           size={s} col
 const FamilyMobility = ({ c = T2, s = 16 }) => <PersonSimpleTaiChi  size={s} color={c} weight="duotone" />;
 const FamilyCross    = ({ c = T2, s = 16 }) => <Bicycle             size={s} color={c} weight="duotone" />;
 const FamilyRace     = ({ c = T2, s = 16 }) => <Trophy              size={s} color={c} weight="duotone" />;
+const FamilyCycle    = ({ c = T2, s = 16 }) => <PersonSimpleBike    size={s} color={c} weight="duotone" />;
+const FamilySwim     = ({ c = T2, s = 16 }) => <PersonSimpleSwim    size={s} color={c} weight="duotone" />;
+const FamilySki      = ({ c = T2, s = 16 }) => <Snowflake           size={s} color={c} weight="duotone" />;
+const FamilyWalk     = ({ c = T2, s = 16 }) => <PersonSimpleHike    size={s} color={c} weight="duotone" />;
 
 // ── Inline icons (still inline — small, monochrome, accept color prop) ──
 const Icon = {
@@ -1247,6 +1281,10 @@ const FAMILY_ICON = {
   mobility: FamilyMobility,
   cross:    FamilyCross,
   race:     FamilyRace,
+  cycle:    FamilyCycle,
+  swim:     FamilySwim,
+  ski:      FamilySki,
+  walk:     FamilyWalk,
 };
 
 function weatherIcon({ condition, color = T2, size = 12 }) {
@@ -1285,7 +1323,7 @@ export function getPlannedWorkoutState({ plannedToday, nextRace, storageVersion 
 // ──────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ──────────────────────────────────────────────────────────────────────────
-export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVersion = 0, onTap }) {
+export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVersion = 0, onTap, figureSize = 72, figureTop }) {
   const todayDate = useMemo(() => localDate(), []);
   const allActivities = useMemo(() => getUnifiedActivities(), [storageVersion]);
   const todayActivities = useMemo(
@@ -1474,12 +1512,90 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
                      : wkCtx.daysSinceHard <= 1    ? WARN
                      :                                GOOD;
 
+    // Phase 2.1 — adaptive plan. The same readiness/recovery signals the card
+    // already computes (readiness score, rebound debt, sleep, HRV) reshape the
+    // PRESCRIBED session, with the reason shown. This closes the loop:
+    // diagnosis → adjusted prescription, the TrainAsONE/Runna hook on Arnold's
+    // deterministic engine. Held sessions return the plan unchanged, so reading
+    // adapted.* uniformly is safe.
+    const _adaptScore = readinessVerdict({ profile }).score;
+    const adapted = adaptSession(
+      {
+        type: planType,
+        intensityClass: planType,
+        distanceMi: Number(plannedToday?.distanceMi) || null,
+        durationMin: planMins || null,
+        label: PLAN_TYPE_LABEL[planType] || planType,
+      },
+      {
+        readiness: _adaptScore >= 75 ? 'high' : _adaptScore >= 55 ? 'moderate' : 'low',
+        debtLbs: reboundDebt?.totalDebtLbs || 0,
+        hrvDelta,
+        sleepHrs,
+        sleepGoalHrs: Number(profile?.sleepGoalHrs) || 7.5,
+        // Same fatigue signal the header battery icon shows (intel fatigue model),
+        // so the coach can't say "recovered" while the battery reads depleted.
+        fatigueLevel: Number(predicted?.source?.fatigueLevel) || 0,
+      }
+    );
+
     // Band 1 — Output chips (target dist · time · pace) + zone bar.
+    // When the session is eased/trimmed, the chips show the ADJUSTED volume so
+    // the displayed target matches the adapted prescription. An eased session
+    // (intensity dropped to Z2) replaces the stale tempo pace with a "Z2" cue.
+    const _chipDist  = adapted.distanceMi  != null ? adapted.distanceMi  : plannedToday?.distanceMi;
+    const _chipMins  = adapted.durationMin != null ? adapted.durationMin : planMins;
+    const _easedToZ2 = adapted.eased && adapted.intensityClass === 'easy';
     const outputChips = [
-      plannedToday?.distanceMi ? { value: `${plannedToday.distanceMi}`, post: 'mi' } : null,
-      planMins ? { value: planMins >= 60 ? `${Math.floor(planMins / 60)}h ${Math.round(planMins % 60)}m` : `${Math.round(planMins)} min`, post: null } : null,
-      targetPace ? { value: targetPace, post: '/mi' } : null,
+      _chipDist ? { value: `${_chipDist}`, post: 'mi' } : null,
+      _chipMins ? { value: _chipMins >= 60 ? `${Math.floor(_chipMins / 60)}h ${Math.round(_chipMins % 60)}m` : `${Math.round(_chipMins)} min`, post: null } : null,
+      _easedToZ2 ? { value: 'Z2', post: 'easy' } : (targetPace ? { value: targetPace, post: '/mi' } : null),
     ].filter(Boolean);
+
+    // The single coach line under the tile. The adaptation reason (eased / trimmed
+    // / cleared) leads when present — it's the most specific, actionable signal —
+    // and falls back to the rebound-debt recovery copy otherwise. One line, one
+    // source of truth.
+    const _coachLine = adapted.reason
+      ? {
+          tag: adapted.action === 'greenlit' ? 'Cleared' : 'Adapted',
+          color: adapted.action === 'greenlit' ? GOOD : adapted.action === 'ease' ? '#f87171' : '#fbbf24',
+          body: adapted.reason,
+        }
+      : (reboundDebt.severity !== 'none' && reboundDebt.advisoryCopy
+          ? {
+              tag: 'Recovery',
+              color: reboundDebt.severity === 'flag' ? '#f87171' : '#fbbf24',
+              body: reboundDebt.advisoryCopy,
+            }
+          // The card always speaks once (DESIGN_DECISIONS). On a held day with
+          // no recovery debt there's no adjustment to report, so the Coach gives
+          // a brief on-plan line rather than going silent.
+          : {
+              tag: 'On plan',
+              color: GOOD,
+              body: 'Nothing to adjust — execute the targets above, controlled and consistent.',
+            });
+
+    // Figure geometry → card floor. The session figure is absolutely positioned
+    // from the top; on web it's bigger (size 104 @ top 48 → bottom ~152). Without
+    // a floor the card can be shorter than the figure and `overflow:hidden` clips
+    // it (the web bug). Floor = figure bottom + a hair, so it fits without forcing
+    // a tall empty gap. (Overlap is handled separately: the Coach line clears the
+    // figure's column horizontally — see its right padding below.)
+    const _figureBottom = (figureTop != null ? figureTop : Math.max(12, 128 - figureSize)) + figureSize;
+    const cardMinHeight = _figureBottom + 8;
+
+    // Phase 2.2 — fuel for the work required. Prescribe THIS session's pre-carbs +
+    // recovery protein from body mass, and flag low energy availability (RED-S),
+    // reading the same energy-balance + goal-model engines the Nutrition tab uses.
+    // Fuel the ADAPTED session (if eased, you need less), so the numbers match the
+    // adjusted prescription. Plain call (not a hook) — we're inside the pre branch.
+    const fuelRx = fuelForToday(adapted);
+    const eaLow  = fuelRx?.ea?.status === 'low';
+    // Warmup ("Nm") is intentionally NOT shown for now — it was mis-grouped under
+    // FUEL, and adding it to this target row crowds it horizontally toward the
+    // corner image (Emil 2026-06-10). Re-place it deliberately in the card redesign.
     // Phase 4r.tile.1 — Suppress the TARGET zone bar pre-workout. Pre-
     // workout we don't yet have anything to show against; the target
     // distribution is theoretical and was visually colliding with the
@@ -1554,9 +1670,10 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
           { icon: <Icon.Egg c="#fb923c" s={14}/>, value: '20g', sub: 'protein' },
         ].filter(Boolean)
       : [
+          // FUEL = hydration + carbs only. Warmup is a PREP element, not fuel —
+          // it moved out of this group (Emil 2026-06-10) to the target row.
           fuel ? { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>, value: ozToLiters(fuel.waterOz), sub: 'water' } : null,
           fuel && fuel.carbsG > 0 ? { icon: <Icon.Wheat c={GOOD} s={14}/>, value: `${fuel.carbsG}g`, sub: 'carbs' } : null,
-          warmupMin > 0 ? { icon: <PersonSimpleTaiChi size={14} color="#a78bfa" weight="duotone"/>, value: `${warmupMin}m`, sub: 'warmup' } : null,
         ].filter(Boolean);
 
     // Header-right always shows weather now (Phase 4q.pre.5 restored it
@@ -1640,7 +1757,7 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
     // the visual energy; the mantra is a session-theme tag.
 
     return (
-      <Card familyColor={familyColor} onTap={onTap}>
+      <Card familyColor={familyColor} onTap={onTap} minHeight={cardMinHeight}>
         <SectionHeader
           icon={<FamilyIcon c={familyColor} s={15}/>}
           label="TODAY"
@@ -1651,63 +1768,14 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
           }
           right={headerRight}
         />
-        {/* Phase 4q.signatures.24 — mantra now lives on its own dedicated
-            line directly below the header. Larger, family-colored, with
-            a soft self-glow so it reads as a session-ethos banner rather
-            than a forgotten suffix tag. Stays single-line; the small
-            accent on the left anchors it visually. */}
+        {/* MANTRA — restored to directly under the TODAY header (Emil
+            2026-06-10) as a modest family-colored tagline (NOT the rejected
+            comic experiment). Coach voice moved to its own line at the bottom. */}
         {mantra && (
-          <div style={{
-            padding: '1px 12px 4px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 7,
-          }}>
-            <span style={{
-              width: 3,
-              height: 13,
-              background: familyColor,
-              borderRadius: 1.5,
-              boxShadow: `0 0 8px ${familyColor}cc`,
-              flexShrink: 0,
-            }}/>
-            <span style={{
-              fontSize: 13, fontWeight: 800,
-              letterSpacing: '0.14em',
-              color: familyColor,
-              textTransform: 'uppercase',
-              textShadow: `0 0 14px ${familyColor}66, 0 1px 0 rgba(0,0,0,0.4)`,
-              lineHeight: 1.05,
-              whiteSpace: 'nowrap',
-            }}>{mantra}</span>
-          </div>
-        )}
-        {/* Phase 4r.adapt.3 (revised) — rebound debt advisory.
-            Minimalist: just a colored dot + copy, no surrounding card.
-            Less visual weight, slots in with the other tile content
-            rather than pulling focus to a banner. */}
-        {reboundDebt.severity !== 'none' && reboundDebt.advisoryCopy && (
-          <div style={{
-            padding: '0 12px 6px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 7,
-            fontSize: 10.5,
-            lineHeight: 1.35,
-            color: T2,
-          }}>
-            <span
-              aria-hidden
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: reboundDebt.severity === 'flag' ? '#f87171' : '#fbbf24',
-                flexShrink: 0,
-                marginTop: 5,
-              }}
-            />
-            <span style={{ minWidth: 0 }}>{reboundDebt.advisoryCopy}</span>
+          <div style={{ padding: '0 12px 5px 12px', marginTop: -1 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, fontStyle: 'italic', letterSpacing: '0.05em', color: familyColor, textTransform: 'uppercase' }}>
+              {mantra}
+            </span>
           </div>
         )}
         <PerfOutputRow
@@ -1755,9 +1823,21 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
                              : id === 'cardiacDrift'        ? '%'
                              : id === 'hrRecovery1m'        ? 'bpm'
                              : '';
+          // Water + Warmup are still targets, but they drop to their own
+          // icon row right below (Emil 2026-06-10) — drop for water, the
+          // tai-chi "warrior" figure for warmup — no separate header, so
+          // they fill the left a little more under the band targets.
+          const showWater  = !!(fuel && fuel.waterOz);
+          const showWarmup = warmupMin > 0;
+          // Phase 2.2 — fuel-for-work chips (pre-carbs / recovery protein / EA).
+          const showCarbs   = fuelRx?.preCarbsG > 0;
+          const showProtein = fuelRx?.pmProteinG > 0;
+          const showEA      = fuelRx?.ea?.status === 'low' || fuelRx?.ea?.status === 'reduced';
+          const eaColor     = fuelRx?.ea?.status === 'low' ? '#f87171' : '#fbbf24';
           return (
+            <>
             <div style={{
-              padding: '2px 12px 6px',
+              padding: '2px 84px 2px 12px',
               display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
               fontVariantNumeric: 'tabular-nums',
             }}>
@@ -1777,28 +1857,69 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
                 </span>
               ))}
             </div>
+            {(showWater || showWarmup || showCarbs || showProtein || showEA) && (
+              <div style={{
+                padding: '0 84px 8px 12px',
+                display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+                fontVariantNumeric: 'tabular-nums',
+              }}>
+                {showWater && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: T2 }} title="Hydration target">
+                    <PhDrop size={15} color="#22d3ee" weight="duotone"/>
+                    <span style={{ fontWeight: 700 }}>{ozToLiters(fuel.waterOz)}</span>
+                  </span>
+                )}
+                {showWarmup && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: T2 }} title="Warmup target">
+                    <PersonSimpleTaiChi size={15} color={familyColor} weight="duotone"/>
+                    <span style={{ fontWeight: 700 }}>{warmupMin}m</span>
+                  </span>
+                )}
+                {showCarbs && (
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontSize: 11, color: T2 }} title={`Pre-session carbs — ${fuelRx.reason}`}>
+                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', color: T3 }}>CARB</span>
+                    <span style={{ fontWeight: 700 }}>{fuelRx.preCarbsG}<span style={{ color: T3, fontSize: 9 }}>g</span></span>
+                  </span>
+                )}
+                {showProtein && (
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontSize: 11, color: T2 }} title="Recovery protein (PM)">
+                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', color: T3 }}>PRO</span>
+                    <span style={{ fontWeight: 700 }}>{fuelRx.pmProteinG}<span style={{ color: T3, fontSize: 9 }}>g</span></span>
+                  </span>
+                )}
+                {showEA && (
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontSize: 11, color: eaColor }} title={`Energy availability ${fuelRx.ea.kcalPerKgFfm} kcal/kg FFM — ${fuelRx.ea.status === 'low' ? 'low (RED-S risk); eat before training' : 'reduced; top up fuel'}`}>
+                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em' }}>EA</span>
+                    <span style={{ fontWeight: 700 }}>{fuelRx.ea.kcalPerKgFfm}</span>
+                  </span>
+                )}
+              </div>
+            )}
+            </>
           );
         })()}
-        {fuelChips.length > 0 && (
-          <RecoverySection
-            chips={fuelChips}
-            headerLabel="FUEL"
-            reserveRightSpace
-          />
-        )}
-        {/* Phase 4q.signatures.21 — corner-stamp signature, absolutely
-            positioned at bottom-right of the Card so it fills the
-            otherwise-empty right side that runs the full height of the
-            status + recovery bands. */}
-        <div style={{
-          position: 'absolute',
-          bottom: 4,
-          right: 6,
-          pointerEvents: 'none',
-          zIndex: 1,
-        }}>
-          <SessionSignature family={family} planType={planType} FamilyIcon={FamilyIcon} color={familyColor}/>
+        {/* Figure — in the reserved right column beside the metrics (Emil
+            2026-06-10, red-circle placement). Card-level absolute, anchored from
+            the TOP. `figureSize` is bigger on web (passed from Arnold.jsx); the
+            top scales so the figure grows UPWARD and its bottom stays ~constant,
+            clear of the coach line below. */}
+        <div style={{ position: 'absolute', top: figureTop != null ? figureTop : Math.max(12, 128 - figureSize), right: 10, zIndex: 1, pointerEvents: 'none' }}>
+          <SessionSignature family={family} planType={planType} FamilyIcon={FamilyIcon} color={familyColor} size={figureSize}/>
         </div>
+        {/* COACH — sits directly under the targets (no pinned gap). Its right
+            padding clears the figure's column (figureSize+14) so the text can
+            never run under the image, on any session signature. Leads with the
+            adaptive-plan reason (eased / trimmed / cleared), else the rebound-debt
+            recovery copy, else a brief on-plan line. */}
+        {_coachLine && (
+          <div style={{ padding: `2px ${figureSize + 14}px 9px 12px`, display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+            <CoachSigil size={16} style={{ marginTop: 1, marginLeft: -2, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0, fontSize: 11, lineHeight: 1.45, color: T2, overflowWrap: 'anywhere' }}>
+              <span style={{ fontWeight: 800, color: _coachLine.color, textTransform: 'uppercase', letterSpacing: '0.03em', marginRight: 6 }}>{_coachLine.tag}:</span>
+              {_coachLine.body}
+            </div>
+          </div>
+        )}
       </Card>
     );
   }
@@ -2067,7 +2188,7 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
 // ──────────────────────────────────────────────────────────────────────────
 // LAYOUT
 // ──────────────────────────────────────────────────────────────────────────
-function Card({ children, familyColor, onTap }) {
+function Card({ children, familyColor, onTap, minHeight }) {
   return (
     <div
       onClick={onTap}
@@ -2079,6 +2200,7 @@ function Card({ children, familyColor, onTap }) {
         marginBottom: 10,
         position: 'relative',
         overflow: 'hidden',
+        minHeight,
         cursor: onTap ? 'pointer' : 'default',
       }}
     >
@@ -2127,7 +2249,7 @@ function SectionHeader({ icon, label, suffix, right }) {
 // Phase 4q.pre.8 — when there's no zone bar (mobility / strength), the
 // `motivation` prop renders a high-resolution motivation panel in the
 // right slot instead — big caps, family-colored, with a soft glow.
-function PerfOutputRow({ chips, zones, planType, motivation, reserveRightSpace = false }) {
+function PerfOutputRow({ chips, zones, planType, motivation, reserveRightSpace = false, reservePx }) {
   return (
     <div style={{
       display: 'flex',
@@ -2137,8 +2259,9 @@ function PerfOutputRow({ chips, zones, planType, motivation, reserveRightSpace =
       // Phase 4r.viz.13 — PerfOutputRow is the TOP band of the card; the
       // session signature sits at the bottom-right corner. They don't
       // actually conflict in normal-height cards, so this row stays
-      // unreserved — zones extend right-aligned where the user expects.
-      padding: '2px 12px 3px',
+      // unreserved by default. The pre-workout card passes an explicit
+      // reservePx so its mantra-swoosh + figure get a clear right lane.
+      padding: reservePx ? `2px ${reservePx}px 3px 12px` : '2px 12px 3px',
     }}>
       {chips.map((c, i) => (
         <span key={i} style={{
@@ -2298,7 +2421,7 @@ function MiniZoneBar({ zones, planType }) {
 // which efficiency dimensions were on-target and which need attention.
 // Same flex-wrap pattern as row 1; renders nothing when no chips have
 // values (CSV-only imports without form metrics).
-function PerfQualityRow({ chips, reserveRightSpace }) {
+function PerfQualityRow({ chips, reserveRightSpace, reservePx }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'baseline', flexWrap: 'wrap',
@@ -2306,9 +2429,10 @@ function PerfQualityRow({ chips, reserveRightSpace }) {
       // Phase 4q.signatures.21 — when the corner-stamp signature is
       // present at the Card level, status row reserves space on its
       // right edge so chips don't run under the badge.
-      // Phase 4r.viz.13 — restored to 84px to match the 72px default
-      // signature size (signature + 12px buffer).
-      padding: reserveRightSpace ? '3px 84px 4px 12px' : '3px 12px 4px',
+      // Phase 4r.viz.13 — 84px matches the 72px default signature; the
+      // pre-workout card passes an explicit reservePx (wider mantra lane).
+      padding: reservePx ? `3px ${reservePx}px 4px 12px`
+             : reserveRightSpace ? '3px 84px 4px 12px' : '3px 12px 4px',
       borderTop: '0.5px solid rgba(140,140,140,0.10)',
     }}>
       {chips.map((c, i) => (
@@ -2682,30 +2806,8 @@ function RecoverySection({ chips, headerLabel = 'RECOVER', signature, reserveRig
 // To add a new plan-specific signature: drop the cleaned PNG into
 // /public/session-signatures/<key>.png and bump SIG_VERSION to force
 // the WebView to re-fetch.
-const SIG_VERSION = 'v11';
-const SIGNATURE_SRC = {
-  // ── Plan-specific (preferred lookup) ──
-  easy_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,
-  long_run:  `/session-signatures/easy-run.png?${SIG_VERSION}`,  // shares with easy
-  tempo:     `/session-signatures/tempo.png?${SIG_VERSION}`,
-  intervals: `/session-signatures/speed.png?${SIG_VERSION}`,
-  speed_run: `/session-signatures/speed.png?${SIG_VERSION}`,
-  ski:       `/session-signatures/ski.png?${SIG_VERSION}`,
-  // ── Family fallback (used when plan-specific isn't on disk) ──
-  // Phase 4r.maps.1 — `run.png` doesn't exist on disk; the canonical
-  // generic-run signature is `easy-run.png`. Aligned with CalendarTab
-  // SIG_FILE and WeeklyPlanner PLAN_SIGNATURE.
-  run:       `/session-signatures/easy-run.png?${SIG_VERSION}`,
-  strength:  `/session-signatures/strength.png?${SIG_VERSION}`,
-  hiit:      `/session-signatures/hiit.png?${SIG_VERSION}`,
-  mobility:  `/session-signatures/mobility.png?${SIG_VERSION}`,
-  cross:     `/session-signatures/cross.png?${SIG_VERSION}`,
-  // Phase 4r.signatures.27 — race.png replaced with finish-line-tape
-  // composition (shards dispersed as motion-burst, not in front of
-  // the runner like glass). SIG_VERSION bumped to v10 to force the
-  // WebView to re-fetch the new image.
-  race:      `/session-signatures/race.png?${SIG_VERSION}`,
-};
+// Phase 0.3 — the signature map moved to the single source `core/activitySignatures.js`
+// (was duplicated here + WeeklyPlanner + CalendarTab). Use `sigSrc(planType|family)`.
 
 // Phase 4q.signatures.3 — session signature badge. When the image renders
 // it floats BARE against the tile's dark background (no frame, no
@@ -2726,8 +2828,8 @@ function SessionSignature({ family, planType, FamilyIcon, color, size = 72 }) {
   // 404 and onError flips imgFailed → renders the framed FamilyIcon
   // fallback. This lets us ship the lookup wiring before all the
   // new artworks land, without breaking existing tiles.
-  const planSrc   = planType && SIGNATURE_SRC[planType];
-  const familySrc = family   && SIGNATURE_SRC[family];
+  const planSrc   = sigSrc(planType);
+  const familySrc = sigSrc(family);
   const [planFailed, setPlanFailed] = useState(false);
   const [familyFailed, setFamilyFailed] = useState(false);
 

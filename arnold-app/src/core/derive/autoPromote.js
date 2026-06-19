@@ -188,13 +188,17 @@ export function resolveStartTiles(category, manualPins, registry, ctx = {}) {
   }
 
   // 2. Score every other tile in this category, take the top N.
+  // The scorer is injectable (ctx.scoreFn): the Start screen passes the HUB scorer
+  // (core/hub/promote.js) so the Intelligence Hub fully owns auto-promotion; the
+  // legacy heuristic scoreTile is the default fallback when no hub scorer is given.
+  const scoreFn = typeof ctx.scoreFn === 'function' ? ctx.scoreFn : scoreTile;
   const candidates = registry
     .filter(m => m.category === category && !claimed.has(m.id))
     .map(m => {
       let tf = null, computed = null;
       try { tf = m.timeframes?.(ctx.tileCtx) || null; } catch {}
       try { computed = m.compute?.(ctx.tileCtx) || null; } catch {}
-      const { score, reasons } = scoreTile(m, tf, computed, ctx);
+      const { score, reasons } = scoreFn(m, tf, computed, ctx);
       return { metric: m, score, reasons };
     })
     // Filter out candidates with no value at all — can't promote a metric

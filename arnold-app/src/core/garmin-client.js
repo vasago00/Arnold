@@ -320,6 +320,25 @@ function writeMeta(patch) {
  * Returns { ok, date, sleep, summary, fetchedAt, cached, error? }.
  * Never throws — UI-friendly error shape.
  */
+// Upsert the per-date daily-energy row (steps + active/total kcal) from Garmin's
+// daily summary into `hcDailyEnergy` — the same collection dcy.js + CloudSyncPanel
+// read. Phase 4r.energy.6 — Garmin is now the authoritative steps/kcal source on
+// EVERY platform (works on web too, unlike Health Connect which is Android-only).
+function upsertDailyEnergyRow(date, summary) {
+  if (!summary || !date) return;
+  const steps = Number(summary.steps) || 0;
+  const totalCalories = Number(summary.totalCalories) || 0;
+  const activeCalories = Number(summary.activeCalories) || 0;
+  if (steps < 100 && totalCalories === 0) return;            // don't write an empty day
+  const all = storage.get('hcDailyEnergy') || [];
+  const idx = all.findIndex(r => r?.date === date);
+  const row = { date, steps, activeCalories, totalCalories, wellnessSource: 'garmin', wellnessUpdatedAt: new Date().toISOString() };
+  if (idx >= 0) all[idx] = { ...all[idx], ...row };          // Garmin wins for this date
+  else all.push(row);
+  all.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  storage.set('hcDailyEnergy', all, { skipValidation: true });
+}
+
 export async function fetchGarminDay(date = localDate(), { signal } = {}) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return { ok: false, error: 'bad_date', date };
@@ -369,10 +388,12 @@ export async function fetchGarminDay(date = localDate(), { signal } = {}) {
   // Persist
   //   sleep      → 'sleep' collection (HC writes here too; Worker source wins)
   //   bb/stress/readiness → 'wellness' collection (read by tile registry)
-  //   Garmin's daily summary (steps/kcal) → intentionally NOT persisted; HC
-  //                  owns those in hcDailyEnergy (Phase 4a separation).
+  //   summary (steps/kcal) → 'hcDailyEnergy' (Phase 4r.energy.6 — Garmin is now the
+  //                  authoritative steps/kcal source on every platform; HC's
+  //                  syncDailyEnergy defers when the worker is configured).
   if (sleep) upsertSleepRow(sleep);
   upsertWellnessRow(date, { ...(bb || {}), ...(stress || {}), ...(readiness || {}) });
+  if (summary) upsertDailyEnergyRow(date, summary);
   writeLiveCache(date, { ...body, fetchedAt: body.fetchedAt || Date.now() });
   writeMeta({
     lastSyncAt:   body.fetchedAt || Date.now(),
@@ -393,6 +414,71 @@ export async function fetchGarminDay(date = localDate(), { signal } = {}) {
 
 export async function fetchGarminToday(opts) {
   return fetchGarminDay(localDate(), opts);
+}
+
+// ── Periodic "today" refresh ─────────────────────────────────────────────────
+// Keeps TODAY's Garmin data (steps/energy/sleep/recovery) fresh without a manual
+// "Test pull". Replaces the retired Health Connect 15-min loop (Phase 4r.energy.8).
+// Triggers: once on boot, on every app foreground (visibilitychange -> visible),
+// and on a fixed interval while the app stays open. Debounced so boot+foreground
+// firing together (or rapid tab switches) can't hammer the Worker. No-op until
+// Garmin is configured. fetchGarminDay already persists to storage; the onUpdate
+// callback lets the app reload its React state after a successful pull.
+const GARMIN_SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 min while open
+const GARMIN_MIN_GAP_MS       = 5 * 60 * 1000;  // debounce floor between pulls
+const GARMIN_FG_MIN_GAP_MS    = 60 * 1000;      // shorter floor for explicit foreground events
+let _garminSyncId = null;
+let _garminVisHandler = null;
+let _garminFgHandlers = [];     // [target, eventName, handler] tuples for cleanup
+let _lastGarminPullAt = 0;
+
+export function startGarminPeriodicSync(onUpdate) {
+  if (typeof window === 'undefined') return;
+  if (_garminSyncId) return; // already started (guard against React StrictMode double-invoke)
+  // `gap` lets foreground events refresh on a shorter floor than the 30-min tick,
+  // so reopening the app pulls promptly instead of waiting out the interval debounce.
+  const pull = async (gap = GARMIN_MIN_GAP_MS) => {
+    if (!isGarminConfigured()) return;
+    const now = Date.now();
+    if (now - _lastGarminPullAt < gap) return; // debounce
+    _lastGarminPullAt = now;
+    try {
+      const r = await fetchGarminToday();
+      if (r && r.ok && typeof onUpdate === 'function') onUpdate(r);
+    } catch (e) {
+      console.warn('[garmin-periodic] pull failed:', e && (e.message || e));
+    }
+  };
+  pull();                                                   // boot refresh
+  _garminSyncId = setInterval(() => pull(), GARMIN_SYNC_INTERVAL_MS); // while open
+
+  // Foreground refresh. Capacitor's Android WebView does NOT reliably fire
+  // `visibilitychange` on app resume, and setInterval is suspended while
+  // backgrounded — so we listen on several foreground signals and pull on the
+  // shorter foreground floor. All are idempotent (debounced) and harmless if a
+  // given event never fires on a platform.
+  const onForeground = () => pull(GARMIN_FG_MIN_GAP_MS);
+  if (typeof document !== 'undefined') {
+    _garminVisHandler = () => { if (document.visibilityState === 'visible') onForeground(); };
+    document.addEventListener('visibilitychange', _garminVisHandler);
+    _garminFgHandlers.push([document, 'resume', onForeground]);   // Cordova/Capacitor app resume
+  }
+  if (typeof window !== 'undefined') {
+    _garminFgHandlers.push([window, 'focus', onForeground]);
+    _garminFgHandlers.push([window, 'pageshow', onForeground]);
+    _garminFgHandlers.push([window, 'online', onForeground]);
+  }
+  for (const [t, ev, h] of _garminFgHandlers) t.addEventListener(ev, h);
+}
+
+export function stopGarminPeriodicSync() {
+  if (_garminSyncId) { clearInterval(_garminSyncId); _garminSyncId = null; }
+  if (_garminVisHandler && typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', _garminVisHandler);
+    _garminVisHandler = null;
+  }
+  for (const [t, ev, h] of _garminFgHandlers) { try { t.removeEventListener(ev, h); } catch {} }
+  _garminFgHandlers = [];
 }
 
 // ── Date-range backfill ─────────────────────────────────────────────────────

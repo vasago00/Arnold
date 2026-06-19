@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Arnold — EdgeIQ, governed density</title>
+<style>
+  :root{
+    --bg:#0a0c10; --surface:#12151c; --elevated:#171b24; --input:#1d222c;
+    --border:#262c38; --bsub:#1b202a;
+    --t1:#eceae4; --t2:#9b988f; --t3:#6f6c64; --muted:#5c606a;
+    --good:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    --blue:#60a5fa; --purple:#a78bfa; --orange:#fb923c; --teal:#2dd4bf; --cyan:#22d3ee;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#05070a;color:var(--t1);font-family:var(--font);-webkit-font-smoothing:antialiased;
+    padding:22px;font-variant-numeric:tabular-nums;
+    background-image:radial-gradient(1100px 600px at 85% -10%,rgba(96,165,250,.06),transparent),
+                     radial-gradient(800px 500px at -5% 110%,rgba(167,139,250,.05),transparent);}
+  .frame{max-width:1180px;margin:0 auto}
+  .cap{margin-bottom:14px}
+  .cap .pill{display:inline-block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);
+    border:1px solid rgba(45,212,191,.35);background:rgba(45,212,191,.08);padding:3px 10px;border-radius:20px}
+  .cap h1{font-size:18px;font-weight:600;margin:9px 0 4px}
+  .cap p{font-size:12.5px;color:var(--t2);line-height:1.5;max-width:860px}
+  .app{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:0 24px 70px rgba(0,0,0,.5)}
+
+  /* top bar */
+  .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 2px}
+  .bar .l{display:flex;align-items:baseline;gap:10px}
+  .bar .brand{font-size:13px;font-weight:700;letter-spacing:.05em}
+  .bar .brand b{color:var(--teal)}
+  .bar .sub{font-size:11px;color:var(--t3)}
+  .bar .r{display:flex;gap:6px;align-items:center}
+  .chip{font-size:9px;padding:3px 9px;border-radius:10px;letter-spacing:.04em}
+  .chip.b{background:rgba(96,165,250,.12);color:var(--blue)}
+  .chip.p{background:rgba(167,139,250,.12);color:var(--purple)}
+  .chip.ai{background:rgba(167,139,250,.15);color:var(--purple);border:1px solid rgba(167,139,250,.35);font-weight:600}
+
+  .grid{display:grid;grid-template-columns:300px 1fr;gap:12px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
+
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:13px}
+  .ph{font-size:9px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--t3);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+  .ph .meta{color:var(--muted);font-weight:600;letter-spacing:.04em}
+
+  /* HERO */
+  .hero{background:linear-gradient(180deg,#141a25,#10141c);border-color:#28303f;position:relative;overflow:hidden}
+  .hero:before{content:"";position:absolute;inset:0;background:radial-gradient(360px 200px at 22% -10%,rgba(74,222,128,.10),transparent)}
+  .speedo{display:flex;flex-direction:column;align-items:center;position:relative}
+  .speedo .word{font-size:18px;font-weight:700;color:var(--good);margin-top:2px}
+  .speedo .ctx{font-size:11px;color:var(--t2);margin-top:3px}
+  .speedo .ctx b{color:var(--t1)}
+  .conf{margin-top:11px;width:100%}
+  .conf .lbl{display:flex;justify-content:space-between;font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+  .conf .bar{height:5px;border-radius:4px;background:var(--input);overflow:hidden}
+  .conf .bar i{display:block;height:100%;width:76%;background:linear-gradient(90deg,var(--teal),var(--blue))}
+  .why{margin-top:13px;border-top:1px solid var(--bsub);padding-top:11px}
+  .why .wh{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--t3);margin-bottom:7px}
+  .why .it{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px}
+  .why .g{flex:0 0 18px;height:18px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+  .why .n{flex:1;color:var(--t1)}
+  .why .n s{color:var(--t3);font-size:10.5px}
+  .why .d{font-weight:600;font-size:11.5px}
+
+  /* cockpit clusters */
+  .cock{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:880px){.cock{grid-template-columns:1fr}}
+  .clu .top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+  .clu .top .nm{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+  .clu .top .sc{font-size:26px;font-weight:700;line-height:1}
+  .clu .top .sc s{font-size:11px;color:var(--t3);font-weight:500}
+  .drv{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--bsub)}
+  .drv .k{flex:0 0 78px;font-size:10px;color:var(--t2);text-transform:uppercase;letter-spacing:.04em}
+  .drv .v{flex:0 0 42px;font-size:13px;font-weight:600;text-align:right}
+  .drv .sp{flex:1}
+  .flag-amber{color:var(--warn)} .flag-bad{color:var(--bad)} .neutral{color:var(--t1)}
+  .acc-run{color:var(--blue)} .acc-nut{color:var(--good)} .acc-body{color:var(--purple)}
+
+  /* small-multiples trend wall */
+  .wall{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  @media(max-width:880px){.wall{grid-template-columns:repeat(3,1fr)}}
+  .sm{background:var(--elevated);border-radius:10px;padding:9px}
+  .sm .t{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;display:flex;justify-content:space-between}
+  .sm .t b{font-size:13px;font-weight:700;letter-spacing:0}
+  .sm svg{display:block;margin-top:6px;width:100%;height:26px}
+
+  /* coach */
+  .coach{border-color:rgba(45,212,191,.28);background:rgba(45,212,191,.04)}
+  .coach .sig{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+  .coach .a{width:18px;height:18px;border-radius:6px;background:rgba(45,212,191,.16);color:var(--teal);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+  .coach .nm{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--teal)}
+  .coach p{font-family:Georgia,serif;font-style:italic;font-size:14px;line-height:1.5}
+  .coach .o{font-style:italic;font-size:11px;color:var(--teal);margin-top:5px}
+
+  /* systems + race row */
+  .botgrid{display:grid;grid-template-columns:1fr 260px;gap:12px}
+  @media(max-width:880px){.botgrid{grid-template-columns:1fr}}
+  .sys{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .sys .s{background:var(--elevated);border-radius:9px;padding:9px 4px;text-align:center;position:relative;overflow:hidden}
+  .sys .s i{position:absolute;left:0;right:0;bottom:0;height:3px}
+  .sys .s .v{font-size:15px;font-weight:700}
+  .sys .s .l{font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:.03em;margin-top:3px}
+  .race .rrow{display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-top:1px solid var(--bsub)}
+  .race .rrow:first-of-type{border-top:none}
+  .race .rrow .k{color:var(--t2)} .race .rrow .v{font-weight:600}
+  .race .hd{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+  .race .hd .star{color:var(--warn)} .race .hd .nm{font-weight:700;font-size:13px} .race .hd .cd{margin-left:auto;font-size:11px;color:var(--purple)}
+
+  .legend{margin-top:14px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  @media(max-width:880px){.legend{grid-template-columns:repeat(2,1fr)}}
+  .legend .L{background:var(--surface);border:1px solid var(--bsub);border-radius:10px;padding:10px}
+  .legend .L h3{font-size:11px;font-weight:700;margin-bottom:4px}
+  .legend .L p{font-size:11px;color:var(--t2);line-height:1.45}
+  .legend .L .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="cap">
+    <span class="pill">Prototype · EdgeIQ · governed density</span>
+    <h1>Dense on purpose — but governed, and filling the canvas</h1>
+    <p>Every metric from today's 12-tile rail is still here (and more: a sparkline on every driver, a trend wall, full systems grid). What changed is <b>governance</b> — one hero anchor, three labeled clusters each with their own anchor, color only on off-target cells, tabular alignment — and the layout fills the space instead of leaving gutters. Illustrative values.</p>
+  </div>
+
+  <div class="app">
+    <div class="bar">
+      <div class="l"><span class="brand">A<b>°</b> ARNOLD · EdgeIQ</span><span class="sub">Jan 1 – Jun 14 · 2026 · 165 days in</span></div>
+      <div class="r"><span class="chip b">YTD</span><span class="chip p">Build block · wk 6</span><span class="chip ai">✦ Analyze</span></div>
+    </div>
+
+    <div class="grid">
+      <!-- HERO (anchor) -->
+      <div class="panel hero">
+        <div class="ph">Today · readiness <span class="meta">live</span></div>
+        <div class="speedo">
+          <svg width="190" height="116" viewBox="0 0 190 116">
+            <path d="M 16 104 A 79 79 0 0 1 38 49" fill="none" stroke="#f87171" stroke-width="10" stroke-linecap="round" opacity=".4"/>
+            <path d="M 47 41 A 79 79 0 0 1 143 41" fill="none" stroke="#fbbf24" stroke-width="10" stroke-linecap="round" opacity=".4"/>
+            <path d="M 152 49 A 79 79 0 0 1 174 104" fill="none" stroke="#4ade80" stroke-width="10" stroke-linecap="round" opacity=".75"/>
+            <g transform="rotate(40 95 104)"><line x1="95" y1="104" x2="95" y2="40" stroke="#4ade80" stroke-width="3" stroke-linecap="round"/></g>
+            <circle cx="95" cy="104" r="5" fill="#eceae4"/>
+            <text x="95" y="96" text-anchor="middle" font-size="34" font-weight="700" fill="#4ade80" font-family="sans-serif">72</text>
+            <text x="95" y="112" text-anchor="middle" font-size="9" fill="#6f6c64" font-family="sans-serif">/ 100</text>
+          </svg>
+          <div class="word">Go strong</div>
+          <div class="ctx">7d <b>68</b> · 30d <b>64</b> · A:C <b>1.08</b></div>
+          <div class="conf">
+            <div class="lbl"><span>Confidence</span><span>76% sure</span></div>
+            <div class="bar"><i></i></div>
+          </div>
+        </div>
+        <div class="why">
+          <div class="wh">Why — top drivers</div>
+          <div class="it"><div class="g" style="background:rgba(74,222,128,.14);color:var(--good)">＋</div><div class="n">HRV <s>· 7‑night high</s></div><div class="d" style="color:var(--good)">+8%</div></div>
+          <div class="it"><div class="g" style="background:rgba(248,113,113,.14);color:var(--bad)">－</div><div class="n">Sleep <s>· 6h12 vs 7h30</s></div><div class="d" style="color:var(--bad)">−18%</div></div>
+          <div class="it"><div class="g" style="background:rgba(96,165,250,.14);color:var(--blue)">≈</div><div class="n">Heat <s>· learned +1.4%/°C</s></div><div class="d" style="color:var(--t2)">mild</div></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: cockpit + wall -->
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="panel">
+          <div class="ph">Domain cockpit <span class="meta">score → drivers → 7‑day trend</span></div>
+          <div class="cock">
+            <!-- ACTIVITY -->
+            <div class="clu">
+              <div class="top"><span class="nm acc-run">Activity</span><span class="sc acc-run">74<s>/100</s></span></div>
+              <div class="drv"><span class="k">ACWR</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 11 L16 9 L32 10 L48 7 L64 6 L80 8" fill="none" stroke="#60a5fa" stroke-width="1.4"/></svg></span><span class="v neutral">1.08</span></div>
+              <div class="drv"><span class="k">rTSS today</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 13 L16 6 L32 12 L48 5 L64 9 L80 4" fill="none" stroke="#60a5fa" stroke-width="1.4"/></svg></span><span class="v neutral">57</span></div>
+              <div class="drv"><span class="k">7d load</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 10 L16 11 L32 8 L48 9 L64 7 L80 7" fill="none" stroke="#60a5fa" stroke-width="1.4"/></svg></span><span class="v neutral">312</span></div>
+            </div>
+            <!-- NUTRITION -->
+            <div class="clu">
+              <div class="top"><span class="nm acc-nut">Nutrition</span><span class="sc acc-nut">61<s>/100</s></span></div>
+              <div class="drv"><span class="k">Cal left</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 4 L16 6 L32 5 L48 8 L64 7 L80 9" fill="none" stroke="#4ade80" stroke-width="1.4"/></svg></span><span class="v flag-amber">+540</span></div>
+              <div class="drv"><span class="k">Protein</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 9 L16 8 L32 9 L48 7 L64 8 L80 6" fill="none" stroke="#4ade80" stroke-width="1.4"/></svg></span><span class="v flag-amber">−38g</span></div>
+              <div class="drv"><span class="k">Glycogen</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 7 L16 6 L32 8 L48 6 L64 5 L80 6" fill="none" stroke="#4ade80" stroke-width="1.4"/></svg></span><span class="v neutral">86%</span></div>
+            </div>
+            <!-- BODY -->
+            <div class="clu">
+              <div class="top"><span class="nm acc-body">Body</span><span class="sc acc-body">83<s>/100</s></span></div>
+              <div class="drv"><span class="k">HRV</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 11 L16 9 L32 8 L48 7 L64 5 L80 4" fill="none" stroke="#a78bfa" stroke-width="1.4"/></svg></span><span class="v neutral">64</span></div>
+              <div class="drv"><span class="k">Sleep</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 6 L16 7 L32 9 L48 8 L64 11 L80 12" fill="none" stroke="#a78bfa" stroke-width="1.4"/></svg></span><span class="v flag-bad">6.2h</span></div>
+              <div class="drv"><span class="k">Weight</span><span class="sp"><svg width="100%" height="16" viewBox="0 0 80 16" preserveAspectRatio="none"><path d="M0 8 L16 8 L32 7 L48 7 L64 6 L80 6" fill="none" stroke="#a78bfa" stroke-width="1.4"/></svg></span><span class="v neutral">178</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TREND WALL (small multiples) -->
+        <div class="panel">
+          <div class="ph">Trend wall · 8 weeks <span class="meta">small multiples · color marks off‑target only</span></div>
+          <div class="wall">
+            <div class="sm"><div class="t"><span>WEEKLY MI</span><b>34.2</b></div><svg viewBox="0 0 60 26" preserveAspectRatio="none"><path d="M0 20 L12 18 L24 14 L36 16 L48 10 L60 8" fill="none" stroke="#60a5fa" stroke-width="1.5"/></svg></div>
+            <div class="sm"><div class="t"><span>HRV</span><b>64</b></div><svg viewBox="0 0 60 26" preserveAspectRatio="none"><path d="M0 16 L12 14 L24 15 L36 11 L48 9 L60 7" fill="none" stroke="#a78bfa" stroke-width="1.5"/></svg></div>
+            <div class="sm"><div class="t"><span>SLEEP</span><b class="flag-bad">6.2h</b></div><svg viewBox="0 0 60 26" preserveAspectRatio="none"><path d="M0 8 L12 9 L24 11 L36 10 L48 14 L60 17" fill="none" stroke="#f87171" stroke-width="1.5"/></svg></div>
+            <div class="sm"><div class="t"><span>RHR</span><b>48</b></div><svg viewBox="0 0 60 26" preserveAspectRatio="none"><path d="M0 12 L12 12 L24 11 L36 12 L48 10 L60 10" fill="none" stroke="#22d3ee" stroke-width="1.5"/></svg></div>
+            <div class="sm"><div class="t"><span>PACE</span><b>8:31</b></div><svg viewBox="0 0 60 26" preserveAspectRatio="none"><path d="M0 10 L12 12 L24 11 L36 9 L48 8 L60 7" fill="none" stroke="#4ade80" stroke-width="1.5"/></svg></div>
+            <div class="sm"><div class="t"><span>WEIGHT</span><b>178</b></div><svg viewBox="0 0 60 26" preserveAspectRatio="none"><path d="M0 9 L12 10 L24 10 L36 11 L48 12 L60 12" fill="none" stroke="#9b988f" stroke-width="1.5"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- COACH -->
+    <div class="panel coach" style="margin-top:12px">
+      <div class="sig"><div class="a">A°</div><div class="nm">Coach</div></div>
+      <p>"Engine's fresh (HRV +8%) but you're a night short on sleep and 540 kcal / 38 g protein under for the build — the only amber cells on the board. Hit today's session, then prioritize an earlier night; I've left tomorrow's long run intact."</p>
+      <div class="o">open ↗</div>
+    </div>
+
+    <!-- SYSTEMS + RACE -->
+    <div class="botgrid" style="margin-top:12px">
+      <div class="panel">
+        <div class="ph">Health systems <span class="meta">tap a tile to expand inline</span></div>
+        <div class="sys">
+          <div class="s"><div class="v">88</div><div class="l">Cardio</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">71</div><div class="l">Metabolic</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v flag-amber">54</div><div class="l">Recovery</div><i style="background:var(--warn)"></i></div>
+          <div class="s"><div class="v">90</div><div class="l">Body</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">82</div><div class="l">Hormonal</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">76</div><div class="l">Immune</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">69</div><div class="l">Gut</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">85</div><div class="l">Bone</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">79</div><div class="l">Cognitive</div><i style="background:var(--good)"></i></div>
+          <div class="s"><div class="v">91</div><div class="l">Vascular</div><i style="background:var(--good)"></i></div>
+        </div>
+      </div>
+      <div class="panel race">
+        <div class="hd"><span class="star">★</span><span class="nm">Brooklyn Half</span><span class="cd">12d</span></div>
+        <div class="rrow"><span class="k">Predicted</span><span class="v">1:42:30</span></div>
+        <div class="rrow"><span class="k">Goal pace</span><span class="v">7:50/mi</span></div>
+        <div class="rrow"><span class="k">Current 30d</span><span class="v flag-amber">8:05/mi</span></div>
+        <div class="rrow"><span class="k">Readiness</span><span class="v">On track</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- governance legend -->
+  <div class="legend">
+    <div class="L"><h3><span class="dot" style="background:var(--good)"></span>Hierarchy, not removal</h3><p>One hero (the gauge), then each cluster has its own bigger anchor score; drivers sit quieter beneath. The eye lands, then grazes — all 12+ metrics stay.</p></div>
+    <div class="L"><h3><span class="dot" style="background:var(--blue)"></span>Clusters + small multiples</h3><p>Activity / Nutrition / Body groups, plus a trend wall of sparklines. Structure makes density scannable instead of noisy.</p></div>
+    <div class="L"><h3><span class="dot" style="background:var(--warn)"></span>Color = exceptions only</h3><p>Most numbers neutral; amber/red appears only on off‑target cells (sleep, cal/protein, recovery, current pace) so the signal pops out of the field.</p></div>
+    <div class="L"><h3><span class="dot" style="background:var(--purple)"></span>Fills the canvas</h3><p>Tabular numerals, aligned grids, edge‑to‑edge multi‑column layout — dense and legible, with no dead gutters.</p></div>
+  </div>
+</div>
+</body>
+</html>

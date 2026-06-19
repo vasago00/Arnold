@@ -408,10 +408,23 @@ async function syncHeartRate() {
 //                              wellnessSource, wellnessUpdatedAt }, newest first.
 
 async function syncDailyEnergy() {
+  // Phase 4r.energy.6 — the Garmin worker now persists steps/active/total kcal into
+  // hcDailyEnergy directly (every platform), so the HC daily-energy read is redundant.
+  // Defer when the worker is configured, mirroring syncWeight.
+  try {
+    const isGarmin = typeof window !== 'undefined' && !!(localStorage.getItem('arnold:cloud-sync:endpoint') || '').trim();
+    if (isGarmin) return { synced: 0, skipped: 'garmin_worker_preferred' };
+  } catch { /* fall through to HC */ }
   const lastSync = hcBridge.getLastSyncTime('dailyEnergy');
-  // First run: pull 14 days so DCY has a reasonable baseline immediately.
-  // Subsequent runs overlap by a day to catch late-arriving data.
-  const startDate = lastSync ? isoDate(lastSync) : daysAgo(14);
+  // First run: pull 14 days so DCY has a baseline immediately. Incremental runs
+  // re-read a small fixed 3-day window — the daily upsert is keyed by date, so
+  // the overlap is idempotent and it catches late-arriving / corrected data.
+  // NOTE: the actual "steps fail to read" fix lives in the native plugin — a
+  // source app can persist a 0-count StepsRecord that makes readRecords throw
+  // for the whole batch ("count must not be less than 1, currently 0");
+  // HealthConnectPlugin.kt now reads per-day with a server-side aggregate
+  // fallback so one bad record no longer sinks the stream.
+  const startDate = lastSync ? daysAgo(3) : daysAgo(14);
   const endDate = isoDate(new Date());
 
   const [stepsRows, activeKcalRows, totalKcalRows] = await Promise.all([

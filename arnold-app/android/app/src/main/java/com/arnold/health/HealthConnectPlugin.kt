@@ -10,6 +10,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.*
 import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import kotlinx.coroutines.*
 import java.time.Instant
@@ -304,8 +305,45 @@ class HealthConnectPlugin : Plugin() {
     // when records existed in HC, so readRecords + manual sum is the
     // version-safe path (matches the pattern of readExerciseSessions).
 
-    private fun localDateOf(instant: Instant): String {
-        return instant.atZone(ZoneId.systemDefault()).toLocalDate().toString()
+    // Resilient per-day daily-total reader. Reads ONE local day at a time so a
+    // single corrupt record can't sink the whole window. Primary path reads raw
+    // records and sums them (works on alpha10). If a day's readRecords throws —
+    // e.g. a source app persisted a StepsRecord with count==0, which makes the
+    // androidx deserializer throw "count must not be less than 1, currently 0"
+    // for that whole day — fall back to the server-side aggregate, which sums
+    // without materializing/validating individual records. Days that fail both
+    // paths are skipped rather than failing the entire stream.
+    private suspend fun dailyTotals(
+        startDate: String,
+        endDate: String,
+        valueKey: String,
+        readDaySum: suspend (TimeRangeFilter) -> Double,
+        aggregateDay: suspend (TimeRangeFilter) -> Double,
+    ): JSArray {
+        val byDate = sortedMapOf<String, Double>()
+        var d = LocalDate.parse(startDate, DateTimeFormatter.ISO_LOCAL_DATE)
+        val endD = LocalDate.parse(endDate, DateTimeFormatter.ISO_LOCAL_DATE)
+        while (!d.isAfter(endD)) {
+            val filter = TimeRangeFilter.between(
+                d.atStartOfDay(ZoneId.systemDefault()).toInstant(),
+                d.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant()
+            )
+            val total = try {
+                readDaySum(filter)
+            } catch (e: Exception) {
+                try { aggregateDay(filter) } catch (_: Exception) { 0.0 }
+            }
+            if (total > 0.0) byDate[d.toString()] = total
+            d = d.plusDays(1)
+        }
+        val records = JSArray()
+        for ((date, v) in byDate.toList().asReversed()) {
+            val obj = JSObject()
+            obj.put("date", date)
+            obj.put(valueKey, v)
+            records.put(obj)
+        }
+        return records
     }
 
     @PluginMethod
@@ -315,24 +353,18 @@ class HealthConnectPlugin : Plugin() {
         val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
         scope.launch {
             try {
-                val start = parseDate(startDate)
-                val end   = parseDateEnd(endDate)
-                val response = client.readRecords(
-                    ReadRecordsRequest(StepsRecord::class, TimeRangeFilter.between(start, end))
+                val records = dailyTotals(startDate, endDate, "steps",
+                    readDaySum = { filter ->
+                        val response = client.readRecords(ReadRecordsRequest(StepsRecord::class, filter))
+                        var sum = 0L
+                        for (record in response.records) sum += record.count
+                        sum.toDouble()
+                    },
+                    aggregateDay = { filter ->
+                        val agg = client.aggregate(AggregateRequest(setOf(StepsRecord.COUNT_TOTAL), filter))
+                        (agg[StepsRecord.COUNT_TOTAL] ?: 0L).toDouble()
+                    }
                 )
-                val byDate = mutableMapOf<String, Long>()
-                for (record in response.records) {
-                    val date = localDateOf(record.startTime)
-                    byDate[date] = (byDate[date] ?: 0L) + record.count
-                }
-                val records = JSArray()
-                for ((date, steps) in byDate.toSortedMap().toList().asReversed()) {
-                    if (steps <= 0L) continue
-                    val obj = JSObject()
-                    obj.put("date", date)
-                    obj.put("steps", steps)
-                    records.put(obj)
-                }
                 call.resolve(JSObject().put("records", records))
             } catch (e: Exception) { call.reject("Failed to read steps: ${e.message}") }
         }
@@ -345,24 +377,18 @@ class HealthConnectPlugin : Plugin() {
         val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
         scope.launch {
             try {
-                val start = parseDate(startDate)
-                val end   = parseDateEnd(endDate)
-                val response = client.readRecords(
-                    ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, TimeRangeFilter.between(start, end))
+                val records = dailyTotals(startDate, endDate, "kcal",
+                    readDaySum = { filter ->
+                        val response = client.readRecords(ReadRecordsRequest(ActiveCaloriesBurnedRecord::class, filter))
+                        var sum = 0.0
+                        for (record in response.records) sum += record.energy.inKilocalories
+                        sum
+                    },
+                    aggregateDay = { filter ->
+                        val agg = client.aggregate(AggregateRequest(setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL), filter))
+                        agg[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0
+                    }
                 )
-                val byDate = mutableMapOf<String, Double>()
-                for (record in response.records) {
-                    val date = localDateOf(record.startTime)
-                    byDate[date] = (byDate[date] ?: 0.0) + record.energy.inKilocalories
-                }
-                val records = JSArray()
-                for ((date, kcal) in byDate.toSortedMap().toList().asReversed()) {
-                    if (kcal <= 0.0) continue
-                    val obj = JSObject()
-                    obj.put("date", date)
-                    obj.put("kcal", kcal)
-                    records.put(obj)
-                }
                 call.resolve(JSObject().put("records", records))
             } catch (e: Exception) { call.reject("Failed to read active calories: ${e.message}") }
         }
@@ -375,24 +401,18 @@ class HealthConnectPlugin : Plugin() {
         val endDate   = call.getString("endDate")   ?: run { call.reject("endDate required");   return }
         scope.launch {
             try {
-                val start = parseDate(startDate)
-                val end   = parseDateEnd(endDate)
-                val response = client.readRecords(
-                    ReadRecordsRequest(TotalCaloriesBurnedRecord::class, TimeRangeFilter.between(start, end))
+                val records = dailyTotals(startDate, endDate, "kcal",
+                    readDaySum = { filter ->
+                        val response = client.readRecords(ReadRecordsRequest(TotalCaloriesBurnedRecord::class, filter))
+                        var sum = 0.0
+                        for (record in response.records) sum += record.energy.inKilocalories
+                        sum
+                    },
+                    aggregateDay = { filter ->
+                        val agg = client.aggregate(AggregateRequest(setOf(TotalCaloriesBurnedRecord.ENERGY_TOTAL), filter))
+                        agg[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0
+                    }
                 )
-                val byDate = mutableMapOf<String, Double>()
-                for (record in response.records) {
-                    val date = localDateOf(record.startTime)
-                    byDate[date] = (byDate[date] ?: 0.0) + record.energy.inKilocalories
-                }
-                val records = JSArray()
-                for ((date, kcal) in byDate.toSortedMap().toList().asReversed()) {
-                    if (kcal <= 0.0) continue
-                    val obj = JSObject()
-                    obj.put("date", date)
-                    obj.put("kcal", kcal)
-                    records.put(obj)
-                }
                 call.resolve(JSObject().put("records", records))
             } catch (e: Exception) { call.reject("Failed to read total calories: ${e.message}") }
         }

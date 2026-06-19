@@ -6,6 +6,7 @@ import { storage } from "./storage.js";
 import { weekStart } from "./derive/volume.js";
 import { isRun, isStrength } from "./activityClass.js";
 import { localDate, ymd } from "./time.js";
+import { CATEGORY } from "../theme/tokens.js";
 
 // ─── ISO week key ────────────────────────────────────────────────────────────
 export function weekKey(date = new Date()) {
@@ -23,17 +24,22 @@ export function nextWeekKey(date = new Date()) {
 //   distanceMi?: number, durationMin?: number, intensity?: 'easy'|'mod'|'hard',
 //   notes?: string }
 
+// Phase 0.1 — colors sourced from src/theme/tokens.js (CATEGORY). Values unchanged.
 export const DAY_TYPES = [
-  { id: 'easy_run',  label: 'Easy run',     color: '#60a5fa', icon: '◷' },
-  { id: 'long_run',  label: 'Long run',     color: '#3b82f6', icon: '◐' },
-  { id: 'tempo',     label: 'Tempo',        color: '#fbbf24', icon: '▲' },
-  { id: 'intervals', label: 'Intervals',    color: '#f87171', icon: '⫽' },
-  { id: 'strength',  label: 'Strength',     color: '#a78bfa', icon: '◈' },
-  { id: 'hiit',      label: 'HIIT',         color: '#fb7185', icon: '⚡' },
-  { id: 'mobility',  label: 'Mobility',     color: '#5eead4', icon: '◍' },
-  { id: 'cross',     label: 'Cross-train',  color: '#34d399', icon: '◇' },
-  { id: 'rest',      label: 'Rest',         color: '#6b7280', icon: '○' },
-  { id: 'race',      label: 'Race',         color: '#ef4444', icon: '★' },
+  { id: 'easy_run',  label: 'Easy run',     color: CATEGORY.easy_run,  icon: '◷' },
+  { id: 'long_run',  label: 'Long run',     color: CATEGORY.long_run,  icon: '◐' },
+  { id: 'tempo',     label: 'Tempo',        color: CATEGORY.tempo,     icon: '▲' },
+  { id: 'intervals', label: 'Intervals',    color: CATEGORY.intervals, icon: '⫽' },
+  { id: 'strength',  label: 'Strength',     color: CATEGORY.strength,  icon: '◈' },
+  { id: 'hiit',      label: 'HIIT',         color: CATEGORY.hiit,      icon: '⚡' },
+  { id: 'mobility',  label: 'Mobility',     color: CATEGORY.mobility,  icon: '◍' },
+  { id: 'cross',     label: 'Cross-train',  color: CATEGORY.cross,     icon: '◇' },
+  { id: 'cycle',     label: 'Cycling',      color: CATEGORY.cycle,     icon: '◉' },
+  { id: 'swim',      label: 'Swim',         color: CATEGORY.swim,      icon: '≈' },
+  { id: 'ski',       label: 'Ski',          color: CATEGORY.ski,       icon: '❄' },
+  { id: 'walk',      label: 'Walk/Hike',    color: CATEGORY.walk,      icon: '⛰' },
+  { id: 'rest',      label: 'Rest',         color: CATEGORY.rest,      icon: '○' },
+  { id: 'race',      label: 'Race',         color: CATEGORY.race,      icon: '★' },
 ];
 
 export const DAY_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -109,6 +115,60 @@ export function applyTemplate(weekKeyStr, templateId) {
   return savePlannerWeek(weekKeyStr, { weekStart: weekKeyStr, days: tpl.days.map(d => ({ ...d })) });
 }
 
+
+// ─── Multi-session model (Emil 2026-06-17) ──────────────────────────────────
+// A day can hold MULTIPLE planned sessions (hybrid athletes: run + strength +
+// core). New shape: day = { sessions: [{ type, distanceMi?, durationMin?,
+// slot?: 'AM'|'PM'|'EVE' }] }. Legacy shape (one { type, ... } per day) is still
+// read transparently via daySessions() so old stored weeks keep working.
+const SESSION_RUN_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'race']);
+
+// Normalize a day record (legacy OR new) → array of real sessions (rest excluded).
+export function daySessions(day) {
+  if (!day) return [];
+  if (Array.isArray(day.sessions)) return day.sessions.filter(s => s && s.type && s.type !== 'rest');
+  return (day.type && day.type !== 'rest') ? [{ ...day }] : [];
+}
+
+// A planned rest day = no real sessions.
+export function dayIsRest(day) {
+  return daySessions(day).length === 0;
+}
+
+// Sum of planned run miles across all run-type sessions that day.
+export function dayRunMiles(day) {
+  return daySessions(day).reduce((mi, s) =>
+    mi + (SESSION_RUN_TYPES.has(s.type) ? (Number(s.distanceMi) || 0) : 0), 0);
+}
+
+// Count of planned sessions that day (rest = 0).
+export function dayWorkoutCount(day) {
+  return daySessions(day).length;
+}
+
+// Build a day record from a sessions array. Stores `sessions` for multi-session
+// readers AND mirrors the PRIMARY session as legacy `type`/`distanceMi` so the
+// many existing `.type` readers (drawer, day cells, coach) keep working until they
+// migrate to daySessions(). Empty → rest.
+export function makeDay(sessions) {
+  const real = (sessions || []).filter(s => s && s.type && s.type !== 'rest');
+  const primary = real[0] || null;
+  const out = { sessions: real, type: primary ? primary.type : 'rest' };
+  if (primary && Number(primary.distanceMi) > 0) out.distanceMi = Number(primary.distanceMi);
+  return out;
+}
+
+// Week totals — planned run miles + session count across the 7 days. Powers the
+// calendar "totals" column (#2) and on-track read.
+export function weekPlanTotals(week) {
+  const days = week?.days || [];
+  return days.reduce((acc, d) => {
+    acc.runMiles += dayRunMiles(d);
+    acc.sessions += dayWorkoutCount(d);
+    return acc;
+  }, { runMiles: 0, sessions: 0 });
+}
+
 // ─── Lookup helpers ──────────────────────────────────────────────────────────
 // Get today's planned entry from the current week (or null if no plan).
 export function todayPlanned(date = new Date()) {
@@ -141,11 +201,12 @@ export function checkTodayCompletion(dateStr, planned) {
   const todayHasLog = todayLogs.some(l => logFits(l).length > 0 || l.workout || l.distanceMi || l.duration);
   const hasAny = todayActs.length > 0 || todayWkts.length > 0 || todayHasLog;
 
-  const isRest = planned.type === 'rest';
-  if (isRest) return { completed: !hasAny, hasAny };
+  // Multi-session aware: a day is "complete" when every planned modality (run /
+  // strength) that was scheduled has a matching logged activity. Rest = no sessions.
+  const sessions = daySessions(planned);
+  if (sessions.length === 0) return { completed: !hasAny, hasAny };
   if (!hasAny) return { completed: false, hasAny: false };
 
-  const pt = planned.type || '';
   const logHasType = (l, re) => logFits(l).some(fd => re.test(fd?.activityType || fd?.type || ''))
     || re.test(l.workout || '')
     || re.test(l.type || '');
@@ -159,8 +220,11 @@ export function checkTodayCompletion(dateStr, planned) {
     || todayWkts.some(w => /strength/i.test(w.type || ''))
     || todayLogs.some(l => logHasType(l, /strength|weight/i));
 
-  if (/run|tempo|interval|long/.test(pt) && hasRun) return { completed: true, hasAny };
-  if (/strength/.test(pt) && hasStrength) return { completed: true, hasAny };
+  const wantRun      = sessions.some(s => /run|tempo|interval|long|race/.test(s.type || ''));
+  const wantStrength = sessions.some(s => /strength/.test(s.type || ''));
+  if (wantRun && !hasRun) return { completed: false, hasAny };
+  if (wantStrength && !hasStrength) return { completed: false, hasAny };
+  if (wantRun || wantStrength) return { completed: true, hasAny };
 
   // Fallback: any activity counts as completion for non-specific plan types
   return { completed: hasAny, hasAny };

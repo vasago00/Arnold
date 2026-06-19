@@ -226,9 +226,11 @@ export function deriveDailyCalorieTarget(opts = {}) {
   // ── Base target ─────────────────────────────────────────────────────────
   // Start from empirical TDEE when we trust it; fall back to model
   // otherwise. Subtract a deficit sized to hit the outcome.
+  // Phase 4r.energy.7 — model fallback uses restingTdee (no workouts); eat-back adds
+  // them once below. Old tdee.tdee included activityKcal AND eat-back re-added it.
   const tdeeBase = rec?.tdeeEmpirical
                 ?? rec?.tdeeCurrent
-                ?? tdee?.tdee
+                ?? tdee?.restingTdee
                 ?? 2000;
 
   // Deficit needed for the user's actual goal pace, not a generic 0.7 lb/wk.
@@ -697,5 +699,33 @@ if (typeof window !== 'undefined') {
     console.log('%cOutcome ledger (last 5):', 'color:#7dcfff;font-weight:700',
       readOutcomeLedger().slice(-5));
     return { outcome: out, targets, overrides: getOverrides(), ledger: readOutcomeLedger() };
+  };
+}
+
+// ── Console diagnostic: how today's calorie target is assembled ──────────────
+// Run `window.calorieTargetDebug()` (or pass a 'YYYY-MM-DD') in the app's
+// devtools. Prints a top-to-bottom breakdown so the target is auditable:
+// tdeeBase (resting TDEE = RMR + steps-NEAT + TEF, or empirical) − cut deficit
+// + recovery adj + workout eat-back + race bonus, with the RMR floor shown.
+if (typeof window !== 'undefined') {
+  window.calorieTargetDebug = function calorieTargetDebug(date) {
+    const r = deriveDailyCalorieTarget(date ? { date } : {});
+    const c = r.components || {};
+    let rmrOnly = null;
+    try { rmrOnly = computeRMR()?.rmr; } catch {}
+    console.log(`%cCalorie target — ${r.asOf}`, 'font-weight:bold;font-size:13px');
+    console.table([
+      { component: 'tdeeBase (resting TDEE / empirical)', kcal: c.tdeeBase },
+      { component: 'cut deficit', kcal: c.dailyDeficit != null ? -c.dailyDeficit : 0 },
+      { component: 'recovery adj', kcal: c.recoveryAdj },
+      { component: `eat-back (burn ${c.reportedBurn}→${c.correctedBurn} ×${c.burnFactor}, frac ${c.racePrepFraction})`, kcal: c.eatBack },
+      { component: 'race flat bonus', kcal: c.racePrepFlatBonus },
+      { component: '= TARGET', kcal: r.derived },
+      { component: `RMR (resting only)`, kcal: rmrOnly },
+      { component: `RMR floor (${r.flooredAtRmr ? 'APPLIED — target was below RMR' : 'not hit'})`, kcal: r.floor },
+    ]);
+    console.log(`loss rate used: ${r.lossRateUsed} lb/wk${r.goalAggressive ? '  ⚠ goal flagged aggressive' : ''}  ·  recovery debt: ${r.recoveryDebt}`);
+    console.log('Full object:', r);
+    return r;
   };
 }

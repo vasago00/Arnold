@@ -33,12 +33,15 @@ test('defaultSelectCheckpoints: races, pace-detected efforts, and long runs — 
     { date: '2026-03-20', activityType: 'running', name: 'Morning Run', distanceMi: 4.2, durationSecs: 2400 },
     { date: '2026-03-25', type: 'hyrox', name: 'HYROX', distanceKm: 0, durationSecs: 5000 },
   ];
-  const picked = defaultSelectCheckpoints(acts).map(a => a.date);
+  const sel = defaultSelectCheckpoints(acts);
+  const picked = sel.map(c => c.run.date);
   assert.ok(picked.includes('2026-02-01'), 'long run kept');
   assert.ok(picked.includes('2026-03-01'), 'fast 10K kept');
   assert.ok(!picked.includes('2026-03-15'), 'training-pace 10K dropped');
   assert.ok(!picked.includes('2026-03-20'), 'easy run dropped');
   assert.ok(!picked.includes('2026-03-25'), 'HYROX dropped');
+  assert.equal(sel.find(c => c.run.date === '2026-03-01').tier, 'race', 'fast 10K tiered race');
+  assert.equal(sel.find(c => c.run.date === '2026-02-01').tier, 'long', 'long run tiered long');
 });
 
 test('replays chronologically: first race seeds fitness, a later hot+slow race teaches heat', () => {

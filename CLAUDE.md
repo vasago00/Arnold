@@ -3,10 +3,16 @@
 This file orients any new Cowork/Claude session working in this folder.
 
 ## Resume protocol (read first)
-1. **Read `HANDOVER.md`** at the repo root — it is the canonical "where we are" state.
-2. Read the docs it references as needed for the active task.
-3. Continue from the **Active task** / **Current focus** in `HANDOVER.md`.
-4. Update `HANDOVER.md` at checkpoints so the next window can resume cleanly.
+1. **Read `DESIGN_DECISIONS.md`** at the repo root FIRST — binding UI/design rules + how to work here (do the
+   smallest change, restate-the-ask-before-building, one-source-of-truth, no narrative on the card except Coach).
+   Treat it as law; if a rule is wrong, Emil edits that doc once.
+2. **Read `HANDOVER.md`** — the canonical "where we are" state.
+3. **Read `EXECUTION_PLAN_2026-06.md`** — the LIVING uplift plan (Status Board + Progress Log).
+   This is the active multi-phase improvement track; keep its board + log current as steps move.
+   Companion: `PRODUCT_AUDIT_2026-06.md` (the why behind the uplift).
+4. Read the docs it references as needed for the active task.
+5. Continue from the **Active task** / **Current focus** in `HANDOVER.md` and the uplift plan's board.
+6. Update `HANDOVER.md` + the uplift plan at checkpoints; update `DESIGN_DECISIONS.md` whenever a design decision is settled.
 
 If a previous window crashed and `HANDOVER.md` looks stale, the prior session's
 transcript can be recovered via the session tools — but `HANDOVER.md` is the
