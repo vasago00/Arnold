@@ -24,6 +24,7 @@
 
 import { storage, KEYS } from './storage.js';
 import { localDate, ymd } from './time.js';
+import { parseCronometerCSV } from './parsers/cronometerParser.js';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -109,18 +110,34 @@ function round1(n) { return Math.round(n * 10) / 10; }
 // createdAt, so refreshing createdAt on every fetch keeps the live data
 // winning over any stale CSV import.
 
+// Fire an immediate, best-effort cloud push after a nutrition write. The
+// debounced auto-push (cloud-sync's onStorageChange listener, 1s) can be LOST
+// if the app backgrounds before its timer fires — which is exactly how a mobile
+// Cronometer import failed to reach the web on 2026-07-02: the entry was written
+// to nutritionLog locally, the 1s push never fired, and since the relay stores
+// the whole blob last-push-wins, the server never received it. push() has an
+// in-flight guard, so a burst of writes (a multi-day CSV import) coalesces into
+// ~one network push. Dynamic import avoids load-order coupling and the push
+// no-ops cleanly when unpaired / no passphrase.
+function flushCloudPush() {
+  try {
+    return import('./cloud-sync.js').then(m => m.push?.()).catch(() => {});
+  } catch { return Promise.resolve(); }
+}
+
 function upsertFullDayEntry(date, macros, meta = {}) {
   const id = `cronometer-live:${date}`;
   const all = storage.get('nutritionLog') || [];
   const idx = all.findIndex(e => e.id === id);
+  const prev = idx >= 0 ? all[idx] : null;
   const nowIso = new Date().toISOString();
   const entry = {
     id,
-    name: 'Cronometer — live sync',
+    name: meta.name || 'Cronometer — live sync',
     date,
     time: '00:00',
     meal: 'full-day',
-    source: 'cronometer-live',
+    source: meta.source || 'cronometer-live',
     servings: 1,
     macros: {
       calories: macros.calories || 0,
@@ -145,7 +162,45 @@ function upsertFullDayEntry(date, macros, meta = {}) {
   };
   if (idx >= 0) all[idx] = entry; else all.unshift(entry);
   storage.set('nutritionLog', all, { skipValidation: true });
+  // Publish immediately when the day's numbers actually changed, so a one-shot
+  // write (CSV import) or a fresh live-pull always reaches the relay even if the
+  // app backgrounds before the debounced push fires. Skip when only createdAt
+  // moved (idle 5-min live-pulls) to avoid pushing identical data every cycle.
+  const changed = !prev || JSON.stringify(prev.macros) !== JSON.stringify(entry.macros);
+  if (changed) flushCloudPush();
   return entry;
+}
+
+// ── Manual CSV import (the COMPLIANT path — no worker, no scraping) ───────────
+// You export your OWN Daily Nutrition CSV from Cronometer (Settings → Account →
+// Export Data → Daily Nutrition) and paste/upload it here. We parse it and write
+// a canonical full-day entry per day — identical shape to the live sync — so every
+// surface (daily totals, EdgeIQ micros, fuel score) reads it the same way.
+export function importCronometerCsvText(text) {
+  let days;
+  try { days = parseCronometerCSV(text || ''); }
+  catch (e) { return { ok: false, count: 0, dates: [], error: String(e?.message || e) }; }
+  if (!days || !days.length) {
+    return { ok: false, count: 0, dates: [], error: 'No day rows found — is this a Cronometer "Daily Nutrition" CSV export?' };
+  }
+  const dates = [];
+  for (const d of days) {
+    if (!d.date) continue;
+    // parseCronometerCSV returns water in GRAMS (≈ mL 1:1); upsertFullDayEntry
+    // stores macros.water as mL, so it passes straight through.
+    upsertFullDayEntry(d.date, {
+      calories: d.calories || 0, protein: d.protein || 0, carbs: d.carbs || 0,
+      fat: d.fat || 0, fiber: d.fiber || 0, sugar: d.sugar || 0, water: d.water || 0,
+      sodium: d.sodium ?? 0, potassium: d.potassium ?? 0, magnesium: d.magnesium ?? 0,
+      calcium: d.calcium ?? 0, iron: d.iron ?? 0, caffeine: d.caffeine ?? 0, alcohol: d.alcohol ?? 0,
+    }, { source: 'cronometer-csv', name: 'Cronometer — CSV import' });
+    dates.push(d.date);
+  }
+  // A manual import is an explicit user action — always publish, even if the
+  // day's numbers are unchanged from a prior import (that's the recovery path
+  // when a device's earlier write never reached the relay).
+  flushCloudPush();
+  return { ok: true, count: dates.length, dates: dates.sort() };
 }
 
 // ── Per-meal upsert (Phase 4r.signals.1) ────────────────────────────────────

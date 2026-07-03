@@ -41,6 +41,25 @@ Source data flows in one direction:
 5. Storage shape changes go through a migration. Layer 0 schemas
    are immutable once shipped — new fields only, never re-typed.
 
+### Canonical energy variables (Layer 1) — TDEE & RMR
+
+Per rule 1, energy expenditure has **one** canonical source: `core/energyExpenditure.js`
+(Coach Unification Slice 2, 2026-06). It composes three inputs as a confidence hierarchy
+and answers two distinct questions:
+
+- **`tdee`** = "what did I burn TODAY" → `device` (watch 24/7 total, dcy Tier 1, gated ≥ RMR)
+  → `model` (RMR + activity + de-duped NEAT + TEF). Empirical is deliberately NOT used here
+  (it's a multi-week average, wrong for a single day).
+- **`maintenance`** = the stable baseline for the cut → `empirical` (intake ± weight trend,
+  when confidence is high/medium) → today's `expenditure` otherwise.
+- Always returns the **model decomposition** (rmr/activity/neat/tef/restingTdee/intake) plus
+  `source` + `confidence` so the transparency hero can name where the number came from.
+
+**RMR** has one source too: `dcy.bmrWithTier()` (lab → Katch → Mifflin → floor 1700).
+`energyBalance.computeRMR()` is a thin wrapper over it (kept for call-site stability).
+Surfaces showing a TDEE/deficit number (EnergyTimingChart, cutMode) read the service; the
+DCY card aligns via the shared RMR + the Tier-1 ≥RMR gate. Duplicating either is a bug.
+
 ---
 
 # LAYER 0 — Source data (golden, immutable)

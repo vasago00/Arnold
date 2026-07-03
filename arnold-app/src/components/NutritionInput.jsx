@@ -17,6 +17,7 @@ import { HealthTileBase } from './HealthSystemTile.jsx';
 import { SYSTEM_ICONS } from './systemIcons.jsx';
 import Button from './ui/Button.jsx';
 import Pill from './ui/Pill.jsx';
+import { DataHealthBanner } from './DataHealthBanner.jsx';
 // Phase 4r.dataspine.4 — all macro reads route through goalModel.
 // Legacy getDynamicMacroTarget + resolveCalorieTarget imports removed
 // (their consumers in this file now read getEffectiveTargets fields
@@ -25,7 +26,7 @@ import { getEffectiveTargets } from '../core/goalModel.js';
 import {
   MEAL_CATEGORIES, createEntry, saveEntry, deleteEntry,
   getEntriesForDate, dailyTotals, goalImpact,
-  lookupBarcode, searchFood, calculatePortion, recognizeFoodPhoto,
+  lookupBarcode, searchFood, calculatePortion, recognizeFoodPhoto, lastFoodProvider,
 } from '../core/nutrition.js';
 import { localDate, ymd } from '../core/time.js';
 import {
@@ -62,11 +63,13 @@ const sectionDot = (color) => ({
   background: color, boxShadow: `0 0 6px ${color}80`,
 });
 
+// Only the two working, FatSecret-backed modes are exposed. Photo (needs an AI vision
+// backend) and Voice (needs macro parsing of the transcript) are half-built — their tabs
+// are hidden until they're real; the render blocks + handlers below stay dormant so we can
+// re-enable them per-mode later without re-plumbing. (Emil 2026-07-01.)
 const INPUT_MODES = [
   { id: 'manual',  label: 'Manual',  icon: '✎' },
   { id: 'barcode', label: 'Barcode', icon: '⊞' },
-  { id: 'photo',   label: 'Photo',   icon: '◉' },
-  { id: 'voice',   label: 'Voice',   icon: '◎' },
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1022,22 +1025,41 @@ function LogFoodPanel({ dateStr, onSaved, onCancel }) {
               ))}
             </div>
           )}
+          {/* FatSecret attribution — REQUIRED by their Premier-Free terms whenever
+              their data is shown. Renders only when FatSecret is the active provider. */}
+          {lastFoodProvider() === 'fatsecret' && searchResults.length > 0 && (
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'right', padding: '2px 4px' }}>
+              Powered by <a href="https://www.fatsecret.com" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-secondary)' }}>FatSecret</a>
+            </div>
+          )}
           <input value={manualName} onChange={e => setManualName(e.target.value)} placeholder="Food name"
             style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-            <input value={manualCal} onChange={e => setManualCal(e.target.value)} placeholder="Calories" type="number"
-              style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-            <input value={manualPro} onChange={e => setManualPro(e.target.value)} placeholder="Protein (g)" type="number"
-              style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-            <input value={manualCarb} onChange={e => setManualCarb(e.target.value)} placeholder="Carbs (g)" type="number"
-              style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-            <input value={manualFat} onChange={e => setManualFat(e.target.value)} placeholder="Fat (g)" type="number"
-              style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-            <input value={manualFiber} onChange={e => setManualFiber(e.target.value)} placeholder="Fiber (g)" type="number"
-              style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-            <input value={manualWater} onChange={e => setManualWater(e.target.value)} placeholder="Water (ml)" type="number"
-              style={{ padding: '9px 11px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 }} />
-          </div>
+          {/* Labeled, tighter macro grid (2026-07-01 legibility patch). Persistent labels
+              — placeholders vanish once a value populates, so bare numbers were unreadable.
+              3 columns keeps the fields from stretching absurdly wide on the desktop panel.
+              (Full redesign + serving-unit picker parked in the UI/UX lift.) */}
+          {(() => {
+            const cellLbl = { fontSize: 9, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' };
+            const cellInp = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 10, border: '0.5px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 12 };
+            const fields = [
+              { label: 'Calories', unit: 'kcal', val: manualCal,   set: setManualCal },
+              { label: 'Protein',  unit: 'g',    val: manualPro,   set: setManualPro },
+              { label: 'Carbs',    unit: 'g',    val: manualCarb,  set: setManualCarb },
+              { label: 'Fat',      unit: 'g',    val: manualFat,   set: setManualFat },
+              { label: 'Fiber',    unit: 'g',    val: manualFiber, set: setManualFiber },
+              { label: 'Water',    unit: 'ml',   val: manualWater, set: setManualWater },
+            ];
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {fields.map(f => (
+                  <label key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                    <span style={cellLbl}>{f.label} <span style={{ opacity: 0.6 }}>({f.unit})</span></span>
+                    <input value={f.val} onChange={e => f.set(e.target.value)} placeholder={f.unit} type="number" inputMode="decimal" style={cellInp} />
+                  </label>
+                ))}
+              </div>
+            );
+          })()}
 
           {(manualCal || manualPro || manualCarb || manualFat) && (
             <PortionSelector
@@ -1380,6 +1402,11 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
+      {/* Data-integrity: when a configured source (e.g. Cronometer) is stale/down,
+          say so right above the macro dials + Health Systems grid — those read LOW
+          on missing food, and silence would imply the low numbers are real. */}
+      <DataHealthBanner />
+
       {/* ═════ SINGLE NUTRITION PANEL — matches Activity layout ═════ */}
       <div style={{...panelStyle, ...(isMobile ? { padding: '10px 12px' } : null)}}>
         {/* Header — Nutrition title + dynamic target.
@@ -1525,9 +1552,21 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
       {/* ═════ INPUT — Hydration + Stack strip (always visible) ═════ */}
       <DailyLogStrip dateStr={dateStr} totalWater={totals.water} onUpdate={refresh} />
 
-      {/* Log Food button removed (Emil 2026-06-10) — the manual logging UI is
-          deferred; the LogFoodPanel below stays dormant for future development.
-          Cronometer live-sync still populates nutrition. */}
+      {/* Log Food — re-enabled 2026-06-27. It was deferred on 2026-06-10 while the only
+          food source was Open Food Facts; now that FatSecret (sanctioned API) is live,
+          manual logging is worthwhile again. Opens LogFoodPanel (search / barcode).
+          Cronometer live-sync still populates nutrition in parallel. */}
+      {!showAdd && (
+        <button
+          onClick={() => setShowAdd(true)}
+          style={{
+            width: '100%', marginTop: 8, padding: '9px 12px', borderRadius: 10,
+            border: '0.5px solid rgba(74,222,128,0.35)', background: 'rgba(74,222,128,0.10)',
+            color: '#4ade80', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+          }}>
+          + Log food
+        </button>
+      )}
 
       {showAdd && (
         <LogFoodPanel

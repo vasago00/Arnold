@@ -28,9 +28,14 @@ import { currentTrueWeightLbs } from './bodyWeight.js';
 import { dailyTotals } from './nutrition.js';
 import { getGoals } from './goals.js';
 import { allActivities as allActivitiesDeduped } from './dcyMath.js';
+// Slice 2 (one-source TDEE/RMR): the SHARED energy primitives live in dcy.js. Namespace
+// import + call-time access (same pattern trainingStress uses for dcyMath) so module
+// load-order can never cycle. dcy.js does NOT import energyBalance, so this is acyclic.
+import * as _dcy from './dcy.js';
 // Phase 4r.utc.2 — canonical helpers from core/time.js.
 import { localDate, ymd } from './time.js';
 import { parseLocalDate } from './dateUtils.js';
+import { isRun, isWalk } from './activityClass.js';   // foot-borne activities for NEAT step de-dup
 
 const LB_PER_KG       = 2.20462;
 const KG_PER_LB       = 0.45359;
@@ -43,6 +48,9 @@ const NEAT_FACTOR_MAX     = 0.25;      // very active ceiling
 // Steps-derived NEAT (Tudor-Locke/Bassett, +/-20% vs DLW). Phase 4r.energy.6 —
 // used instead of the flat factor when a real daily step count exists.
 const NEAT_KCAL_PER_STEP_PER_KG = 0.0005;  // per-kg (Phase 4r.energy.7)
+const STEPS_PER_MILE = 1500;               // est. run/walk steps per mile — netted OUT of
+                                           // NEAT so workout steps aren't double-counted
+                                           // (their energy is already in activityKcal).
 
 // Phase 4r.utc.2 — localDate / ymd now imported from ./time.js
 // (canonical). Use localDate() for today, ymd(d) for any Date.
@@ -143,46 +151,26 @@ export function getCurrentBodyComp() {
 // ─── RMR (Resting Metabolic Rate) ───────────────────────────────────────────
 
 /**
- * Compute Resting Metabolic Rate.
+ * Compute Resting Metabolic Rate — ONE source (Slice 2).
  *
- * Prefers Katch-McArdle (LBM-based) when body composition is available;
- * falls back to Mifflin-St Jeor (height/weight/age/sex) otherwise.
+ * Delegates to the shared engine `dcy.bmrWithTier()`, which is the canonical RMR ladder:
+ *   lab/clinical RMR  →  Katch-McArdle (LBM)  →  Mifflin-St Jeor  →  floor (1700).
+ * This wrapper keeps the historical `{ rmr, formula, inputs }` shape so existing call
+ * sites (EdgeIQ, GoalsHub, computeTDEE, intelligence, goalModel) don't churn — but the
+ * NUMBER is now identical to the DCY card / cut math, so RMR can't disagree across panels.
  *
- * @returns {{ rmr: number, formula: 'katch-mcardle' | 'mifflin-st-jeor' | 'fallback', inputs: object }}
+ * @returns {{ rmr: number, formula: string, inputs: object, tier: string }}
  */
+const _RMR_FORMULA_LABEL = {
+  lab: 'clinical-rmr', katch: 'katch-mcardle', mifflin: 'mifflin-st-jeor', floor: 'estimate-floor',
+};
 export function computeRMR() {
-  const comp = getCurrentBodyComp();
-  const profile = storage.get('profile') || {};
-
-  // Katch-McArdle: most accurate when LBM is known
-  if (comp.source !== 'estimate' && comp.leanMassLbs > 0) {
-    const lbmKg = comp.leanMassLbs * KG_PER_LB;
-    const rmr = 370 + 21.6 * lbmKg;
-    return {
-      rmr: Math.round(rmr),
-      formula: 'katch-mcardle',
-      inputs: { leanMassLbs: comp.leanMassLbs, leanMassKg: lbmKg, source: comp.source },
-    };
-  }
-
-  // Mifflin-St Jeor fallback
-  const weightKg = comp.weightLbs * KG_PER_LB;
-  const heightCm = parseFloat(profile.heightCm)
-    || (parseFloat(profile.heightInches) * 2.54)
-    || 178;
-  const age = (() => {
-    if (profile.birthDate) {
-      const bd = parseLocalDate(profile.birthDate);
-      if (bd && !isNaN(bd)) return Math.max(18, new Date().getFullYear() - bd.getFullYear());
-    }
-    return parseInt(profile.age) || 35;
-  })();
-  const isMale = (profile.sex || profile.gender || 'male').toLowerCase().startsWith('m');
-  const rmr = 10 * weightKg + 6.25 * heightCm - 5 * age + (isMale ? 5 : -161);
+  const b = _dcy.bmrWithTier();
   return {
-    rmr: Math.round(rmr),
-    formula: 'mifflin-st-jeor',
-    inputs: { weightKg, heightCm, age, sex: isMale ? 'male' : 'female' },
+    rmr: b.value,
+    formula: _RMR_FORMULA_LABEL[b.tier] || b.tier,
+    inputs: b.inputs || {},
+    tier: b.tier,
   };
 }
 
@@ -232,6 +220,26 @@ export function dailyActivityCalories(dateStr) {
   return Math.round(kcal);
 }
 
+// Estimate the steps taken DURING logged foot-borne workouts (runs/walks/hikes) on a
+// day, so they can be netted OUT of the daily step count before computing NEAT. Their
+// energy is already in activityKcal (and the calorie target's eat-back), so leaving
+// them in NEAT double-counts ~150-300 kcal on a run day. Cycling/swim/strength add
+// negligible steps and are ignored. (Phase 4r.energy.8 — TDEE de-dup audit, 2026-06.)
+export function dailyWorkoutSteps(dateStr) {
+  const date = dateStr || localDate();
+  let steps = 0;
+  try {
+    for (const a of allActivitiesDeduped()) {
+      if (a?.date !== date) continue;
+      if (a?.source === 'health_connect') continue;   // ghost rows
+      if (!(isRun(a) || isWalk(a))) continue;          // only foot-borne overlaps daily steps
+      const mi = Number(a.distanceMi) || 0;
+      if (mi > 0) steps += Math.round(mi * STEPS_PER_MILE);
+    }
+  } catch { /* ignore — fall back to no subtraction */ }
+  return steps;
+}
+
 // ─── TDEE — Total Daily Energy Expenditure ──────────────────────────────────
 
 /**
@@ -261,7 +269,10 @@ export function computeTDEE(dateStr, opts = {}) {
   })();
   if (_steps >= 500) {
     const _massKg = (Number(getCurrentBodyComp()?.weightLbs) || 175) * KG_PER_LB;
-    neatKcal = Math.round(_steps * NEAT_KCAL_PER_STEP_PER_KG * _massKg);
+    // Net out steps logged DURING workouts — their energy is already in activityKcal,
+    // so NEAT should reflect ONLY non-exercise movement (no double-count). Phase 4r.energy.8.
+    const _neatSteps = Math.max(0, _steps - dailyWorkoutSteps(date));
+    neatKcal = Math.round(_neatSteps * NEAT_KCAL_PER_STEP_PER_KG * _massKg);
     neatSource = 'steps';
   } else {
     neatKcal = Math.round(rmr * neatFactor);

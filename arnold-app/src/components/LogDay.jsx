@@ -128,6 +128,9 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
   // wants a one-click way to force an immediate refresh from the Daily tab.
   const [syncFitState, setSyncFitState] = useState('idle'); // idle | syncing | done | error
   const [syncNutState, setSyncNutState] = useState('idle');
+  // Added-load tile is rarely needed — hide pref persists; toggled via the
+  // Details header "+ load" link and the tile's own "Hide this tile" (Emil).
+  const [loadHidden, setLoadHidden] = useState(() => { try { return storage.get('arnold:hideAddedLoad') === true; } catch { return false; } });
   // ── Garmin sync handler (Phase 4o.mobile.7) ──
   // Primary path: syncRecentActivities() — pulls fresh sessions from
   // the Garmin Worker, downloads each FIT zip, parses, dedupes by
@@ -2475,14 +2478,23 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                       {/* DETAILS — the per-activity sub-metrics, INCLUDING the
                           user-logged RPE + Added Load (those are details too, not a
                           separate "Effort & Load" section). Always shown. */}
-                      <div style={{...SECTION_HDR, marginTop:2}}>Details</div>
+                      <div style={{...SECTION_HDR, marginTop:2, display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                        <span>Details</span>
+                        {loadHidden && !((getAddedLoad(fd, todayStr) || 0) > 0) && (
+                          <button onClick={() => { try { storage.set('arnold:hideAddedLoad', false); } catch {} setLoadHidden(false); }}
+                            style={{ all:'unset', cursor:'pointer', fontSize:10, fontWeight:600, color:'var(--text-muted)', padding:'2px 7px', borderRadius:6, border:'0.5px solid var(--border-subtle)' }} title="Show the added-load tile">+ load</button>
+                        )}
+                      </div>
                       <div style={cardGrid('context', !!mobileView)}>
                         {row2.map((t, i) => (
                           <IconMiniTile key={i} icon={t.icon} color={t.color}
                             value={t.value} label={t.label}/>
                         ))}
                         <SessionRPE fd={fd} dateStr={todayStr}/>
-                        <AddedLoad fd={fd} dateStr={todayStr} profile={profile}/>
+                        {(!loadHidden || (getAddedLoad(fd, todayStr) || 0) > 0) && (
+                          <AddedLoad fd={fd} dateStr={todayStr} profile={profile}
+                            onHide={() => { try { storage.set('arnold:hideAddedLoad', true); } catch {} setLoadHidden(true); }}/>
+                        )}
                       </div>
                       {/* FUEL — hydration + replenishment merged under one header. */}
                       <div style={SECTION_RULE}/>

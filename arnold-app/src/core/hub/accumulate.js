@@ -59,7 +59,7 @@ const hourOf = t => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); retu
 export function accumulateBodyAndSweat(state, activities = [], weightLog = [], opts = {}) {
   const entries = (weightLog || [])
     .filter(w => w && w.date && Number.isFinite(Number(w.weightLbs ?? w.lbs ?? w.value)))
-    .map(w => ({ date: w.date, time: w.time || null, lb: Number(w.weightLbs ?? w.lbs ?? w.value) }))
+    .map(w => ({ date: w.date, time: w.time || null, lb: Number(w.weightLbs ?? w.lbs ?? w.value), fluidInL: Number(w.fluidInL) }))
     .sort((a, b) => a.date === b.date ? String(a.time || '').localeCompare(String(b.time || '')) : a.date.localeCompare(b.date));
 
   let body = state.body, sweat = state.sweat;
@@ -80,7 +80,9 @@ export function accumulateBodyAndSweat(state, activities = [], weightLog = [], o
         tempC: Number(run.avgTemperature ?? run.tempC ?? run.weatherTempC),
         durationHr: Number(run.durationSecs) / 3600,
         sweatNetLbs: r.hydration.sweatNetLbs,
-        fluidInL: Number(opts.fluidInL) || 0,
+        // Prefer the fluid logged ON this weigh-in (gross sweat); fall back to a global
+        // opt, then 0 (floor). This is what makes a logged "L drunk" sharpen the model.
+        fluidInL: Number.isFinite(e.fluidInL) ? e.fluidInL : (Number(opts.fluidInL) || 0),
         date: e.date,
       });
       sweat = so.model;

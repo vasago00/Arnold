@@ -21,7 +21,9 @@ import { parseCronometerCSV } from "./core/parsers/cronometerParser.js";
 import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption, getStorageWriteCount } from "./core/storage.js";
 import { migrateGoalsV1ToV2 } from "./core/migrateGoalsV1ToV2.js";
 import { primeVitalsCache, dcy as dcyToday } from "./core/dcy.js";
-import { allActivities as _allActs } from "./core/dcyMath.js";
+import { isResumeSuppressed } from "./core/appLifecycle.js";   // don't reset-to-Start when returning from a file picker
+import { runDiagnostics } from "./core/diagnostics.js";   // self-check / provenance (window.__arnoldDiag)
+import { allActivities as _allActs, activitySignature } from "./core/dcyMath.js";
 import { startOfDay as _startOfDay, startOfWeekMonday as _startOfWeekMonday } from "./core/dateUtils.js";
 import * as dbEngine from "./core/db.js";
 import { fmtHM, hrZoneFromBpm, weeklyRunVolume, weeklyStrengthVolume, ytdVolume, pacePct as derivePacePct } from "./core/derive/index.js";
@@ -81,7 +83,7 @@ import { AVATAR_LIBRARY } from "./core/avatars.js";
 import { getGoals } from "./core/goals.js";
 import { WeeklyPlanner } from "./components/WeeklyPlanner.jsx";
 import { Workbench } from "./components/Workbench.jsx";
-import { PlanGeneratorPanel } from "./components/PlanGeneratorPanel.jsx";
+// PlanGeneratorPanel (single-week) retired — superseded by SeasonPlanGenerator, now in the Calendar (C2).
 import { checkTodayCompletion } from "./core/planner.js";
 import { trainingAnnotations, dailyAnnotations } from "./core/aiAnnotations.js";
 import { AnnotationStrip } from "./components/AnnotationStrip.jsx";
@@ -97,6 +99,7 @@ import "./core/energyBalance.js"; // wires window.energyBalanceDebug()
 import "./core/attribution.js";   // Intelligence Hub stage 1 — wires window.attributionDebug()
 import "./core/hub/hubDebug.js";  // Intelligence Hub core loop — wires window.hubDebug() (backfill + facts)
 import "./core/zonesDebug.js";    // wires window.zonesDebug() — real HR zones + time-in-zone
+import "./core/seasonCoach.js";   // wires window.seasonCoachDebug() + getSeasonCoach() — live marathon coach
 import "./core/zones.js";         // zone resolver + lab-test anchor; wires window.zonesResolved()/setLabTest()
 import { isRun as isRunAct, isHybridWorkout as isHybridAct, activityKind, activityLabel, iconTypeFor } from "./core/activityClass.js";
 import { getTopCoachingPrompts, getPromptsByPillar, runCoachingPromptsHealthProbe } from "./core/coachingPrompts.js"; // also wires window.coachingDebug()
@@ -317,6 +320,14 @@ export default function App(){
     const resetToStart = (source) => {
       const now = Date.now();
       if (now - lastResetAt < RESET_DEBOUNCE_MS) return;
+      // A resume that's really the user returning from a NATIVE FILE PICKER (Cronometer
+      // CSV import, etc.) must NOT bounce them off the screen they were on. The picker
+      // opener sets a short suppression window; honor it. (appLifecycle.js)
+      if (isResumeSuppressed()) {
+        // eslint-disable-next-line no-console
+        console.log(`%c[arnold-lifecycle] resume reset SUPPRESSED (file picker) via ${source}`, 'color:#fbbf24');
+        return;
+      }
       lastResetAt = now;
       // Diagnostic log — visible in DevTools / chrome://inspect so we can
       // verify which event source actually fired the reset on a given
@@ -632,6 +643,35 @@ export default function App(){
           localStorage.setItem(hiitFlag, '1');
         }
       } catch (e) { console.warn('[migrate] HIIT/Run reclassify failed:', e); }
+
+      // ── De-dup exact-duplicate activity rows (every load; idempotent) ──
+      // A session written twice (same date+type+duration+calories) inflates
+      // calories, load, and TSS — the diagnostics layer flags it as an error.
+      // The write-side guard (garmin-activities-client) stops NEW double-writes;
+      // this heals any already persisted before that guard shipped, or arriving
+      // via a second path. Runs every load: once clean, removed === 0 (no-op).
+      // Uses the SAME `activitySignature` the checker uses, so it removes exactly
+      // what gets flagged. health_connect rows are left untouched; when a pair
+      // collides we keep the richer row (has source.activityId / more fields).
+      try {
+        const acts = storage.get('activities') || [];
+        const seenSig = new Map();  // signature -> index in `keep`
+        const keep = [];
+        let removed = 0;
+        const richness = x => (x?.source?.activityId ? 100 : 0) + Object.keys(x || {}).length;
+        for (const a of acts) {
+          if (!a || a.source === 'health_connect') { keep.push(a); continue; }
+          const sig = activitySignature(a);
+          if (!seenSig.has(sig)) { seenSig.set(sig, keep.length); keep.push(a); continue; }
+          const idx = seenSig.get(sig);
+          if (richness(a) > richness(keep[idx])) keep[idx] = a;  // keep the richer of the pair
+          removed++;
+        }
+        if (removed > 0) {
+          storage.set('activities', keep, { skipValidation: true });
+          console.log(`[dedup] removed ${removed} exact-duplicate activity row(s)`);
+        }
+      } catch (e) { console.warn('[dedup] activity de-dup failed:', e); }
 
       // ── Re-bin HIIT activities' hrZones (Phase 4r.viz.32) ──
       // Pre-Phase 4r.viz.32, the parser refused to fall back to
@@ -1346,6 +1386,9 @@ export default function App(){
         // Expose the unified activity merge so we can diagnose count mismatches
         // between storage.get('activities') and what the dashboard actually uses.
         window.__allActs=_allActs;
+        // Self-check / provenance — window.__arnoldDiag(date?) → derived-number provenance
+        // (calorie target components, intake, activity dedup) + invariant warnings.
+        window.__arnoldDiag=(d)=>{ try { const r = runDiagnostics(d); console.log('%c[arnold-diag]', 'color:#5eead4;font-weight:700', r.date); if (r.checks?.length) r.checks.forEach(c => console.log(`  ${c.level==='error'?'⛔':'⚠️'} [${c.id}] ${c.message}`)); else console.log('  ✓ no issues detected'); console.log('  calorieTarget:', r.calorieTarget); console.log('  activity:', r.activity); console.log('  intake:', r.intake); console.log('  sync:', r.sync); return r; } catch(e){ console.warn('[arnold-diag] failed', e); } };
         // Manual labs migration — bypasses the auto-condition entirely.
         // Reads vitals-v4 directly via window.storage and writes to the
         // storage layer (which triggers cloud-sync push). Use when the
@@ -1595,7 +1638,7 @@ export default function App(){
               Workbench below (where you do the work).
             WeeklyPlanner component kept in src/components/ for now in
             case it's needed elsewhere; just unmounted here. */}
-        {tab==="goals"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Plan"><div style={S.sec}>{!isMobileApp && <CoachComment surface="plan" />}<GoalsHub showToast={showToast}/><PlanGeneratorPanel showToast={showToast}/><Workbench showToast={showToast}/></div></ErrorBoundary></div>}
+        {tab==="goals"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Plan"><div style={S.sec}>{!isMobileApp && <CoachComment surface="plan" />}<GoalsHub showToast={showToast}/><details style={{marginTop:10,border:'0.5px solid var(--border-default)',borderRadius:'var(--radius-md)',background:'var(--bg-surface)'}}><summary style={{cursor:'pointer',padding:'10px 14px',fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>🔧 Workout Builder <span style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>· build a custom session · export to Garmin</span></summary><div style={{padding:'0 14px 12px'}}><Workbench showToast={showToast}/></div></details></div></ErrorBoundary></div>}
         {tab==="supplements"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Supplements"><SupplementsTab showToast={showToast}/></ErrorBoundary></div>}
         {tab==="settings"&&<div className="arnold-tab-panel"><ErrorBoundary tabName="Settings"><ProfileSettings data={data} persist={persist} showToast={showToast}/></ErrorBoundary></div>}
       </main>

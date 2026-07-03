@@ -33,9 +33,16 @@ function MiniArcGauge({ pct, color }) {
   );
 }
 
+// Confidence affordance (Sprint 2 · 2.3 transparency, woven in-place). A tile that
+// shows a LEARNED/DERIVED number (RMR source, race-fitness confidence, TDEE source) can
+// pass `confidence = { level: 'high'|'medium'|'low', text, title? }` to render a small
+// color-coded dot + micro-label in the trend row — "how sure / where from", with zero
+// extra scroll. Optional: tiles that don't pass it look exactly as before.
+const CONF_COLOR = { high: '#34d399', medium: '#60a5fa', low: '#fbbf24' };
+
 export function MetricTile({
   label, todayVal, todayUnit, trendText, trendColor, avg30, avg30Label,
-  gaugePct, color, statusIcon, statusIconColor, onTap, source, autoReasons,
+  gaugePct, color, statusIcon, statusIconColor, onTap, source, autoReasons, confidence,
 }) {
   const isAuto = source === 'auto';
   const reasonText = isAuto && Array.isArray(autoReasons) && autoReasons.length
@@ -75,6 +82,13 @@ export function MetricTile({
             <span>{trendText || ' '}</span>
             {statusIcon ? (
               <span style={{ fontSize: 10, fontWeight: 700, color: statusIconColor || TEXT.muted, lineHeight: 1 }}>{statusIcon}</span>
+            ) : null}
+            {confidence && confidence.text ? (
+              <span title={confidence.title || ''} aria-label={confidence.title || confidence.text}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: (trendText || statusIcon) ? 4 : 0 }}>
+                <span style={{ width: 6, height: 6, borderRadius: 3, background: CONF_COLOR[confidence.level] || TEXT.faint, flexShrink: 0 }} />
+                <span style={{ fontSize: 10, fontWeight: 600, color: TEXT.faint, whiteSpace: 'nowrap' }}>{confidence.text}</span>
+              </span>
             ) : null}
           </div>
         </div>

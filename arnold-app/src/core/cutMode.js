@@ -26,7 +26,7 @@ import { storage } from './storage.js';
 import { localDate, ymd } from './time.js';
 import { parseLocalDate } from './dateUtils.js';
 import { dailyTotals as nutDailyTotals } from './nutrition.js';
-import { tdee } from './dcy.js';
+import { energyExpenditure } from './energyExpenditure.js';   // ONE TDEE source (Slice 2)
 import { getGoals } from './goals.js';
 
 // ─── Tunable thresholds (single source of truth) ───────────────────────────
@@ -76,7 +76,10 @@ function _avgTdee(daysBack) {
   for (let i = 1; i <= daysBack; i++) {
     const d = new Date(today); d.setDate(d.getDate() - i);
     const ds = ymd(d);
-    const t = tdee(ds);
+    // Per-day EXPENDITURE from the one service (device→model). The 14/28-day AVERAGE of
+    // this is cutMode's maintenance basis — so we use daily expenditure here, not the
+    // service's own multi-week `maintenance` field (which would repeat one number).
+    const t = energyExpenditure(ds)?.tdee;
     if (Number.isFinite(t) && t > 0) { sum += t; days += 1; }
   }
   return days > 0 ? { avg: sum / days, days } : null;

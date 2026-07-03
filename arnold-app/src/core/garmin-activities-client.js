@@ -23,6 +23,7 @@ import { getGarminAuth, isGarminConfigured } from './garmin-client.js';
 import { parseFITFile } from './parsers/fitParser.js';
 import { fetchWeatherForActivity, extractActivityCoords } from './weather.js';
 import { recordActivityObservations } from './learnedBaselines.js';
+import { activitySignature } from './dcyMath.js';
 
 const CFG_ENDPOINT = 'arnold:cloud-sync:endpoint';
 const CFG_TOKEN    = 'arnold:cloud-sync:token';
@@ -658,6 +659,28 @@ export async function syncRecentActivities({ daysBack = 14, limit = 30, onProgre
         const id = String(ga.activityId);
         const idx = all.findIndex(a => a?.source?.activityId && String(a.source.activityId) === id);
         if (idx >= 0) all.splice(idx, 1);
+      }
+      // Idempotent write guard (dup-write fix 2026-07-01). `existing` (line ~495)
+      // is snapshotted ONCE before this loop, so a session arriving twice within
+      // a single sync — Garmin list overlap, or a manual FIT + a synced copy of
+      // the same workout — slips past the up-front dedup and gets pushed twice
+      // (the diagnostics layer then flags a `duplicate-activity` error). Re-check
+      // the CURRENT collection right before pushing: skip if the same Garmin
+      // activityId is already present, OR an exact signature match exists (same
+      // date+type+duration+calories). forceReplace intentionally re-pushes, so
+      // it bypasses the guard.
+      if (!forceReplace) {
+        const dupById = parsed.source?.activityId != null &&
+          all.some(a => a?.source?.activityId != null &&
+                        String(a.source.activityId) === String(parsed.source.activityId));
+        const sig = activitySignature(parsed);
+        const dupBySig = all.some(a => a && a.source !== 'health_connect' &&
+                                       activitySignature(a) === sig);
+        if (dupById || dupBySig) {
+          results.push({ activityId: ga.activityId, name: ga.activityName, ok: true,
+                         skipped: 'duplicate', type: parsed.activityType });
+          continue;
+        }
       }
       all.push(parsed);
       storage.set('activities', all, { skipValidation: true });

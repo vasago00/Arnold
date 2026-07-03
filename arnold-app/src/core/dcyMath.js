@@ -227,6 +227,18 @@ function canonicalActivityType(s) {
   return l;
 }
 
+// Exact-duplicate signature for an activity: same date + canonical type +
+// duration + calories = the SAME physical session written twice (a real
+// morning+evening pair differs in at least one of duration/calories). Shared
+// by the diagnostics checker (detectDuplicateActivities) AND the Garmin write
+// guard so "what we flag" and "what we prevent" can never drift apart.
+// Date IS part of the key — an identical-looking strength session on a
+// different day is a different session, not a duplicate.
+function activitySignature(a) {
+  if (!a) return '';
+  return `${a.date || ''}|${canonicalActivityType(a.activityType || a.title)}|${Math.round(Number(a.durationSecs) || 0)}|${Math.round(Number(a.calories) || 0)}`;
+}
+
 let _activityUniverseCache = { hash: null, list: null };
 function activitiesHash() {
   const a = storage.get('activities') || [];
@@ -365,7 +377,7 @@ export function allActivities() {
 
 // Exported for any consumer that needs the same canonicalization rule
 // (DCY math, planner readers, etc.) — keeps it in one place.
-export { canonicalActivityType };
+export { canonicalActivityType, activitySignature };
 
 // ─── Daily stress sum ───────────────────────────────────────────────────────
 export function dailyStress(dateStr) {

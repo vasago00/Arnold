@@ -13,6 +13,9 @@ import { storage } from './storage.js';
 // localDate() returns today's YYYY-MM-DD; ymd(d) formats any Date.
 import { localDate, ymd } from './time.js';
 import { parseLocalDate } from './dateUtils.js';
+// Phase: nutrition source-adapter — FatSecret (sanctioned API) as PRIMARY food
+// provider when its proxy is configured, with Open Food Facts as the fallback.
+import { isFatSecretConfigured, fsSearchFoods, fsLookupBarcode } from './fatsecret-client.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -477,9 +480,39 @@ export function calculatePortion(per100g, amount, unit) {
   };
 }
 
-// ─── Open Food Facts barcode lookup ─────────────────────────────────────────
+// ─── Source-adapter: provider dispatch (FatSecret primary, OFF fallback) ─────
+// "Own the pipeline, rent the data" (DATA_SOURCING_STRATEGY). The UI keeps
+// calling searchFood()/lookupBarcode(); the provider is swapped underneath.
+// FatSecret is tried only when its proxy is configured; on null/empty/error we
+// transparently fall back to Open Food Facts so a provider outage never blocks
+// logging.
+// Which provider actually served the most recent search/barcode result, so the UI can
+// show FatSecret attribution ONLY over real FatSecret data — never over an Open Food Facts
+// fallback (Premier-Free terms require accurate attribution). 'fatsecret' | 'off' | null.
+let _lastFoodProvider = null;
+export function lastFoodProvider() { return _lastFoodProvider; }
+
+export async function searchFood(query, page = 1) {
+  if (isFatSecretConfigured()) {
+    const fs = await fsSearchFoods(query, Math.max(0, page - 1));
+    if (fs && fs.length) { _lastFoodProvider = 'fatsecret'; return fs; }
+  }
+  _lastFoodProvider = 'off';
+  return searchFoodOFF(query, page);
+}
 
 export async function lookupBarcode(barcode) {
+  if (isFatSecretConfigured()) {
+    const fs = await fsLookupBarcode(barcode);
+    if (fs) { _lastFoodProvider = 'fatsecret'; return fs; }
+  }
+  _lastFoodProvider = 'off';
+  return lookupBarcodeOFF(barcode);
+}
+
+// ─── Open Food Facts barcode lookup ─────────────────────────────────────────
+
+async function lookupBarcodeOFF(barcode) {
   try {
     const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`);
     if (!res.ok) return null;
@@ -530,7 +563,7 @@ export async function lookupBarcode(barcode) {
 
 // ─── Open Food Facts text search ────────────────────────────────────────────
 
-export async function searchFood(query, page = 1) {
+async function searchFoodOFF(query, page = 1) {
   try {
     const res = await fetch(
       `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&json=1&page=${page}&page_size=10`

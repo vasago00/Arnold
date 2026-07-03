@@ -2,13 +2,15 @@
 // exactly (icon · 11px label · 14px/600 value, single row, no border) so it sits
 // consistently among the other Details tiles. Tap to open presets + custom field.
 // Tooltip shows the unweighted-equivalent pace (so a weighted run isn't misread).
+// Rarely needed (Emil): the popover has "Hide this tile" → parent removes it from
+// the grid entirely (re-add via the "+ load" toggle in the Details header).
 
 import { useState } from 'react';
 import { getAddedLoad, setAddedLoad, unweightedEquivPaceSecs, secsToPace } from '../core/addedLoad.js';
 
 const PRESETS = [10, 20, 40]; // common loads (lb); custom field covers the rest
 
-export function AddedLoad({ fd, dateStr, profile, onSaved }) {
+export function AddedLoad({ fd, dateStr, profile, onSaved, onHide }) {
   const [lbs, setLbs] = useState(() => getAddedLoad(fd, dateStr));
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -52,6 +54,9 @@ export function AddedLoad({ fd, dateStr, profile, onSaved }) {
             <button onClick={() => commit(parseFloat(draft))} style={{ ...link, flexShrink: 0, opacity: parseFloat(draft) > 0 ? 1 : 0.5 }}>Set</button>
             {lbs ? <button onClick={() => commit(0)} style={{ ...link, flexShrink: 0, color: '#f87171', background: 'rgba(248,113,113,0.08)', borderColor: 'rgba(248,113,113,0.15)' }}>clear</button> : null}
           </div>
+          {!lbs && onHide && (
+            <button onClick={() => { setOpen(false); onHide(); }} style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Hide this tile</button>
+          )}
         </div>
       )}
     </div>

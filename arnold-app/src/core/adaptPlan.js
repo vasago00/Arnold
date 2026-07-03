@@ -8,6 +8,11 @@
 // render `{ action, reason }`.
 
 const HARD = new Set(['tempo', 'intervals', 'hiit', 'threshold', 'speed', 'hard', 'race']);
+// Recovery-type sessions are never reshaped — you don't cut, and don't need to
+// "clear," a rest/mobility/recovery day. Guard on type OR intensityClass (a session
+// can carry either). Sim-caught 2026-07-02: mobility days were reaching 'greenlit'
+// because only type==='rest' was short-circuited.
+const NIL = new Set(['rest', 'mobility', 'recovery']);
 
 // Pick the single dominant limiter (worst signal) → the reason we SHOW.
 function dominantLimiter({ readiness, debtLbs, hrvDelta, sleepHrs, sleepGoalHrs, fatigueLevel }) {
@@ -46,7 +51,7 @@ function cutVolume(planned, frac) {
  * returns: { ...session, action:'ease'|'trim'|'hold'|'greenlit', eased:bool, reason:string|null }
  */
 export function adaptSession(planned, ctx = {}) {
-  if (!planned || planned.type === 'rest') {
+  if (!planned || NIL.has(planned.type) || NIL.has(planned.intensityClass)) {
     return { ...planned, action: 'hold', eased: false, reason: null };
   }
   const {

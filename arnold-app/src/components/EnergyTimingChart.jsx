@@ -10,6 +10,7 @@
 import React, { useMemo } from 'react';
 import { storage } from '../core/storage.js';
 import { computeTDEE } from '../core/energyBalance.js';
+import { energyExpenditure } from '../core/energyExpenditure.js';   // ONE TDEE source (Slice 2)
 import { dailyTotals as nutDailyTotals } from '../core/nutrition.js';
 import { ymd } from '../core/time.js';
 // Phase 4r.fuel.12 (2026-05-25) — bar colors now respect goal direction
@@ -42,15 +43,22 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
   // Today's burn breakdown
   const burn = useMemo(() => {
     try {
-      const t = computeTDEE(dateStr) || {};
+      // Σ (headline burn) comes from the ONE energy-expenditure service so this tile
+      // can't disagree with the DCY card / cut math (the 689-vs-2038 split). The stacked
+      // bar stays the MODEL decomposition (rmr/activity/neat+tef) — when the watch's
+      // measured total wins, Σ is that total and `source` labels it as measured.
+      const ee = energyExpenditure(dateStr) || {};
       return {
-        rmr: t.rmr || 0,
-        activity: t.activityKcal || 0,
-        neatTef: (t.neatKcal || 0) + (t.tefKcal || 0),
-        total: t.tdee || 0,
+        rmr: ee.rmr || 0,
+        activity: ee.activityKcal || 0,
+        neatTef: (ee.neatKcal || 0) + (ee.tefKcal || 0),
+        total: ee.tdee || 0,
+        source: ee.source || 'model',
+        confidence: ee.confidence || 'low',   // Sprint 2 · 2.3 — how much to trust Σ (device=med / model=low / empirical=var)
+        note: ee.note || '',
       };
     } catch {
-      return { rmr: 1685, activity: 0, neatTef: 200, total: 1885 };
+      return { rmr: 1685, activity: 0, neatTef: 200, total: 1885, source: 'model', confidence: 'low', note: '' };
     }
   }, [dateStr]);
 
@@ -187,8 +195,25 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
         <span><span style={{ color: '#5eead4' }}>●</span> RMR</span>
         <span><span style={{ color: '#a78bfa' }}>●</span> Activity</span>
         <span><span style={{ color: '#94a3b8' }}>●</span> NEAT/TEF</span>
-        <span style={{ color: '#cbd5e1', fontWeight: 500 }}>Σ {formatKcal(burn.total)}</span>
+        <span style={{ color: '#cbd5e1', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {/* Confidence in Σ — color-coded dot matching the MetricTile affordance
+              (high=green / med=blue / low=amber). Title spells out why. */}
+          <span
+            title={`${burn.confidence} confidence · ${burn.source === 'device' ? 'measured by your watch' : burn.source === 'empirical' ? 'from your weight-trend vs intake' : 'model estimate'}`}
+            style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: burn.confidence === 'high' ? '#4ade80' : burn.confidence === 'medium' ? '#60a5fa' : '#fbbf24',
+            }}
+            aria-hidden="true"
+          />
+          Σ {formatKcal(burn.total)}
+        </span>
       </div>
+      {burn.note && (
+        <div style={{ fontSize: 8.5, color: '#64748b', marginTop: -8, marginBottom: 12, fontStyle: 'italic' }}>
+          {burn.source === 'device' ? '◷ ' : '≈ '}{burn.note}
+        </div>
+      )}
 
       <div style={{ fontSize: 9, color: '#94a3b8', marginBottom: 4, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
         eaten today

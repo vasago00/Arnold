@@ -7,6 +7,7 @@
 // already has a more sophisticated local isHardSession (TSS / TE / duration
 // thresholds at lines 510+) that we use instead.
 import { activityKind, isSki, isWalk } from './activityClass.js';
+import { racePhase } from './seasonPlan.js';   // ONE source of the race periodization phase (coach unification)
 // Phase 4r.utc.2 — local-timezone day string. Replaces the ad-hoc
 // `new Date().toISOString().slice(0,10)` fallback defaults across this file,
 // which silently used UTC and rolled the date forward for users west of UTC
@@ -1974,29 +1975,17 @@ export function computeRaceHorizon(outcomeGoal, opts = {}) {
   };
 
   const races = Array.isArray(outcomeGoal?.races) ? outcomeGoal.races : [];
-  const todayMs = new Date(today + 'T12:00:00').getTime();
 
-  // Find the soonest future race AND the most recent past race within 2 weeks
-  // (for the recovery phase).
-  const upcoming = races
-    .filter(r => r?.date && /^\d{4}-\d{2}-\d{2}$/.test(String(r.date)))
-    .map(r => ({ ...r, dateMs: new Date(r.date + 'T12:00:00').getTime() }))
-    .filter(r => Number.isFinite(r.dateMs));
-
-  const future = upcoming.filter(r => r.dateMs >= todayMs).sort((a, b) => a.dateMs - b.dateMs);
-  const recent = upcoming.filter(r => r.dateMs < todayMs).sort((a, b) => b.dateMs - a.dateMs);
-
-  // Prefer the soonest future race. If none, check if a recent race
-  // (within 2 weeks past) puts us in the recovery phase.
-  let race = future[0] || null;
-  let recovering = false;
-  if (!race && recent[0]) {
-    const weeksPast = (todayMs - recent[0].dateMs) / (7 * 86400000);
-    if (weeksPast <= 2) {
-      race = recent[0];
-      recovering = true;
-    }
-  }
+  // Phase + anchor race come from the ONE shared source (seasonPlan.racePhase), so
+  // the marathon-anchored periodization rule lives in exactly one place. Map its
+  // phase vocab to this surface's: mini-taper → taper; 'build' covers base/build/peak
+  // (the continuous Option-A model doesn't peak for a single race).
+  const rp = racePhase({ races, today });
+  const PHASE_MAP = { 'race-week': 'race-week', 'mini-taper': 'taper', recovery: 'recovery', build: 'build' };
+  const recovering = rp.phase === 'recovery';
+  // The marathon that drives the phase (or, when recovering, the one just run);
+  // fall back to the next race only when there is no marathon at all.
+  const race = recovering ? rp.lastMarathon : (rp.nextMarathon || rp.nextRace);
 
   if (!race) {
     return {
@@ -2012,9 +2001,11 @@ export function computeRaceHorizon(outcomeGoal, opts = {}) {
     };
   }
 
-  const weeksOut = (race.dateMs - todayMs) / (7 * 86400000);
-  const daysOut  = Math.round((race.dateMs - todayMs) / 86400000);
-  const phase = recovering ? 'recovery' : phaseForWeeksOut(weeksOut);
+  const daysOut = recovering
+    ? -(rp.daysSinceMarathon ?? 0)
+    : (rp.nextMarathon ? rp.daysToMarathon : rp.daysToNext);
+  const weeksOut = (daysOut ?? 0) / 7;
+  const phase = PHASE_MAP[rp.phase] || 'build';
 
   // Cut-vs-race conflict: if the user has a non-trivial cut goal AND we're
   // in taper/race-week, surface it. Goal progress signal does its own thing;

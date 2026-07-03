@@ -34,8 +34,12 @@ export function PostRunWeigh({ fd, dateStr, onSaved }) {
     const lb = parseFloat(w);
     if (!(lb > 0)) return;
     const time = new Date().toTimeString().slice(0, 5); // HH:MM → hub reads it as post-run
+    const fl = parseFloat(fluid);
     const log = storage.get('weight') || [];
-    log.push({ date: dateStr, time, weightLbs: lb, source: 'post-run' });
+    // Persist the fluid drunk ON the weigh-in so the hub's accumulate pass can compute
+    // GROSS sweat (net drop + fluid in), not just the floor. Without this the logged
+    // intake was used only for the instant readout and lost to the learned model.
+    log.push({ date: dateStr, time, weightLbs: lb, source: 'post-run', ...(fl > 0 ? { fluidInL: fl } : {}) });
     try { storage.set('weight', log, { skipValidation: true }); } catch {}
     let rate = null;
     if (morning != null && durationHr) {

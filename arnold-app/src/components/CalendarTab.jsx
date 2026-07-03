@@ -18,6 +18,7 @@
 // planned-not-done days).
 
 import { useState, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { PersonSimpleTaiChi } from "@phosphor-icons/react";
 import { useSwipeNav } from "./MobileHome.jsx";
 import { storage } from "../core/storage.js";
@@ -25,6 +26,8 @@ import { getRaces, saveRaces } from "../core/memory.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isHIIT, isExplicitHIIT, isHybridWorkout, isMobility, isCycling, isSwim, isSki, isWalk } from "../core/activityClass.js";
 import { getPlannerWeek, savePlannerWeek, weekKey, DAY_TYPES, daySessions, makeDay, dayRunMiles, dayWorkoutCount, weekPlanTotals } from "../core/planner.js";
+import { PLAN_TYPE_FAMILY } from "../core/todayStatus.js";   // plan-type → family for the planned-session rail
+import { SeasonPlanGenerator } from "./SeasonPlanGenerator.jsx";   // 2.1 — planning lives in the Calendar (C2)
 import { analyzePlannedWeek, analyzeSeason } from "../core/planLoad.js";
 import { CoachSigil } from "./CoachSigil.jsx";
 import { morningWeightRows } from "../core/bodyWeight.js";
@@ -46,6 +49,9 @@ import {
 import { localDate, ymd } from "../core/time.js";
 
 // Activity family → color + icon glyph (Tabler-ish unicode for inline use).
+// Phase colors for the plan-generator PREVIEW overlay on the grid (C3).
+const PHASE_OVERLAY = { build: '#60a5fa', 'mini-taper': '#fbbf24', 'race-week': '#ef4444', recovery: '#34d399' };
+
 const FAMILY_STYLE = {
   run:      { color: '#60a5fa', bg: 'rgba(96,165,250,0.10)',  border: 'rgba(96,165,250,0.32)', icon: '→' },
   long_run: { color: '#60a5fa', bg: 'rgba(96,165,250,0.13)',  border: 'rgba(96,165,250,0.36)', icon: '→' },
@@ -308,7 +314,197 @@ export function CalendarTab({ showToast }) {
   const [manualOpen, setManualOpen] = useState(false);
   const [icsOpen, setIcsOpen] = useState(false);
   const [planPickerOpen, setPlanPickerOpen] = useState(false);  // Phase 4r.calendar.33
+  const [editPlan, setEditPlan] = useState(null); // {date, idx, session} when editing an existing planned session
   const [tick, setTick] = useState(0);
+  const [genRaceReq, setGenRaceReq] = useState(null); // tap-a-race → open generator pre-targeted (C2)
+  const [previewBlock, setPreviewBlock] = useState(null); // generator preview → grid overlay (C3)
+
+  // ── Hold-and-sweep drag (mobile, per-session): long-press a drawer session
+  // chip to pick it up, drag onto another day to move it, or fling it off the
+  // grid to delete it (Emil). ──
+  const gridRef = useRef(null);
+  const ghostRef = useRef(null);
+  const [drag, setDrag] = useState(false); // true only while a chip is being dragged (no per-move re-renders)
+
+  const movePlannedSession = (fromDate, idx, toDate) => {
+    try {
+      const fromWk = weekKey(new Date(fromDate + 'T12:00:00'));
+      const fromWeek = getPlannerWeek(fromWk);
+      const fromMon = new Date(fromWk + 'T12:00:00');
+      const fromIdx = Math.floor((new Date(fromDate + 'T12:00:00') - fromMon) / 86400000);
+      if (fromIdx < 0 || fromIdx >= 7) return;
+      const fromDays = [...(fromWeek.days || Array(7).fill({ type: 'rest' }))];
+      while (fromDays.length < 7) fromDays.push({ type: 'rest' });
+      const fromSessions = daySessions(fromDays[fromIdx]);
+      const moved = fromSessions[idx];
+      if (!moved) return;
+      fromSessions.splice(idx, 1);
+      fromDays[fromIdx] = makeDay(fromSessions);
+      const toWk = weekKey(new Date(toDate + 'T12:00:00'));
+      if (toWk === fromWk) {
+        const toIdx = Math.floor((new Date(toDate + 'T12:00:00') - fromMon) / 86400000);
+        if (toIdx < 0 || toIdx >= 7) return;
+        fromDays[toIdx] = makeDay([...daySessions(fromDays[toIdx]), moved]);
+        savePlannerWeek(fromWk, { ...fromWeek, days: fromDays });
+      } else {
+        savePlannerWeek(fromWk, { ...fromWeek, days: fromDays });
+        const toWeek = getPlannerWeek(toWk);
+        const toMon = new Date(toWk + 'T12:00:00');
+        const toIdx = Math.floor((new Date(toDate + 'T12:00:00') - toMon) / 86400000);
+        if (toIdx < 0 || toIdx >= 7) return;
+        const toDays = [...(toWeek.days || Array(7).fill({ type: 'rest' }))];
+        while (toDays.length < 7) toDays.push({ type: 'rest' });
+        toDays[toIdx] = makeDay([...daySessions(toDays[toIdx]), moved]);
+        savePlannerWeek(toWk, { ...toWeek, days: toDays });
+      }
+      setTick(t => t + 1);
+      showToast?.(`Moved ${prettyFamily(moved.type)} to ${new Date(toDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`);
+    } catch (e) { console.warn('[calendar] move session failed:', e); }
+  };
+
+  const deletePlannedSession = (fromDate, idx) => {
+    try {
+      const wk = weekKey(new Date(fromDate + 'T12:00:00'));
+      const week = getPlannerWeek(wk);
+      const mon = new Date(wk + 'T12:00:00');
+      const dIdx = Math.floor((new Date(fromDate + 'T12:00:00') - mon) / 86400000);
+      if (dIdx < 0 || dIdx >= 7) return;
+      const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
+      while (days.length < 7) days.push({ type: 'rest' });
+      const sessions = daySessions(days[dIdx]);
+      const removed = sessions[idx];
+      sessions.splice(idx, 1);
+      days[dIdx] = makeDay(sessions);
+      savePlannerWeek(wk, { ...week, days });
+      setTick(t => t + 1);
+      if (removed) showToast?.(`Removed ${prettyFamily(removed.type)}`);
+    } catch (e) { console.warn('[calendar] delete session failed:', e); }
+  };
+
+  // ── Tile drag (mobile): long-press a calendar day that HAS a plan, then drag
+  // it onto another day to move the whole day's plan, or fling it off the grid
+  // to clear it. Touch handlers live ON THE TILE (the touch target) so moves
+  // dispatch reliably; ghost + highlight are imperative (no per-move re-render).
+  const dragRef = useRef(null);    // { date, label, overDate, offGrid, gb } during a drag
+  const hlCellRef = useRef(null);  // currently-highlighted target cell
+  const rafPending = useRef(false);
+  const lastXY = useRef({ x: 0, y: 0 });
+
+  const dayPlanLabel = (date) => {
+    try {
+      const sess = daySessions(plannerByDate.get(date)).filter(x => x.type && x.type !== 'rest');
+      if (!sess.length) return 'move';
+      const ff = sess[0];
+      const mi = Number(ff.distanceMi) || 0;
+      return `${prettyFamily(ff.type)}${mi > 0 ? ` \u00b7 ${mi} mi` : ''}${sess.length > 1 ? ` +${sess.length - 1}` : ''}`;
+    } catch { return 'move'; }
+  };
+  const paintGhost = (cx, cy) => {
+    const g = ghostRef.current, d = dragRef.current;
+    if (!g || !d) return;
+    g.style.left = cx + 'px';
+    g.style.top = cy + 'px';
+    g.style.background = d.offGrid ? 'rgba(220,38,38,0.92)' : 'var(--bg-surface)';
+    g.style.borderColor = d.offGrid ? '#ef4444' : '#5eead4';
+    g.style.color = d.offGrid ? '#fff' : 'var(--text-primary)';
+    g.textContent = d.offGrid ? '\u2715 release to remove'
+      : `${d.label}${d.overDate && d.overDate !== d.date ? ` \u2192 ${new Date(d.overDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}`;
+  };
+  const highlightCell = (cellEl) => {
+    const prev = hlCellRef.current;
+    if (prev && prev !== cellEl) { prev.style.outline = ''; prev.style.outlineOffset = ''; }
+    if (cellEl) { cellEl.style.outline = '2px solid #5eead4'; cellEl.style.outlineOffset = '-1px'; }
+    hlCellRef.current = cellEl;
+  };
+  const moveDayPlan = (fromDate, toDate) => {
+    try {
+      const fromWk = weekKey(new Date(fromDate + 'T12:00:00'));
+      const fromWeek = getPlannerWeek(fromWk);
+      const fromMon = new Date(fromWk + 'T12:00:00');
+      const fIdx = Math.floor((new Date(fromDate + 'T12:00:00') - fromMon) / 86400000);
+      if (fIdx < 0 || fIdx >= 7) return;
+      const fromDays = [...(fromWeek.days || Array(7).fill({ type: 'rest' }))];
+      while (fromDays.length < 7) fromDays.push({ type: 'rest' });
+      const moving = daySessions(fromDays[fIdx]).filter(x => x.type && x.type !== 'rest');
+      if (!moving.length) return;
+      fromDays[fIdx] = makeDay([]);
+      const toWk = weekKey(new Date(toDate + 'T12:00:00'));
+      if (toWk === fromWk) {
+        const tIdx = Math.floor((new Date(toDate + 'T12:00:00') - fromMon) / 86400000);
+        if (tIdx < 0 || tIdx >= 7) return;
+        fromDays[tIdx] = makeDay([...daySessions(fromDays[tIdx]).filter(x => x.type && x.type !== 'rest'), ...moving]);
+        savePlannerWeek(fromWk, { ...fromWeek, days: fromDays });
+      } else {
+        savePlannerWeek(fromWk, { ...fromWeek, days: fromDays });
+        const toWeek = getPlannerWeek(toWk);
+        const toMon = new Date(toWk + 'T12:00:00');
+        const tIdx = Math.floor((new Date(toDate + 'T12:00:00') - toMon) / 86400000);
+        if (tIdx < 0 || tIdx >= 7) return;
+        const toDays = [...(toWeek.days || Array(7).fill({ type: 'rest' }))];
+        while (toDays.length < 7) toDays.push({ type: 'rest' });
+        toDays[tIdx] = makeDay([...daySessions(toDays[tIdx]).filter(x => x.type && x.type !== 'rest'), ...moving]);
+        savePlannerWeek(toWk, { ...toWeek, days: toDays });
+      }
+      setTick(t => t + 1);
+      showToast?.(`Moved to ${new Date(toDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`);
+    } catch (e) { console.warn('[calendar] move day plan failed:', e); }
+  };
+  const clearDayPlan = (date) => {
+    try {
+      const wk = weekKey(new Date(date + 'T12:00:00'));
+      const week = getPlannerWeek(wk);
+      const mon = new Date(wk + 'T12:00:00');
+      const dIdx = Math.floor((new Date(date + 'T12:00:00') - mon) / 86400000);
+      if (dIdx < 0 || dIdx >= 7) return;
+      const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
+      while (days.length < 7) days.push({ type: 'rest' });
+      days[dIdx] = makeDay([]);
+      savePlannerWeek(wk, { ...week, days });
+      setTick(t => t + 1);
+      showToast?.('Removed plan');
+    } catch (e) { console.warn('[calendar] clear day plan failed:', e); }
+  };
+  const tileDragStart = (date, x, y) => {
+    try { navigator.vibrate?.(15); } catch {}
+    dragRef.current = { date, label: dayPlanLabel(date), overDate: date, offGrid: false, gb: gridRef.current ? gridRef.current.getBoundingClientRect() : null };
+    setDrag(true);
+    requestAnimationFrame(() => paintGhost(x, y));
+  };
+  const tileDragMove = (x, y) => {
+    if (!dragRef.current) return;
+    lastXY.current.x = x; lastXY.current.y = y;
+    if (rafPending.current) return;           // coalesce many touchmoves into 1 update/frame
+    rafPending.current = true;
+    requestAnimationFrame(() => {
+      rafPending.current = false;
+      const d = dragRef.current; if (!d) return;
+      const cx = lastXY.current.x, cy = lastXY.current.y;
+      const el = document.elementFromPoint(cx, cy);
+      const cellEl = el && el.closest ? el.closest('[data-cal-date]') : null;
+      d.overDate = cellEl ? cellEl.getAttribute('data-cal-date') : null;
+      const gb = d.gb;                          // cached at drag start (scroll is locked during drag)
+      d.offGrid = gb ? (cx < gb.left - 12 || cx > gb.right + 12 || cy < gb.top - 12 || cy > gb.bottom + 12) : false;
+      highlightCell(d.offGrid ? null : cellEl);
+      paintGhost(cx, cy);
+    });
+  };
+  const tileDragEnd = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    highlightCell(null);
+    setDrag(false);
+    if (!d) return;
+    if (d.offGrid) clearDayPlan(d.date);
+    else if (d.overDate && d.overDate !== d.date) moveDayPlan(d.date, d.overDate);
+  };
+
+  // Click/tap a planned session chip → reopen the plan picker to edit it in place.
+  const openEditPlan = (idx, session) => {
+    setEditPlan({ date: selectedDate, idx, session });
+    setPlanPickerOpen(true);
+  };
+
+  // (drag move/drop listeners are attached synchronously in beginSessionDrag)
 
   // Load races on mount and after any add/remove.
   useEffect(() => {
@@ -375,6 +571,20 @@ export function CalendarTab({ showToast }) {
 
   const activitiesByDate = useMemo(() => indexActivitiesByDate(activities), [activities]);
   const plannerByDate    = useMemo(() => indexPlannerByDate(viewYear, viewMonth), [viewYear, viewMonth, tick]);
+  // C3 — map each date the preview block will fill → its phase, for the grid overlay.
+  const previewByDate = useMemo(() => {
+    const m = new Map();
+    if (!previewBlock || !previewBlock.weeks) return m;
+    for (const w of previewBlock.weeks) {
+      const monday = new Date(w.weekKey + 'T12:00:00');
+      (w.days || []).forEach((d, idx) => {
+        if (!d || d.type === 'rest') return;
+        const dt = new Date(monday); dt.setDate(dt.getDate() + idx);
+        m.set(ymd(dt), { phase: w.phase });
+      });
+    }
+    return m;
+  }, [previewBlock]);
   const racesByDate      = useMemo(() => {
     const m = new Map();
     for (const r of races) {
@@ -474,7 +684,7 @@ export function CalendarTab({ showToast }) {
         return (
           <div style={{ margin: '4px 2px 8px' }}>
             <div style={{ display: 'flex', alignItems: 'stretch', gap: 4, marginBottom: 5 }}>
-              {rows.map((r, i) => {
+              {rows.filter(r => r.inMonth).map((r, i) => {
                 const hit = wGoal ? (r.actual + r.planned) >= wGoal * 0.9 : null;
                 return (
                   <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, padding: '3px 2px', borderRadius: r.current ? 999 : 5, background: r.current ? 'rgba(94,234,212,0.07)' : 'rgba(255,255,255,0.03)', border: r.current ? '1px solid rgba(94,234,212,0.45)' : '0.5px solid var(--border-subtle)', opacity: r.inMonth ? 1 : 0.45 }}>
@@ -492,7 +702,7 @@ export function CalendarTab({ showToast }) {
                   <div style={{ width: `${Math.min(pct || 0, 100)}%`, height: '100%', background: pct >= 90 ? '#5eead4' : pct >= 70 ? '#60a5fa' : 'var(--text-muted)', opacity: 0.7 }} />
                 </div>
                 <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{pct}%</span>
-                {wGoal ? <span style={{ fontSize: 9, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>goal {wGoal}/wk</span> : null}
+                {wGoal && isMobile ? <span style={{ fontSize: 9, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>goal {wGoal}/wk</span> : null}
               </div>
             )}
           </div>
@@ -537,7 +747,7 @@ export function CalendarTab({ showToast }) {
           always renders full-width and the drawer becomes a
           slide-up bottom sheet overlay rendered below. */}
       <div
-        {...(isMobile ? swipeHandlers : {})}
+        {...(isMobile && !drag ? swipeHandlers : {})}
         style={{
         display: (isWide && drawerOpen) ? 'grid' : 'flex',
         gridTemplateColumns: (isWide && drawerOpen) ? 'minmax(0, 1fr) 340px' : undefined,
@@ -548,19 +758,25 @@ export function CalendarTab({ showToast }) {
         // horizontal swipes get captured by the useSwipeNav handlers.
         touchAction: isMobile ? 'pan-y' : undefined,
       }}>
-        <MonthGrid todayCellRef={todayCellRef}
-          cells={cells}
-          todayStr={todayStr}
-          selectedDate={selectedDate}
-          activitiesByDate={activitiesByDate}
-          plannerByDate={plannerByDate}
-          racesByDate={racesByDate}
-          sleepByDate={sleepByDate}
-          hrvByDate={hrvByDate}
-          goals={goals}
-          isMobile={isMobile}
-          onPickDate={handlePickDate}
-        />
+        <div ref={gridRef} style={{ width: '100%', minWidth: 0 }}>
+          <MonthGrid todayCellRef={todayCellRef}
+            cells={cells}
+            todayStr={todayStr}
+            selectedDate={selectedDate}
+            activitiesByDate={activitiesByDate}
+            plannerByDate={plannerByDate}
+            racesByDate={racesByDate}
+            sleepByDate={sleepByDate}
+            hrvByDate={hrvByDate}
+            goals={goals}
+            isMobile={isMobile}
+            onTileDragStart={tileDragStart}
+            onTileDragMove={tileDragMove}
+            onTileDragEnd={tileDragEnd}
+            onPickDate={handlePickDate}
+            previewByDate={previewByDate}
+          />
+        </div>
         {/* Desktop / tablet inline drawer — mobile renders an inline
             panel BELOW this wrapper so the grid stays visible on top.
             Phase 4r.calendar.25 — mobile drawer is now always-open
@@ -578,9 +794,11 @@ export function CalendarTab({ showToast }) {
               planned={plannerByDate.get(selectedDate) || null}
               races={racesByDate.get(selectedDate) || []}
               onClose={() => setDrawerOpen(false)}
+              onEditSession={openEditPlan}
               onAddRace={() => setPickerOpen(true)}
-              onAddPlan={() => setPlanPickerOpen(true)} onPlanChange={() => setTick(t => t + 1)}
+              onAddPlan={() => { setEditPlan(null); setPlanPickerOpen(true); }} onPlanChange={() => setTick(t => t + 1)}
               onManualAdd={() => setManualOpen(true)}
+              onBuildPlanToRace={(date) => setGenRaceReq({ date, n: Date.now() })}
               onIcsImport={() => setIcsOpen(true)}
               onDeleteRace={(id) => {
                 const next = races.filter(r => r.id !== id);
@@ -608,8 +826,9 @@ export function CalendarTab({ showToast }) {
             activities={activitiesByDate.get(selectedDate) || []}
             planned={plannerByDate.get(selectedDate) || null}
             races={racesByDate.get(selectedDate) || []}
+            onEditSession={openEditPlan}
             onAddRace={() => setPickerOpen(true)}
-            onAddPlan={() => setPlanPickerOpen(true)} onPlanChange={() => setTick(t => t + 1)}
+            onAddPlan={() => { setEditPlan(null); setPlanPickerOpen(true); }} onPlanChange={() => setTick(t => t + 1)}
             onManualAdd={() => setManualOpen(true)}
             onIcsImport={() => setIcsOpen(true)}
             onDeleteRace={(id) => {
@@ -620,22 +839,52 @@ export function CalendarTab({ showToast }) {
         </div>
       )}
 
+      {/* Plan generation — lives IN the calendar, BELOW the day drawer, as a collapsed
+          dropdown (Emil placement). Obvious but tucked away; pasted plans refresh the grid. */}
+      <SeasonPlanGenerator onApplied={() => setTick(t => t + 1)} showToast={showToast} openRaceReq={genRaceReq} onPreview={setPreviewBlock} />
+
+      {drag && createPortal((
+        <div ref={ghostRef} style={{
+          position: 'fixed', zIndex: 9999,
+          transform: 'translate(-50%, -150%)', pointerEvents: 'none',
+          padding: '5px 10px', borderRadius: 8, whiteSpace: 'nowrap',
+          fontSize: 12, fontWeight: 600,
+          color: 'var(--text-primary)', background: 'var(--bg-surface)',
+          border: '1px solid #5eead4', boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+        }} />
+      ), document.body)}
+
       {planPickerOpen && (
         <PlanPickerModal
-          dateStr={selectedDate}
-          onClose={() => setPlanPickerOpen(false)}
+          dateStr={editPlan ? editPlan.date : selectedDate}
+          editing={!!editPlan}
+          initialType={editPlan ? editPlan.session.type : null}
+          initialDist={editPlan && Number(editPlan.session.distanceMi) > 0 ? editPlan.session.distanceMi : ''}
+          onClose={() => { setPlanPickerOpen(false); setEditPlan(null); }}
           onPick={(type, distanceMi, slot) => {
+            const wasEdit = !!editPlan;
             try {
-              const wk = weekKey(new Date(selectedDate + 'T12:00:00'));
+              const targetDate = editPlan ? editPlan.date : selectedDate;
+              const wk = weekKey(new Date(targetDate + 'T12:00:00'));
               const week = getPlannerWeek(wk);
               const monday = new Date(wk + 'T12:00:00');
               const idx = Math.floor(
-                (new Date(selectedDate + 'T12:00:00') - monday) / 86400000
+                (new Date(targetDate + 'T12:00:00') - monday) / 86400000
               );
               if (idx >= 0 && idx < 7) {
                 const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
                 while (days.length < 7) days.push({ type: 'rest' });
-                if (type === 'rest') {
+                if (editPlan) {
+                  // EDIT the existing session in place (replace type/distance).
+                  const sessions = daySessions(days[idx]);
+                  if (sessions[editPlan.idx]) {
+                    const updated = { ...sessions[editPlan.idx], type };
+                    if (Number(distanceMi) > 0) updated.distanceMi = Number(distanceMi);
+                    else delete updated.distanceMi;
+                    sessions[editPlan.idx] = updated;
+                    days[idx] = makeDay(sessions);
+                  }
+                } else if (type === 'rest') {
                   // Rest = clear the day's sessions.
                   days[idx] = makeDay([]);
                 } else {
@@ -650,8 +899,11 @@ export function CalendarTab({ showToast }) {
               }
             } catch (e) { console.warn('[calendar] plan save failed:', e); }
             setPlanPickerOpen(false);
+            setEditPlan(null);
             setTick(t => t + 1);
-            showToast?.(type === 'rest' ? 'Set to rest' : `Added ${prettyFamily(type)}${slot ? ` · ${slot}` : ''}${Number(distanceMi) > 0 ? ` · ${distanceMi} mi` : ''}`);
+            showToast?.(wasEdit
+              ? `Updated ${prettyFamily(type)}${Number(distanceMi) > 0 ? ` · ${distanceMi} mi` : ''}`
+              : (type === 'rest' ? 'Set to rest' : `Added ${prettyFamily(type)}${slot ? ` · ${slot}` : ''}${Number(distanceMi) > 0 ? ` · ${distanceMi} mi` : ''}`));
           }}
         />
       )}
@@ -763,8 +1015,17 @@ function CalendarHeader({ monthLabel, onPrev, onNext, onToday }) {
 
 // ── Month grid ──────────────────────────────────────────────────────────────
 
-function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByDate, racesByDate, sleepByDate, hrvByDate, goals, isMobile, onPickDate, todayCellRef }) {
+function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByDate, racesByDate, sleepByDate, hrvByDate, goals, isMobile, dragOverDate, onTileDragStart, onTileDragMove, onTileDragEnd, onPickDate, todayCellRef, previewByDate }) {
   const TileComponent = isMobile ? MobileDayTile : DayTile;
+  // Mobile: trim trailing all-next-month weeks so a month that fits in 5 rows
+  // doesn't render a bare 6th row of next-month days above the drawer (Emil).
+  const shownCells = (() => {
+    if (!isMobile) return cells;
+    let lastIn = 0;
+    cells.forEach((c, i) => { if (c.inMonth) lastIn = i; });
+    const weeksNeeded = Math.ceil((lastIn + 1) / 7);
+    return cells.slice(0, weeksNeeded * 7);
+  })();
   return (
     <div style={{
       background: 'var(--bg-surface)',
@@ -800,13 +1061,22 @@ function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByD
       <div className="arnold-cal-grid" style={{
         display: 'flex', flexWrap: 'wrap', gap: 2, width: '100%',
       }}>
-        {cells.map(cell => (
+        {shownCells.map(cell => {
+          const pv = previewByDate && previewByDate.get(cell.date);
+          const pvColor = pv ? (PHASE_OVERLAY[pv.phase] || '#5eead4') : null;
+          return (
           <div key={cell.date}
+            data-cal-date={cell.date}
             ref={cell.date === todayStr ? todayCellRef : null}
             style={{
               flex: '0 0 calc((100% - 12px) / 7)',
               minWidth: 0,
               boxSizing: 'border-box',
+              borderRadius: 6,
+              outline: cell.date === dragOverDate ? '2px solid #5eead4' : 'none',
+              outlineOffset: -1,
+              // C3 — plan-generator preview: ring the days the block will fill, colored by phase.
+              boxShadow: pvColor ? `inset 0 0 0 1.5px ${pvColor}` : undefined,
             }}>
             <TileComponent cell={cell}
               isToday={cell.date === todayStr}
@@ -817,10 +1087,15 @@ function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByD
               sleep={sleepByDate.get(cell.date)}
               hrv={hrvByDate.get(cell.date)}
               goals={goals}
+              isPast={cell.date < todayStr}
+              onTileDragStart={onTileDragStart}
+              onTileDragMove={onTileDragMove}
+              onTileDragEnd={onTileDragEnd}
               onPick={() => onPickDate(cell.date)}
             />
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -921,13 +1196,27 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const hasCompleted = completed.length > 0;
   const isPlannedOnly = !hasRace && !hasCompleted && planned && planned.type && planned.type !== 'rest';
 
+  // Planned sessions ranked by the SAME training-priority as completed days (race > hiit
+  // > long_run > ... > strength > mobility), so a Strength+Run day leads with the RUN
+  // figure, not whichever session was added first. Primary = image + headline; the rest
+  // go on the secondary rail. planFamily maps a plan type to its priority/style key
+  // (easy_run → run), preferring an exact FAMILY_STYLE key so long_run/tempo keep theirs.
+  const planFamily = (t) => (FAMILY_STYLE[t] ? t : (PLAN_TYPE_FAMILY[t] || 'cross'));
+  const plannedRanked = isPlannedOnly
+    ? daySessions(planned)
+        .filter(s => s && s.type && s.type !== 'rest')
+        .sort((a, b) => (FAMILY_PRIORITY[planFamily(b.type)] || 0) - (FAMILY_PRIORITY[planFamily(a.type)] || 0))
+    : [];
+  const plannedPrimary = plannedRanked[0] || null;
+  const plannedSecondaries = plannedRanked.slice(1);
+
   // Dominant family for tile coloring (race > completed > planned > rest).
   // Phase 4r.calendar.fix.8 — pick by training-priority not log order so
   // morning mobility doesn't claim the tile when the day also had a HIIT.
   let family = 'rest';
   if (hasRace) family = 'race';
   else if (hasCompleted) family = dominantActivityFamily(completed);
-  else if (isPlannedOnly) family = planned.type;
+  else if (isPlannedOnly) family = plannedPrimary ? planFamily(plannedPrimary.type) : (planned.type || 'rest');
   const style = FAMILY_STYLE[family] || FAMILY_STYLE.rest;
 
   // Day totals for the activity strip cell.
@@ -939,6 +1228,7 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const plannedRunMi = (() => { try { return dayRunMiles(planned) + (races || []).reduce((s, r) => s + (Number(r.distanceMi) || 0), 0); } catch { return 0; } })();
   const actualRunMi = completed.reduce((s, a) => s + (isRun(a) && Number(a.distanceMi) > 0 ? Number(a.distanceMi) : 0), 0);
   const isRunningDay = plannedRunMi > 0 || actualRunMi > 0;
+
 
   // Fuel — pull daily nutrition totals + compare to calorie target.
   // Show calorie target hit %; null when nothing was logged.
@@ -994,13 +1284,9 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   } else if (hasCompleted) {
     headline = (FAMILY_SHORT[family] || family).toUpperCase();
   } else if (isPlannedOnly) {
-    const plannedFam = planned.type === 'easy_run' ? 'run'
-                     : planned.type === 'long_run' ? 'long_run'
-                     : planned.type === 'intervals' ? 'intervals'
-                     : planned.type === 'tempo' ? 'tempo'
-                     : planned.type === 'race' ? 'race'
-                     : planned.type;
-    headline = (FAMILY_SHORT[plannedFam] || plannedFam).toUpperCase();
+    // `family` already resolves to the priority-primary's family key, so the headline
+    // matches the image (e.g. a Strength+Run day shows the RUN figure AND the "RUN" tag).
+    headline = (FAMILY_SHORT[family] || family).toUpperCase();
   }
 
   // Headline metric — single number for the day's primary line.
@@ -1175,6 +1461,37 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
             )}
           </div>
         )}
+
+        {/* Planned secondary rail — same shape as the completed rail, dimmed, for a
+            two-a-day that hasn't happened yet (e.g. Strength + Easy Run). */}
+        {isPlannedOnly && plannedSecondaries.length > 0 && (
+          <div style={{
+            position: 'absolute', right: 0, top: 0, bottom: 0,
+            display: 'flex', flexDirection: 'column', gap: 3, paddingLeft: 2,
+            alignItems: 'flex-end', justifyContent: 'center', opacity: 0.6,
+          }}>
+            {plannedSecondaries.slice(0, 3).map((s, i) => {
+              const fam = FAMILY_STYLE[s.type] ? s.type : (PLAN_TYPE_FAMILY[s.type] || 'cross');
+              const c = FAMILY_STYLE[fam] || FAMILY_STYLE.rest;
+              if (fam === 'mobility') {
+                return (
+                  <div key={i} title="Mobility planned" style={{ display: 'flex', alignItems: 'center', lineHeight: 1 }}>
+                    <MobilityDoneIcon size={14} color={c.color}/>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 2, lineHeight: 1 }}>
+                  <span style={{ width: 2, height: 8, background: c.color, borderRadius: 1 }}/>
+                  <span style={{ fontSize: 7, fontWeight: 700, letterSpacing: '0.04em', color: c.color, textTransform: 'uppercase' }}>{(FAMILY_SHORT[fam] || fam).slice(0, 3)}</span>
+                </div>
+              );
+            })}
+            {plannedSecondaries.length > 3 && (
+              <span style={{ fontSize: 7, color: 'var(--text-muted)' }}>+{plannedSecondaries.length - 3}</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Horizontal vital rail at the bottom — 4 cells, each is
@@ -1261,16 +1578,26 @@ function CockpitVital({ icon, value, color }) {
 // the bottom, matching the desktop cockpit information density while
 // staying readable at small size. Mobility tilde still bottom-right
 // when mobility is layered on a non-mobility primary.
-function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, onPick }) {
+function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, isPast, onTileDragStart, onTileDragMove, onTileDragEnd, onPick }) {
   const hasRace = races.length > 0;
   const hasCompleted = completed.length > 0;
   const isPlannedOnly = !hasRace && !hasCompleted && planned && planned.type && planned.type !== 'rest';
+
+  // Planned sessions ranked by the SAME training-priority as completed days (web parity),
+  // so a Strength+Run day LEADS with the run — color, top-right tag, and the centered
+  // figure — instead of whichever session was added first.
+  const planFamily = (t) => (FAMILY_STYLE[t] ? t : (PLAN_TYPE_FAMILY[t] || 'cross'));
+  const plannedRanked = isPlannedOnly
+    ? daySessions(planned).filter(s => s && s.type && s.type !== 'rest')
+        .sort((a, b) => (FAMILY_PRIORITY[planFamily(b.type)] || 0) - (FAMILY_PRIORITY[planFamily(a.type)] || 0))
+    : [];
+  const plannedPrimary = plannedRanked[0] || null;
 
   let family = 'rest';
   if (hasRace) family = 'race';
   // Phase 4r.calendar.fix.8 — dominant-by-training-priority, not log order.
   else if (hasCompleted) family = dominantActivityFamily(completed);
-  else if (isPlannedOnly) family = planned.type;
+  else if (isPlannedOnly) family = plannedPrimary ? planFamily(plannedPrimary.type) : (planned.type || 'rest');
   const style = FAMILY_STYLE[family] || FAMILY_STYLE.rest;
 
   // Secondary mobility indicator. Phase 4r.calendar.fix.9 — was slice(1)
@@ -1322,7 +1649,7 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
     const push = (gf) => { if (gf && gf !== 'rest' && !out.includes(gf)) out.push(gf); };
     if (hasRace) { push('race'); completed.forEach(a => push(activityFamily(a))); }
     else if (hasCompleted) { completed.forEach(a => push(activityFamily(a))); }
-    else if (isPlannedOnly) { daySessions(planned).forEach(s => push(s.type)); }
+    else if (isPlannedOnly) { plannedRanked.forEach(s => push(s.type)); }
     if (!out.length && (hasRace || hasCompleted || isPlannedOnly)) push(family);
     return out;
   })();
@@ -1342,8 +1669,86 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
   const borderStyle = isPlannedOnly && !hasCompleted && !hasRace ? 'dashed' : 'solid';
   const borderWidth = isToday ? '1.5px' : isSelected ? '1.5px' : '0.5px';
 
+  // Tile figures: each workout is MAJOR (>=30min, big center figure, up to 2
+  // side-by-side) or MINOR (<30min, small on the rim). A day whose only work
+  // is short shows just the rim figure, empty center (Emil).
+  const TYPE_MIN = { mobility: 15, strength: 45, hiit: 30, cycle: 45, swim: 40, ski: 60, walk: 40, cross: 40, easy_run: 40, long_run: 90, tempo: 45, intervals: 45, run: 40, recovery_run: 30, race: 120 };
+  const estPlanMin = (ses) => {
+    if (Number(ses.durationMin) > 0) return Number(ses.durationMin);
+    try { const m = plannedMinutes({ planned: ses, profile: storage.get('profile') || {} }); if (m) return m; } catch {}
+    return TYPE_MIN[ses.type] || 30;
+  };
+  const actMin = (a) => {
+    const secs = Number(a.durationSecs) || 0;
+    if (secs > 0) return secs / 60;
+    return TYPE_MIN[activityFamily(a)] || 30;
+  };
+  const tileItems = (() => {
+    const out = [];
+    if (hasRace) {
+      races.forEach(() => out.push({ family: 'race', min: TYPE_MIN.race }));
+      // On a race day the dominant logged activity IS the race — skip it once so
+      // the tile doesn't show the race AND the race-run as two figures (Emil; web
+      // already shows one). Extra completed sessions (e.g. a separate strength) stay.
+      const domFam = dominantActivityFamily(completed);
+      let domSkipped = false;
+      completed.forEach(a => {
+        const af = activityFamily(a);
+        if (!domSkipped && af === domFam) { domSkipped = true; return; }
+        out.push({ family: af, min: actMin(a) });
+      });
+    }
+    else if (hasCompleted) { completed.forEach(a => out.push({ family: activityFamily(a), min: actMin(a) })); }
+    else if (isPlannedOnly) { plannedRanked.forEach(ses => out.push({ family: ses.type, min: estPlanMin(ses) })); }
+    return out;
+  })();
+  const bigItems = tileItems.filter(it => it.min >= 30);
+  const smallItems = tileItems.filter(it => it.min < 30);
+  // Dominant workout ALWAYS gets the big center figure (matches the web tile);
+  // short add-ons go to the rim. A day whose ONLY workout is short (e.g. a
+  // mobility day) is still shown big-centered, not as a tiny rim png (Emil).
+  const majors = bigItems.length ? bigItems.slice(0, 2) : smallItems.slice(0, 1);
+  const minors = bigItems.length ? [...bigItems.slice(2), ...smallItems] : smallItems.slice(1);
+
+  // Tile drag (mobile): long-press a day that has a plan to pick it up, then
+  // drag onto another day. Native non-passive touchmove on the tile element so
+  // preventDefault works AND the in-progress touch is actually delivered
+  // (dynamically-added window listeners were not — confirmed via console).
+  const hasPlan = !!planned && daySessions(planned).some(x => x.type && x.type !== 'rest');
+  const draggable = !isPast && hasPlan && !hasRace;
+  const btnRef = useRef(null);
+  const lp = useRef({ timer: 0, dragging: false, sx: 0, sy: 0 });
+  useEffect(() => {
+    const el = btnRef.current;
+    if (!el || !draggable) return undefined;
+    const onTM = (e) => {
+      const t = e.touches[0]; if (!t) return;
+      const st = lp.current;
+      if (st.dragging) { onTileDragMove?.(t.clientX, t.clientY); if (e.cancelable) e.preventDefault(); }
+      else if (Math.abs(t.clientX - st.sx) > 14 || Math.abs(t.clientY - st.sy) > 14) { clearTimeout(st.timer); }
+    };
+    el.addEventListener('touchmove', onTM, { passive: false });
+    return () => el.removeEventListener('touchmove', onTM);
+  }, [draggable]);
+  const onTileTouchStart = (e) => {
+    if (!draggable) return;
+    const t = e.touches[0]; if (!t) return;
+    const st = lp.current;
+    st.sx = t.clientX; st.sy = t.clientY; st.dragging = false;
+    clearTimeout(st.timer);
+    st.timer = setTimeout(() => { st.dragging = true; onTileDragStart?.(cell.date, st.sx, st.sy); }, 320);
+  };
+  const onTileTouchEnd = () => {
+    const st = lp.current;
+    clearTimeout(st.timer);
+    if (st.dragging) { st.dragging = false; onTileDragEnd?.(); }
+  };
+
   return (
-    <button onClick={onPick}
+    <button onClick={onPick} ref={btnRef}
+      onTouchStart={draggable ? onTileTouchStart : undefined}
+      onTouchEnd={draggable ? onTileTouchEnd : undefined}
+      onTouchCancel={draggable ? onTileTouchEnd : undefined}
       className="arnold-cal-cell"
       style={{
         all: 'unset', cursor: 'pointer',
@@ -1401,35 +1806,39 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, o
         )}
       </div>
 
-      {/* Dominant figure fills the tile — bigger now that the miles line is
-          gone (Emil). Full per-session figures + metrics live in the drawer. */}
+      {/* Major workouts (>=30min) fill the tile — up to two, side by side. */}
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        minHeight: 0,
+        gap: 1, minHeight: 0,
         opacity: isPlannedOnly && !hasCompleted ? 0.6 : 1,
       }}>
-        {sigImg && (
-          <img src={sigImg} alt={family}
+        {majors.map((it, i) => (
+          <img key={i} src={sigSrc(it.family)} alt={it.family}
             style={{
-              maxWidth: '100%', maxHeight: '100%',
+              maxWidth: majors.length > 1 ? '50%' : '100%', maxHeight: '100%',
               objectFit: 'contain', display: 'block',
-              transform: `scale(${SIG_SCALE[family] || 1})`,
+              transform: `scale(${SIG_SCALE[it.family] || 1})`,
               transformOrigin: 'center',
             }}
             onError={(e) => { e.currentTarget.style.display = 'none'; }}
           />
-        )}
+        ))}
       </div>
 
-      {/* Mobility add-on (warrior) — small figure on the mid-right edge when
-          mobility is a secondary session, not the dominant one (Emil). */}
-      {hasMobilitySecondary && (
-        <span style={{
+      {/* Minor workouts (<30min) — small figures on the right rim (Emil). */}
+      {minors.length > 0 && (
+        <div style={{
           position: 'absolute', top: '50%', right: 1, transform: 'translateY(-50%)',
-          zIndex: 2, display: 'flex', lineHeight: 1,
+          zIndex: 2, display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'flex-end',
         }}>
-          <MobilityDoneIcon size={13} color="#5eead4"/>
-        </span>
+          {minors.slice(0, 3).map((it, i) => (
+            it.family === 'mobility'
+              ? <MobilityDoneIcon key={i} size={13} color="#5eead4"/>
+              : <img key={i} src={sigSrc(it.family)} alt={it.family}
+                  style={{ height: 15, width: 'auto', objectFit: 'contain', transform: `scale(${SIG_SCALE[it.family] || 1})` }}
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}/>
+          ))}
+        </div>
       )}
     </button>
   );
@@ -1483,7 +1892,7 @@ function ThreeDomainCell({ label, value, color }) {
 
 // ── Day drawer ──────────────────────────────────────────────────────────────
 
-function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose, onPlanChange }) {
+function DayDrawer({ isMobile, dateStr, activities, planned, races, onSessionDragStart, onEditSession, onAddRace, onAddPlan, onManualAdd, onIcsImport, onDeleteRace, onClose, onPlanChange, onBuildPlanToRace }) {
   const d = new Date(dateStr + 'T12:00:00');
   const dateLabel = d.toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
@@ -1493,6 +1902,28 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
   // irrelevant). Compare local-date strings, not Date objects, to
   // dodge timezone drift.
   const isPast = dateStr < localDate();
+
+  // A planned session is "done" once Arnold has a matching logged activity (a
+  // real timestamped record) for the day. Cancel/edit is tied to THIS — not the
+  // calendar date, and not to whether some OTHER session that day happened
+  // (Emil: today's race-run shouldn't lock an un-done strength session).
+  const sessionDone = (session) => {
+    const t = session && session.type;
+    if (!t || t === 'rest') return false;
+    const RUNISH = /run|tempo|interval|threshold|speed|race|recovery|progression/i;
+    return (activities || []).some(a => {
+      const fam = activityFamily(a);
+      if (RUNISH.test(t)) return isRun(a) || a.isRace || ['run', 'intervals', 'tempo', 'race'].includes(fam);
+      if (t === 'strength') return isStrength(a) || fam === 'strength';
+      if (t === 'mobility') return isMobility(a) || fam === 'mobility';
+      if (t === 'cycle' || t === 'bike') return isCycling(a) || fam === 'cycle';
+      if (t === 'hiit') return isHIIT(a) || isExplicitHIIT(a) || fam === 'hiit';
+      if (t === 'swim') return isSwim(a) || fam === 'swim';
+      if (t === 'ski') return isSki(a) || fam === 'ski';
+      if (t === 'walk') return isWalk(a) || fam === 'walk';
+      return fam === t;
+    });
+  };
 
   // Remove one planned session from this day, then refresh the calendar.
   const removeSession = (idx) => {
@@ -1510,6 +1941,25 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
       savePlannerWeek(wk, { ...week, days });
       onPlanChange?.();
     } catch (e) { console.warn('[calendar] remove session failed:', e); }
+  };
+
+  // Edit a planned session's mileage in place — no need to ✕ and re-add (Emil).
+  const updateSessionDistance = (idx, newMi) => {
+    try {
+      const wk = weekKey(d);
+      const week = getPlannerWeek(wk);
+      const monday = new Date(wk + 'T12:00:00');
+      const dIdx = Math.floor((d - monday) / 86400000);
+      if (dIdx < 0 || dIdx >= 7) return;
+      const days = [...(week.days || Array(7).fill({ type: 'rest' }))];
+      while (days.length < 7) days.push({ type: 'rest' });
+      const sessions = daySessions(days[dIdx]);
+      if (!sessions[idx]) return;
+      sessions[idx] = { ...sessions[idx], distanceMi: Math.max(0, Number(newMi) || 0) };
+      days[dIdx] = makeDay(sessions);
+      savePlannerWeek(wk, { ...week, days });
+      onPlanChange?.();
+    } catch (e) { console.warn('[calendar] update session distance failed:', e); }
   };
 
   // Recovery snapshot
@@ -1647,107 +2097,66 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
       {/* Header: date label (left) + race pill OR +Add race (right) +
           optional close button. Phase 4r.calendar.29 — no border-bottom
           to keep the contour-less look. */}
-      <div style={{
-        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-        gap: 8, marginBottom: 10,
-      }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ marginBottom: 10 }}>
+        {/* Row 1: date (full width) + close. */}
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
           <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>{dateLabel}</div>
-          {(() => {
-            const hasRace = races.length > 0 && races[0].distanceMi;
-            if (hasRace) {
-              const racePred = (() => { try { return predictRaceFinish(races[0], getUnifiedActivities() || []); } catch { return null; } })();
-              const s = racePred?.seconds;
-              const racePredStr = (s != null && Number.isFinite(s) && s > 0)
-                ? (() => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60); return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; })()
-                : null;
-              return (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {`${distanceLabel(races[0])}${races[0].city ? ` · ${races[0].city}` : ''}${racePredStr ? ` · ⏱ ~${racePredStr} predicted` : ''}`}
-                </div>
-              );
-            }
-            // Each PLANNED session shown as its own chip with a remove ✕, so a
-            // day can hold several and you can swap/remove any of them (Emil).
-            const sessions = daySessions(planned);
-            if (!sessions.length) {
-              return <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>No plan</div>;
-            }
-            const TIMED = new Set(['easy_run', 'long_run']);
-            return (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 3 }}>
-                {sessions.map((s, i) => {
-                  const mi = Number(s.distanceMi) || 0;
-                  const mins = TIMED.has(s.type) ? (() => { try { return plannedMinutes({ planned: s, profile: storage.get('profile') || {} }); } catch { return null; } })() : null;
-                  const extra = [mi > 0 ? `${mi} mi` : null, mins ? `~${mins} min` : null].filter(Boolean).join(' · ');
-                  return (
-                    <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '2px 3px 2px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)', border: '0.5px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
-                      {s.slot ? <span style={{ fontSize: 8, color: 'var(--text-faint)' }}>{s.slot}</span> : null}
-                      <span>{prettyFamily(s.type)}{extra ? ` · ${extra}` : ''}</span>
-                      {!isPast && (
-                        <button onClick={() => removeSession(i)} className="arnold-compact-btn" style={{ all: 'unset', cursor: 'pointer', color: '#f87171', fontSize: 12, lineHeight: 1, padding: '0 3px' }} title="Remove this session">✕</button>
-                      )}
-                    </span>
-                  );
-                })}
-              </div>
-            );
-          })()}
+          {onClose && (
+            <button onClick={onClose} title="Close detail panel" style={{ all: 'unset', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '2px 6px', color: 'var(--text-muted)', flexShrink: 0, borderRadius: 4 }}>✕</button>
+          )}
         </div>
-        {/* Phase 4r.calendar.29 — top-right slot: race pill if scheduled,
-            otherwise + Add race button (hidden on past dates per
-            4r.calendar.24). Manual entry + ICS sync removed from
-            drawer entirely. */}
-        {races.length > 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            <span style={{
-              background: 'rgba(239,68,68,0.15)', color: '#ef4444',
-              fontSize: 10, fontWeight: 600,
-              padding: '3px 10px', borderRadius: 999,
-              maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>★ {races[0].name}</span>
-            {onDeleteRace && (
-              <button onClick={() => onDeleteRace(races[0].id)} style={{
-                all: 'unset', cursor: 'pointer', fontSize: 11,
-                color: '#f87171', padding: '0 4px',
-              }} title="Remove race">✕</button>
-            )}
-          </div>
-        ) : !isPast ? (
-          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-            {/* Phase 4r.calendar.33 — +Plan opens the workout picker. */}
-            {onAddPlan && (
-              <button onClick={onAddPlan} className="arnold-compact-btn" style={{
-                // position: 'relative' required — see POSTMORTEMS.md 2026-05-23
-                all: 'unset', cursor: 'pointer', position: 'relative',
-                fontSize: 11, fontWeight: 500,
-                padding: '3px 10px', borderRadius: 999,
-                color: '#a78bfa',
-                background: 'rgba(167,139,250,0.10)',
-                border: '0.5px solid rgba(167,139,250,0.30)',
-              }}>+ Plan</button>
-            )}
-            {onAddRace && (
-              <button onClick={onAddRace} className="arnold-compact-btn" style={{
-                // position: 'relative' required — see POSTMORTEMS.md 2026-05-23
-                all: 'unset', cursor: 'pointer', position: 'relative',
-                fontSize: 11, fontWeight: 500,
-                padding: '3px 10px', borderRadius: 999,
-                color: '#60a5fa',
-                background: 'rgba(96,165,250,0.10)',
-                border: '0.5px solid rgba(96,165,250,0.30)',
-              }}>+ Add race</button>
-            )}
-          </div>
-        ) : null}
-        {onClose && (
-          <button onClick={onClose} title="Close detail panel" style={{
-            all: 'unset', cursor: 'pointer',
-            fontSize: 14, lineHeight: 1, padding: '2px 6px',
-            color: 'var(--text-muted)', flexShrink: 0,
-            borderRadius: 4,
-          }}>✕</button>
-        )}
+        {/* Race line — name + distance + city + prediction, consolidated (no
+            separate pill / redundant "Race" chip). */}
+        {races.length > 0 && races[0].distanceMi && (() => {
+          const racePred = (() => { try { return predictRaceFinish(races[0], getUnifiedActivities() || []); } catch { return null; } })();
+          const ss = racePred?.seconds;
+          const racePredStr = (ss != null && Number.isFinite(ss) && ss > 0)
+            ? (() => { const h = Math.floor(ss / 3600), m = Math.floor((ss % 3600) / 60), sec = Math.round(ss % 60); return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; })()
+            : null;
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+              <span style={{ fontSize: 11, color: '#ef4444', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {`\u2605 ${races[0].name ? races[0].name + ' \u00b7 ' : ''}${distanceLabel(races[0])}${races[0].city ? ` \u00b7 ${races[0].city}` : ''}${racePredStr ? ` \u00b7 \u23f1 ~${racePredStr}` : ''}`}
+              </span>
+              {onDeleteRace && !sessionDone({ type: 'race' }) && (
+                <button onClick={() => onDeleteRace(races[0].id)} title="Remove race" style={{ all: 'unset', cursor: 'pointer', fontSize: 11, color: '#f87171', flexShrink: 0, padding: '0 2px' }}>✕</button>
+              )}
+            </div>
+          );
+        })()}
+        {/* Planned-session chips (excluding the race itself) + actions, flowing
+            across the full width instead of squashed into a skinny column. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
+          {daySessions(planned).map((s, i) => {
+            if (!s.type || s.type === 'rest' || s.type === 'race') return null;
+            const mi = Number(s.distanceMi) || 0;
+            const TIMED = new Set(['easy_run', 'long_run']);
+            const mins = TIMED.has(s.type) ? (() => { try { return plannedMinutes({ planned: s, profile: storage.get('profile') || {} }); } catch { return null; } })() : null;
+            const extra = [mi > 0 ? `${mi} mi` : null, mins ? `~${mins} min` : null].filter(Boolean).join(' \u00b7 ');
+            return (
+              <span key={i} onClick={!sessionDone(s) ? (e) => { if (e.target && e.target.tagName === 'BUTTON') return; onEditSession?.(i, s); } : undefined}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '2px 3px 2px 7px', borderRadius: 6, background: 'rgba(255,255,255,0.04)', border: '0.5px solid var(--border-subtle)', color: 'var(--text-secondary)', cursor: !sessionDone(s) ? 'pointer' : undefined }}>
+                {s.slot ? <span style={{ fontSize: 8, color: 'var(--text-faint)' }}>{s.slot}</span> : null}
+                <span>{prettyFamily(s.type)}{extra ? ` \u00b7 ${extra}` : ''}</span>
+                {!sessionDone(s) && (
+                  <button onClick={(e) => { e.stopPropagation(); removeSession(i); }} className="arnold-compact-btn" style={{ all: 'unset', cursor: 'pointer', color: '#f87171', fontSize: 12, lineHeight: 1, padding: '0 3px' }} title="Remove this session">✕</button>
+                )}
+              </span>
+            );
+          })}
+          {!isPast && onAddPlan && (
+            <button onClick={onAddPlan} className="arnold-compact-btn" style={{ all: 'unset', cursor: 'pointer', position: 'relative', fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 999, color: '#a78bfa', background: 'rgba(167,139,250,0.10)', border: '0.5px solid rgba(167,139,250,0.30)' }}>+ Plan</button>
+          )}
+          {!isPast && races.length > 0 && onBuildPlanToRace && (
+            <button onClick={() => onBuildPlanToRace(races[0].date)} className="arnold-compact-btn" title="Open the plan generator targeting this race" style={{ all: 'unset', cursor: 'pointer', fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 999, color: '#5eead4', background: 'rgba(94,234,212,0.10)', border: '0.5px solid rgba(94,234,212,0.30)' }}>✦ Build plan to this race</button>
+          )}
+          {!isPast && races.length === 0 && onAddRace && (
+            <button onClick={onAddRace} className="arnold-compact-btn" style={{ all: 'unset', cursor: 'pointer', position: 'relative', fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 999, color: '#60a5fa', background: 'rgba(96,165,250,0.10)', border: '0.5px solid rgba(96,165,250,0.30)' }}>+ Add race</button>
+          )}
+          {races.length === 0 && !daySessions(planned).some(s => s.type && s.type !== 'rest') && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No plan</span>
+          )}
+        </div>
       </div>
 
       {/* Phase 4r.intel.11 — Predicted bands for the planned workout.
@@ -1756,16 +2165,22 @@ function DayDrawer({ isMobile, dateStr, activities, planned, races, onAddRace, o
           logged, the Activity section below carries the actual numbers and
           the expected-bands card disappears — no more stale "expected" once
           you've actually done the workout (Phase 4r.intel.12-fix4). */}
-      {planned && planned.type && planned.type !== 'rest' && !isPast && activities.length === 0 && (
-        <div style={{ marginBottom: isMobile ? 6 : 10 }}>
-          <PredictedBandsCard
-            family={planned.type}
-            dateStr={dateStr}
-            maxHR={parseFloat((storage.get('profile') || {}).maxHR) || null}
-            planLabel={prettyFamily(planned.type)}
-          />
-        </div>
-      )}
+      {!isPast && activities.length === 0 && (() => {
+        const ws = daySessions(planned).filter(ps => ps.type && ps.type !== 'rest');
+        if (!ws.length) return null;
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: isMobile ? 6 : 10 }}>
+            {ws.map((ps, i) => (
+              <PredictedBandsCard key={i}
+                family={ps.type}
+                dateStr={dateStr}
+                maxHR={parseFloat((storage.get('profile') || {}).maxHR) || null}
+                planLabel={`${prettyFamily(ps.type)}${Number(ps.distanceMi) > 0 ? ` \u00b7 ${ps.distanceMi} mi` : ''}`}
+              />
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Activity — Phase 4r.calendar.30 — single-line rows, no
           signature (calendar tile carries the imagery). HR zone bar
@@ -2169,7 +2584,7 @@ function EmptyHint({ children }) {
 // Lightweight workout-category picker. Lists Arnold's standard families;
 // tapping one saves it to the planner for the selected date.
 
-function PlanPickerModal({ dateStr, onClose, onPick }) {
+function PlanPickerModal({ dateStr, onClose, onPick, editing = false, initialType = null, initialDist = '' }) {
   // Phase 0.3 — the option list is DERIVED from planner.DAY_TYPES (the single
   // source), so any discipline added there auto-appears in this picker. This kills
   // the second hardcoded list that caused the "new sports missing from the drawer"
@@ -2188,8 +2603,8 @@ function PlanPickerModal({ dateStr, onClose, onPick }) {
   // can count planned miles. Selecting a run type reveals a distance field;
   // non-run types commit immediately on tap (no distance to capture).
   const RUN_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals']);
-  const [selType, setSelType] = useState(null);
-  const [dist, setDist] = useState('');
+  const [selType, setSelType] = useState(RUN_TYPES.has(initialType) ? initialType : null);
+  const [dist, setDist] = useState(initialDist != null ? String(initialDist) : '');
   const handlePick = (type) => {
     if (RUN_TYPES.has(type)) {
       setSelType(type);            // stage it; show the distance field
@@ -2221,7 +2636,7 @@ function PlanPickerModal({ dateStr, onClose, onPick }) {
       }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <div>
-            <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Plan workout</div>
+            <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{editing ? 'Edit workout' : 'Plan workout'}</div>
             <div style={{ fontSize: 13, color: 'var(--text-primary, #e2e8f0)', marginTop: 2 }}>{dateLabel}</div>
           </div>
           <button onClick={onClose} style={{
@@ -2283,7 +2698,7 @@ function PlanPickerModal({ dateStr, onClose, onPick }) {
               padding: '6px 12px', borderRadius: 6,
               background: 'rgba(96,165,250,0.15)', border: '0.5px solid rgba(96,165,250,0.4)',
               whiteSpace: 'nowrap',
-            }}>Plan it</button>
+            }}>{editing ? 'Save' : 'Plan it'}</button>
           </div>
         )}
       </div>

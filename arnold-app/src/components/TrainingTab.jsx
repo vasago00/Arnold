@@ -19,6 +19,7 @@ import { aiStream } from "../core/ai.js";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
 import { getEffectiveTargets as getDerivedTargets } from "../core/goalModel.js";
 import { todayPlanned, checkTodayCompletion } from "../core/planner.js";
+import { resolveTodayStatus } from "../core/todayStatus.js";
 import { computeHrTSS, computeAcuteChronicRatio, computeDailyScore, computeRolling7d, computeRolling30d, getEffectiveMaxHR, rtssBand } from "../core/trainingStress.js";
 import { assessCalibration, recommendCalorieTarget } from "../core/energyBalance.js";
 import { computeGlycogenEstimate } from "../core/coachSignals.js";
@@ -381,13 +382,20 @@ Structure:
   // Today's planned session — check completion via shared 3-store merge
   const todayDateStr=td();
   const{completed:planCompleted}=checkTodayCompletion(todayDateStr,planned);
+  // Single source of truth (core/todayStatus): reflects what ACTUALLY happened
+  // today (off-plan ride on a planned-run/no-plan day reads as the ride, not "Rest").
+  const todayStat=resolveTodayStatus({activities,planned,today:todayDateStr});
+  // Two-a-day: meaningful sessions beyond the headline primary. Drives the "+N"
+  // chip + disciplines line so a double day doesn't read as a single workout.
+  const todayExtra=(todayStat.secondaries||[]).filter(s=>s.meaningful);
+  const todayDisciplines=(todayStat.sessions||[]).filter(s=>s.meaningful).map(s=>s.label).join(' + ');
   if(planned&&plannedTypeLabel){
     attention.push({
-      label:'Today',value:plannedTypeLabel,unit:'',
+      label:'Today',value:todayStat.label,unit:'',
       detail:plannedDist?plannedDist.replace(' · ',''):'planned',
-      severity:planCompleted?'ok':'neutral',
-      action:planCompleted?'Completed ✓':'From your weekly plan',
-      completed:planCompleted,
+      severity:todayStat.done?'ok':'neutral',
+      action:todayStat.done?(todayStat.offPlan?'Off-plan ✓':'Completed ✓'):'From your weekly plan',
+      completed:todayStat.done,
     });
   }
   // Volume gap — corrective action tile
@@ -993,8 +1001,15 @@ Structure:
                         label="Today"
                         value={(
                           <span style={{ display:'inline-flex', alignItems:'baseline', gap:5 }}>
-                            <span>{plannedTypeLabel || 'Rest'}</span>
-                            {todayCompleted && (
+                            <span>{todayStat.label}</span>
+                            {todayExtra.length > 0 && (
+                              <span
+                                title={`+${todayExtra.length} more session${todayExtra.length>1?'s':''} today (${todayDisciplines})`}
+                                style={{ fontSize:10, fontWeight:700, color:'#a0c0e8', background:'rgba(96,165,250,0.15)', borderRadius:4, padding:'0 4px', lineHeight:1.5 }}>
+                                +{todayExtra.length}
+                              </span>
+                            )}
+                            {todayStat.done && (
                               <span
                                 aria-label="completed"
                                 title={`Today's session logged · ${todayRTSS} load`}
@@ -1006,8 +1021,10 @@ Structure:
                         )}
                         type="plan"
                         sub={
-                          todayCompleted
-                            ? `${todayRTSS} load logged`
+                          todayStat.done
+                            ? (todayExtra.length > 0
+                                ? `${todayRTSS != null ? todayRTSS : 0} load · ${todayDisciplines}`
+                                : `${todayRTSS != null ? todayRTSS : 0} load logged`)
                             : (planned?.distanceMi ? `${planned.distanceMi}mi`
                                 : (planned?.minutes ? `${planned.minutes}min`
                                     // A session IS planned (e.g. Mobility) but has no

@@ -1041,11 +1041,31 @@ export const TILE_METRICS = [
         sublabel = `Garmin VO2max-based · no recent race-quality run`;
       }
 
+      // Confidence (Sprint 2 · 2.3): how much to trust this predicted time.
+      // Empirical (a real race-effort or quality long run you actually ran) beats
+      // Garmin's VO₂max estimate, which systematically under-predicts trained
+      // runners. A recent race effort is the strongest anchor; a long run or a
+      // stale effort is a softer signal; Garmin-only is the weakest.
+      let confidence;
+      if (source === 'garmin') {
+        confidence = { level: 'low', text: 'VO₂max est', title: "Garmin's VO₂max-derived estimate — it tends to under-predict trained runners, and there's no recent race-quality run to anchor it." };
+      } else {
+        const aDays = anchor?.run?.date ? Math.round((Date.now() - new Date(anchor.run.date + 'T12:00:00').getTime()) / 86400000) : 999;
+        const raceTier = anchor?.tier === 'race';
+        const level = (raceTier && aDays <= 45) ? 'high' : (raceTier || aDays <= 56) ? 'medium' : 'low';
+        confidence = {
+          level,
+          text: raceTier ? 'race effort' : 'long run',
+          title: `Projected from a ${raceTier ? 'real race-effort' : 'quality long run'} you ran${anchor?.run?.date ? ` (${anchor.run.date})` : ''} — your demonstrated fitness, not a VO₂max estimate.`,
+        };
+      }
+
       return {
         value: fmt(headline.tHM),
         sublabel,
         full: headline,
         source, // 'empirical' or 'garmin' — exposed for any UI that wants to badge it
+        confidence,
       };
     },
     // Available if we have ANY data — empirical anchor OR Garmin block.
@@ -2621,7 +2641,16 @@ export const TILE_METRICS = [
         if (!Number.isFinite(wt) || wt <= 0 || !Number.isFinite(bf) || bf <= 0) continue;
         const lbmLbs = wt * (1 - bf / 100);
         const lbmKg = lbmLbs / 2.20462;
-        return { value: Math.round(370 + 21.6 * lbmKg), sublabel: w.date };
+        // Confidence (Sprint 2 · 2.3): this RMR is an ESTIMATE from body composition
+        // (Katch-McArdle), not a measured value — so it's never "high"; and it fades as
+        // the body-fat read ages. Surfaces "where from / how sure" in place on the tile.
+        const ageDays = w.date ? Math.round((Date.now() - new Date(w.date + 'T12:00:00').getTime()) / 86400000) : 999;
+        const level = ageDays <= 45 ? 'medium' : 'low';
+        return {
+          value: Math.round(370 + 21.6 * lbmKg),
+          sublabel: w.date,
+          confidence: { level, text: 'katch', title: `Estimated from your body composition (Katch-McArdle); body-fat read ${ageDays <= 45 ? 'recent' : ageDays + 'd old'}` },
+        };
       }
       return null;
     },

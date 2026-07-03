@@ -8,14 +8,15 @@
 //   • its source is a known post-workout source, OR
 //   • it is timed AND falls at/after a workout logged that same day (robust:
 //     "after a workout" = post-workout, even for an early-morning session), OR
-//   • it is timed at/after the 10:00 morning cutoff.
+//   • it is timed at/after the noon (12:00) morning cutoff.
 // Untimed readings are treated as fasted (a plain morning weigh-in). Days with
 // no fasted reading are omitted, so a post-workout-only day never becomes a data
 // point — the trend falls back to the last genuinely fasted day.
 import { storage } from './storage.js';
+import { localDate } from './time.js';
 
 const LB_PER_KG = 2.20462;
-export const MORNING_CUTOFF_HOUR = 10;
+export const MORNING_CUTOFF_HOUR = 12; // noon — a genuine morning weigh-in (e.g. 10:01) must count; the EARLIEST-per-day rule still picks the most-fasted reading, and clearly-intraday (13:00+) readings stay excluded. Was 10 (rejected a 10:01 reading by 1 minute — Emil 2026-06-21).
 const NON_FASTED_SOURCES = new Set(['post-run', 'post-workout']);
 
 function lbsOf(r) {
@@ -75,6 +76,27 @@ export function currentTrueWeightLbs(rows, opts = {}) {
     .filter(d => d.date && d.lbs)
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   return days.length ? days[0].lbs : null;
+}
+
+// Like currentTrueWeightLbs but returns the DATE the value came from, so the UI
+// can flag a stale fallback ("as of Jun 20") instead of presenting an older
+// day's weight as if it were today's (Emil 2026-06-21).
+export function currentTrueWeight(rows, opts = {}) {
+  const src = rows || storage.get('weight') || [];
+  const days = morningWeightRows(src, opts)
+    .map(r => ({ date: r.date, lbs: lbsOf(r) }))
+    .filter(d => d.date && d.lbs)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  return days.length ? { lbs: days[0].lbs, date: days[0].date } : null;
+}
+
+// "Jun 20" when the resolved weight is NOT from `today` (a stale fallback);
+// empty string when current. Lets readouts show the date instead of implying it's today's.
+export function weightAsOf(date, today) {
+  const t = today || localDate();
+  if (!date || date === t) return '';
+  try { return new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  catch { return date; }
 }
 
 // Console diagnostic: run `window.weightDebug()` in devtools to see every weigh-in

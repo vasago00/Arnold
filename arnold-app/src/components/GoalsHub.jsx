@@ -119,16 +119,66 @@ function buildV2FromV1(v1) {
   return out;
 }
 
-/** Load v2 goals from storage, falling back to v1 compat. */
+// Races are CANONICAL in the shared 'races' store (the same one CalendarTab uses
+// via memory.getRaces). normalizeRace fills the richer Plan-tab fields; mergeRaces
+// dedupes the two lists that drifted apart (canonical wins).
+const normalizeRace = (r) => ({
+  ...r,
+  id: r.id || `race-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  name: r.name || 'Race',
+  date: r.date || null,
+  type: r.type || 'other',
+  distanceMi: r.distanceMi != null ? Number(r.distanceMi) : null,
+  priority: (r.priority || 'A').toUpperCase(),
+  goalTimeSecs: r.goalTimeSecs != null ? Number(r.goalTimeSecs) : null,
+});
+function mergeRaces(canonical, legacy) {
+  const out = []; const seen = new Set();
+  const key = (r) => r.id || `${r.date}|${(r.name || '').toLowerCase()}`;
+  for (const r of [...(canonical || []), ...(legacy || [])]) {
+    const k = key(r); if (seen.has(k)) continue; seen.add(k); out.push(r);
+  }
+  return out;
+}
+
+// Races that exist ONLY as planner days with type:'race' (added via the day
+// editor, or legacy) — they render on the Calendar but were never written to the
+// shared races store, so the Plan tab couldn't see them. Surface them by date.
+function plannerRaceDays() {
+  try {
+    const planner = storage.get('planner') || {};
+    const addDays = (ws, i) => { const d = new Date(ws + 'T12:00:00'); d.setDate(d.getDate() + i); return d.toISOString().slice(0, 10); };
+    const out = [];
+    for (const wk of Object.values(planner)) {
+      if (!wk || !wk.weekStart || !Array.isArray(wk.days)) continue;
+      wk.days.forEach((day, i) => {
+        if (day && day.type === 'race') out.push({ date: addDays(wk.weekStart, i), name: day.notes || 'Race', distanceMi: Number(day.distanceMi) || null });
+      });
+    }
+    return out;
+  } catch { return []; }
+}
+
+/** Load v2 goals from storage. Races come from the shared 'races' store. */
 function loadGoalsV2() {
   const raw = storage.get('goals') || {};
-  if (raw.schemaVersion === 2) {
-    // Merge with empty defaults so missing categories don't crash UI.
-    return { ...EMPTY_V2(), ...raw };
+  const base = raw.schemaVersion === 2 ? { ...EMPTY_V2(), ...raw } : buildV2FromV1(raw);
+  // Reconcile: races from the canonical store + any still nested in the goals blob
+  // (the historical drift), deduped + normalized. Persist the merge once so the
+  // two stores converge instead of showing 12 vs 11.
+  const canonical = storage.get('races') || [];
+  const legacy = Array.isArray(base.races) ? base.races : [];
+  const merged0 = mergeRaces(canonical, legacy).map(normalizeRace);
+  // Fold in planner-only races (on the Calendar but not in the store) by date,
+  // so the third store stops drifting too.
+  const covered = new Set(merged0.map(r => r.date));
+  const fromPlanner = plannerRaceDays().filter(pr => pr.date && !covered.has(pr.date)).map(normalizeRace);
+  const merged = [...merged0, ...fromPlanner];
+  if (merged.length !== canonical.length) {
+    try { storage.set('races', merged, { skipValidation: true }); localStorage.setItem('arnold:races', JSON.stringify(merged)); } catch {}
   }
-  // v1 → v2 compat normalization. We do NOT write v2 back yet —
-  // Turn 4 owns the migration write. Turn 3 just reads in v2 shape.
-  return buildV2FromV1(raw);
+  base.races = merged;
+  return base;
 }
 
 /**
@@ -139,11 +189,14 @@ function loadGoalsV2() {
 function saveGoalsV2(v2) {
   const existing = storage.get('goals') || {};
   storage.set('goals', { ...existing, ...v2, schemaVersion: 2 });
-  // Also write any race changes to legacy localStorage so the rest of
-  // the app's existing race reads keep working until Turn 4.
-  try {
-    localStorage.setItem('arnold:races', JSON.stringify(v2.races || []));
-  } catch {}
+  // Races are CANONICAL in the shared 'races' store. Write through the storage
+  // engine (so CalendarTab's storage.get('races') / IndexedDB sees it) AND mirror
+  // to raw localStorage, which ~10 other surfaces (EdgeIQ, LogDay, TrainingTab,
+  // goalModel…) still read directly. CalendarTab's memory.saveRaces does the same
+  // dual-write, so both stores stay in lockstep no matter who edits.
+  const races = v2.races || [];
+  storage.set('races', races, { skipValidation: true });
+  try { localStorage.setItem('arnold:races', JSON.stringify(races)); } catch {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1636,11 +1689,19 @@ export function GoalsHub({ showToast }) {
                             <span style={{ ...styles.raceChip(r.priority), justifySelf: 'center' }}>
                               {r.priority}{autoP1 ? '·auto' : ''}
                             </span>
-                            <button
-                              className="arnold-compact-btn"
-                              style={{ ...styles.editBtn, justifySelf: 'end' }}
-                              onClick={() => setRaceModal(r.id)}
-                            >edit</button>
+                            <div style={{ display: 'flex', gap: 6, justifySelf: 'end', alignItems: 'center' }}>
+                              <button
+                                className="arnold-compact-btn"
+                                style={styles.editBtn}
+                                onClick={() => setRaceModal(r.id)}
+                              >edit</button>
+                              <button
+                                className="arnold-compact-btn"
+                                title={`Delete ${r.name}`}
+                                style={{ all: 'unset', cursor: 'pointer', color: '#f87171', fontSize: 13, lineHeight: 1, padding: '0 2px' }}
+                                onClick={() => { if (window.confirm(`Delete "${r.name}"? This removes it from the Calendar too.`)) deleteRace(r.id); }}
+                              >✕</button>
+                            </div>
                           </div>
                         );
                       })}

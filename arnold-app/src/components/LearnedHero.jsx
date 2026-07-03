@@ -9,6 +9,8 @@
 // hubFacts — same source the old HubPanel used.
 import { useMemo, useState } from 'react';
 import { buildHubFromStorage } from '../core/hub/hubDebug.js';
+import { energyExpenditure } from '../core/energyExpenditure.js';   // Slice 2 — energy source + confidence
+import { useStorageVersion } from '../hooks/useStorageVersion.js';
 import { TEXT, STATUS } from '../theme/tokens.js';
 
 const FACTOR_LABEL = {
@@ -45,6 +47,51 @@ function confColor(c) {
   return c >= 0.6 ? STATUS.good : c >= 0.3 ? STATUS.warn : STATUS.neutral;
 }
 
+// Confidence as an actual distribution of the LEARNED EFFECT — not a re-skinned
+// bar. The bell is centred on the learned magnitude `value` (e.g. +0.71 %/°C);
+// its spread is the uncertainty, and a dashed line marks zero ("no effect").
+// So a high-confidence effect is a narrow mound sitting clear of zero ("we've
+// nailed it"), while a low-confidence one is a broad mound spilling over zero
+// ("could still be nothing yet").
+//
+// Spread is a confidence-derived uncertainty band, NOT a frequentist CI: the
+// hub holds each effect as a Bayesian estimate whose confidence = p/(p+k0), so
+// the relative spread is σ = |value|·√((1−c)/c). Under this, the effect's
+// separation from zero reads as ≈√(c/(1−c)) sigmas — exactly what "% sure" means.
+// The value-axis is anchored to `value` and 0 (pad ∝ |value|), so mean and the
+// zero line sit at fixed x and only the WIDTH changes with confidence.
+function BellCurve({ value = 0, confidence = 0, color = TEXT.muted, width = 96, height = 26 }) {
+  const v = Number(value) || 0;
+  const c = Math.max(0.02, Math.min(0.98, confidence || 0));
+  const sigma = Math.abs(v) * Math.sqrt((1 - c) / c);
+  const pad = Math.abs(v) * 0.6 || 1;
+  const lo = Math.min(0, v), hi = Math.max(0, v);
+  const xMin = lo - pad, xMax = hi + pad;
+  const span = (xMax - xMin) || 1;
+  const X = t => ((t - xMin) / span) * width;
+  const muPx = X(v);
+  const zeroPx = X(0);
+  const sigPx = Math.max(2, Math.min(width, (sigma / span) * width));
+  const topPad = 3;                 // headroom so the peak + stroke never touch the top edge
+  const amp = height - topPad;
+  const N = 56;
+  let d = `M 0 ${height}`;
+  for (let i = 0; i <= N; i++) {
+    const x = (i / N) * width;
+    const y = height - amp * Math.exp(-((x - muPx) ** 2) / (2 * sigPx * sigPx));
+    d += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }
+  d += ` L ${width} ${height} Z`;
+  const zx = Math.max(2, Math.min(width - 2, zeroPx));
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', overflow: 'hidden' }} aria-hidden="true">
+      <line x1="0" y1={height - 0.5} x2={width} y2={height - 0.5} stroke="rgba(255,255,255,0.10)" strokeWidth="1" />
+      <line x1={zx.toFixed(1)} y1="2" x2={zx.toFixed(1)} y2={height} stroke="rgba(255,255,255,0.40)" strokeWidth="1" strokeDasharray="2 2" />
+      <path d={d} fill={color} fillOpacity="0.16" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 // Small inline icon per factor (no extra deps).
 function FactorIcon({ factor }) {
   const c = TEXT.muted;
@@ -60,9 +107,19 @@ function FactorIcon({ factor }) {
 }
 
 export function LearnedHero({ style }) {
+  // Re-derive whenever the storage layer fires a change (Cloud Sync pull, a new
+  // Garmin/Cronometer sync, a manual edit). Without this the useMemos below ran
+  // once at mount and the whole card — learned sensitivities AND the race-fitness
+  // / sweat / maintenance footer — stayed frozen until a full app restart.
+  const storageVersion = useStorageVersion();
   const facts = useMemo(() => {
     try { return buildHubFromStorage().facts; } catch { return null; }
-  }, []);
+  }, [storageVersion]);
+  // Slice 2: the one energy service — surface maintenance + WHERE the number came from
+  // (your weight trend vs estimate) so the hero's "what Arnold learned" includes energy.
+  const energy = useMemo(() => {
+    try { return energyExpenditure(); } catch { return null; }
+  }, [storageVersion]);
   const [open, setOpen] = useState(null);
 
   if (!facts) return null;
@@ -106,10 +163,8 @@ export function LearnedHero({ style }) {
                 <div style={{ fontSize: 14, fontWeight: 500 }}>{FACTOR_LABEL[r.factor] || r.factor}</div>
                 <div style={{ fontSize: 11, color: TEXT.muted }}>{magnitudeText(r.factor, r.perUnitPct, r.unit)}</div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, width: 96, flexShrink: 0 }}>
-                <div style={{ width: 96, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.10)' }}>
-                  <div style={{ width: `${Math.round((r.confidence || 0) * 100)}%`, height: '100%', borderRadius: 3, background: confColor(r.confidence || 0) }} />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, width: 96, flexShrink: 0 }}>
+                <BellCurve value={r.perUnitPct} confidence={r.confidence || 0} color={confColor(r.confidence || 0)} width={96} height={26} />
                 <span style={{ fontSize: 10, color: TEXT.muted }}>{Math.round((r.confidence || 0) * 100)}% sure</span>
               </div>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -139,6 +194,13 @@ export function LearnedHero({ style }) {
         )}
         {facts.sweat && (
           <span><span style={{ color: TEXT.faint }}>Sweat </span>{facts.sweat.rateLhr} L/hr</span>
+        )}
+        {energy && energy.maintenance && energy.maintenance.value > 0 && (
+          <span>
+            <span style={{ color: TEXT.faint }}>Maintenance </span>
+            {energy.maintenance.value.toLocaleString()} kcal
+            <span style={{ color: TEXT.faint }}> · {energy.maintenance.note}</span>
+          </span>
         )}
       </div>
     </div>

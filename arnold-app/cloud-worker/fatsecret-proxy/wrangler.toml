@@ -1,0 +1,17 @@
+name = "arnold-fatsecret-proxy"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+# ── Secrets (DO NOT put real values here) ────────────────────────────────────
+# Set these once, encrypted, via the CLI — they never live in the repo or the app:
+#   wrangler secret put FATSECRET_CLIENT_ID
+#   wrangler secret put FATSECRET_CLIENT_SECRET
+#
+# ── Non-secret vars ──────────────────────────────────────────────────────────
+# FATSECRET_SCOPE: "premier" enables barcode lookup (needs a Premier / Premier-Free
+#                  account); use "basic" if you only need search.
+# ALLOW_ORIGIN:    CORS origin. "*" is fine (responses are non-sensitive food data
+#                  and carry no user credentials); narrow to the app origin if you prefer.
+[vars]
+FATSECRET_SCOPE = "premier"
+ALLOW_ORIGIN = "*"

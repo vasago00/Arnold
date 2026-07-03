@@ -26,11 +26,13 @@ import {
   clearLastPullError,
 } from '../core/cloud-sync.js';
 import { snapshotBeforeOp } from '../core/backup.js';
+import { suppressResumeReset } from '../core/appLifecycle.js';   // keep the app on this screen while a file picker is open
 import {
   getCronometerAuth,
   setCronometerAuth,
   clearCronometerAuth,
   fetchCronometerToday,
+  importCronometerCsvText,
   isConfigured as isCronometerConfigured,
 } from '../core/cronometer-client.js';
 import {
@@ -43,6 +45,11 @@ import {
   backfillRecentBlanks,
 } from '../core/garmin-client.js';
 import { syncRecentActivities, enrichRecentActivitiesWithDetails } from '../core/garmin-activities-client.js';
+import {
+  getFatSecretEndpoint,
+  setFatSecretEndpoint,
+  isFatSecretConfigured,
+} from '../core/fatsecret-client.js';
 import {
   syncAll as hcSyncAll,
   getSyncStatus as getHcSyncStatus,
@@ -517,7 +524,9 @@ export default function CloudSyncPanel() {
       </details>
 
       <CronometerAuthSection />
+      <CronometerImportSection />
       <GarminAuthSection />
+      <FatSecretSection />
 
       <details style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>
         <summary>Pair-a-second-device values (copy these to your other device)</summary>
@@ -703,6 +712,78 @@ function CronometerAuthSection() {
           color: msg.kind === 'ok' ? '#c8e6c9' : '#ffd4d4',
           border: `1px solid ${msg.kind === 'ok' ? '#2f5a2f' : '#5a2f2f'}`,
         }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Cronometer manual import (the COMPLIANT path — no worker) ───────────────
+// Export your own Daily Nutrition CSV from Cronometer and paste/upload it. Writes
+// canonical full-day entries, identical to a sync — but user-initiated, no scraping.
+function CronometerImportSection() {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState(null); // { kind, text }
+
+  function onFile(e) {
+    // Returning from the picker fires a resume; keep suppressing so the app doesn't
+    // bounce to Start before we've read the file.
+    suppressResumeReset();
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload  = () => { setText(String(r.result || '')); setMsg({ kind: 'ok', text: `Loaded "${f.name}" — press Import.` }); };
+    r.onerror = () => setMsg({ kind: 'err', text: 'Could not read that file.' });
+    r.readAsText(f);
+  }
+
+  function handleImport() {
+    setBusy(true); setMsg(null);
+    try {
+      const r = importCronometerCsvText(text);
+      if (r.ok) {
+        const span = r.dates.length <= 1 ? (r.dates[0] || 'today') : `${r.dates[0]} → ${r.dates[r.dates.length - 1]}`;
+        setMsg({ kind: 'ok', text: `✓ Imported ${r.count} day${r.count === 1 ? '' : 's'} (${span}). Reload to see it in Fuel / EdgeIQ.` });
+        setText('');
+      } else {
+        setMsg({ kind: 'err', text: r.error || 'Import failed.' });
+      }
+    } catch (e) {
+      setMsg({ kind: 'err', text: String(e && e.message || e) });
+    } finally { setBusy(false); }
+  }
+
+  const sectionStyle = { marginTop: 16, padding: 12, border: '1px solid #2a2e38', borderRadius: 8, background: '#0f1218' };
+  const btn = { padding: '6px 12px', background: '#1b6feb', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, marginRight: 6 };
+  const btnSec = { ...btn, background: '#2a2e38' };
+
+  return (
+    <div style={sectionStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h4 style={{ margin: 0, fontSize: 14 }}>🥗 Cronometer manual import</h4>
+        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#1f3a1f', color: '#a0e0a0', border: '1px solid #2f5a2f' }}>compliant · no worker</span>
+      </div>
+      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10, lineHeight: 1.4 }}>
+        Export your own data from Cronometer (<strong>Settings → Account → Export Data → Daily Nutrition</strong>),
+        then choose the CSV or paste it below. Each day is written as a full-day entry — exactly like a sync, but
+        user-initiated, so it stays within their terms.
+      </div>
+      <input type="file" accept=".csv,text/csv" onClick={() => suppressResumeReset()} onChange={onFile} style={{ fontSize: 12, marginBottom: 8, color: '#e6e8ec' }} />
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="…or paste the Daily Nutrition CSV here"
+        rows={4}
+        style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', background: '#0b0d12', color: '#e6e8ec', border: '1px solid #2a2e38', borderRadius: 6, fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 12, marginBottom: 8, resize: 'vertical' }}
+      />
+      <div>
+        <button style={btn} type="button" onClick={handleImport} disabled={busy || !text.trim()}>{busy ? 'Importing…' : 'Import'}</button>
+        {text && <button style={btnSec} type="button" onClick={() => { setText(''); setMsg(null); }}>Clear</button>}
+      </div>
+      {msg && (
+        <div style={{ marginTop: 10, padding: '6px 10px', borderRadius: 6, fontSize: 12, background: msg.kind === 'ok' ? '#1f3a1f' : '#3a1f1f', color: msg.kind === 'ok' ? '#c8e6c9' : '#ffd4d4', border: `1px solid ${msg.kind === 'ok' ? '#2f5a2f' : '#5a2f2f'}` }}>
           {msg.text}
         </div>
       )}
@@ -1071,6 +1152,156 @@ function GarminAuthSection() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {msg && (
+        <div style={{
+          marginTop: 10, padding: '6px 10px', borderRadius: 6, fontSize: 12,
+          background: msg.kind === 'ok' ? '#1f3a1f' : '#3a1f1f',
+          color: msg.kind === 'ok' ? '#c8e6c9' : '#ffd4d4',
+          border: `1px solid ${msg.kind === 'ok' ? '#2f5a2f' : '#5a2f2f'}`,
+        }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FatSecret Section ──────────────────────────────────────────────────────
+// Points Arnold's nutrition provider at the FatSecret proxy (Cloudflare Worker
+// on Premier/Premier-Free, or a static-IP host on Basic). No credentials here —
+// the OAuth2 secret lives only on the proxy. When set, searchFood()/lookupBarcode()
+// use FatSecret first and fall back to Open Food Facts on any miss/error.
+// Endpoint is a per-device localStorage value (arnold:fatsecret-endpoint); the
+// same Worker URL works on every device.
+
+function FatSecretSection() {
+  const saved = getFatSecretEndpoint();
+  const [editing, setEditing] = useState(!saved);
+  const [draft, setDraft] = useState(saved);
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState(null); // { kind: 'ok'|'err', text }
+
+  function normalize(url) { return String(url || '').trim().replace(/\/$/, ''); }
+
+  function handleSave(e) {
+    e.preventDefault();
+    setMsg(null);
+    const url = normalize(draft);
+    if (!/^https?:\/\//i.test(url)) {
+      setMsg({ kind: 'err', text: 'Enter a full URL starting with https://' });
+      return;
+    }
+    setFatSecretEndpoint(url);
+    setDraft(url);
+    setEditing(false);
+    setMsg({ kind: 'ok', text: 'Saved. FatSecret is now the primary food provider (Open Food Facts stays as the fallback). Run Test connection to confirm.' });
+  }
+
+  async function handleTest() {
+    setBusy('test');
+    setMsg(null);
+    try {
+      const base = normalize(editing ? draft : saved);
+      if (!base) { setMsg({ kind: 'err', text: 'Set an endpoint URL first.' }); return; }
+      const res = await fetch(base + '/health', { method: 'GET' });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok && j && j.ok) {
+        setMsg({ kind: 'ok', text: `✓ Connected · scope: ${j.scope || 'unknown'}` });
+      } else {
+        setMsg({ kind: 'err', text: `Reached the host but it didn't report healthy (HTTP ${res.status}). Check the Worker secrets and IP whitelist.` });
+      }
+    } catch (err) {
+      setMsg({ kind: 'err', text: `Couldn't reach it: ${String(err?.message || err)}` });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function handleClear() {
+    if (!confirm('Remove the FatSecret endpoint? Food search & barcode will fall back to Open Food Facts.')) return;
+    setFatSecretEndpoint('');
+    setDraft('');
+    setEditing(true);
+    setMsg({ kind: 'ok', text: 'Endpoint cleared. Using Open Food Facts.' });
+  }
+
+  const configured = isFatSecretConfigured();
+  const sectionStyle = {
+    marginTop: 16, padding: 12, border: '1px solid #2a2e38', borderRadius: 8, background: '#0f1218',
+  };
+  const labelStyle = { display: 'block', fontSize: 12, opacity: 0.7, marginBottom: 4 };
+  const inputStyle = {
+    width: '100%', padding: '8px 10px', background: '#0b0d12', color: '#e6e8ec',
+    border: '1px solid #2a2e38', borderRadius: 6,
+    fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 13, marginBottom: 8,
+  };
+  const btn = {
+    padding: '6px 12px', background: '#1b6feb', color: 'white', border: 'none',
+    borderRadius: 6, cursor: 'pointer', fontSize: 12, marginRight: 6,
+  };
+  const btnSec = { ...btn, background: '#2a2e38' };
+  const btnDanger = { ...btn, background: '#8a2f2f' };
+
+  return (
+    <div style={sectionStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h4 style={{ margin: 0, fontSize: 14 }}>🍎 FatSecret food database</h4>
+        <span style={{
+          fontSize: 11, padding: '2px 8px', borderRadius: 10,
+          background: configured ? '#1f3a1f' : '#3a1f1f',
+          color: configured ? '#a0e0a0' : '#e0a0a0',
+          border: `1px solid ${configured ? '#2f5a2f' : '#5a2f2f'}`,
+        }}>
+          {configured ? '✓ configured' : 'using Open Food Facts'}
+        </span>
+      </div>
+
+      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10, lineHeight: 1.4 }}>
+        Paste the URL of your FatSecret proxy (the Cloudflare Worker, or a static-IP
+        host). Once set, food search & barcode lookups use FatSecret first and fall
+        back to Open Food Facts automatically. The API secret stays on the proxy —
+        it's never entered or stored here.
+      </div>
+
+      {editing || !saved ? (
+        <form onSubmit={handleSave}>
+          <label style={labelStyle}>Proxy endpoint URL</label>
+          <input
+            style={inputStyle}
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            placeholder="https://arnold-fatsecret-proxy.your-sub.workers.dev"
+          />
+          <div>
+            <button style={btn} type="submit">Save</button>
+            <button style={btnSec} type="button" onClick={handleTest} disabled={busy === 'test'}>
+              {busy === 'test' ? 'Testing…' : 'Test connection'}
+            </button>
+            {saved && (
+              <button type="button" style={btnSec} onClick={() => { setEditing(false); setDraft(saved); setMsg(null); }}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      ) : (
+        <div style={{ fontSize: 13 }}>
+          <div style={{ marginBottom: 8, wordBreak: 'break-all' }}>
+            Endpoint: <code>{saved}</code>
+          </div>
+          <button style={btn} type="button" onClick={handleTest} disabled={busy === 'test'}>
+            {busy === 'test' ? 'Testing…' : 'Test connection'}
+          </button>
+          <button style={btnSec} type="button" onClick={() => { setEditing(true); setDraft(saved); setMsg(null); }}>
+            Edit
+          </button>
+          <button style={btnDanger} type="button" onClick={handleClear}>Clear</button>
         </div>
       )}
 

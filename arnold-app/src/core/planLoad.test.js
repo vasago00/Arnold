@@ -71,14 +71,20 @@ describe('season read', () => {
     { start: '2026-06-29', end: '2026-07-05', actual: 0, planned: 0 },
   ];
   it('flags missed-goal streak + empty weeks ahead + next race', () => {
-    const r = analyzeSeason(weeks, { weeklyRunMilesGoal: 30, today: '2026-06-17', races: [{ name: 'NYRR Queens 10K', date: '2026-06-20' }] });
+    const r = analyzeSeason(weeks, { weeklyRunMilesGoal: 30, today: '2026-06-17', races: [{ name: 'NYRR Queens 10K', date: '2026-06-20', distanceMi: 6.2 }] });
     expect(r.behind).toBe(true);
     expect(r.missedStreak).toBeGreaterThanOrEqual(3);
     expect(r.emptyAhead).toBeGreaterThanOrEqual(2);
     expect(r.nextRace.name).toBe('NYRR Queens 10K');
-    expect(r.message).toMatch(/taper/);
-    expect(r.message).not.toMatch(/deeper base|add (running )?volume now/);
-    expect(r.mode).toBe('taper');
+    // A short tune-up race (10K) does NOT trigger a taper — run it through.
+    expect(r.mode).not.toBe('taper');
+  });
+  it('an imminent MARATHON tapers; a short tune-up does not', () => {
+    const m = analyzeSeason(weeks, { weeklyRunMilesGoal: 30, today: '2026-06-17', races: [{ name: 'Berlin', date: '2026-06-22', distanceMi: 26.2 }] });
+    expect(m.mode).toBe('taper');
+    expect(m.message).toMatch(/taper/);
+    const k = analyzeSeason(weeks, { weeklyRunMilesGoal: 30, today: '2026-06-17', races: [{ name: '4-Miler', date: '2026-06-22', distanceMi: 4 }] });
+    expect(k.mode).not.toBe('taper');
   });
   it('returns null without a goal', () => {
     expect(analyzeSeason(weeks, { today: '2026-06-17' })).toBeNull();

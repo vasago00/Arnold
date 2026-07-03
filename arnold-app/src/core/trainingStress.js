@@ -19,6 +19,7 @@ import { getGoals } from './goals.js';
 import { localDate, ymd } from './time.js';
 import { parseLocalDate } from './dateUtils.js';
 import { srpeEquivRTSS } from './sessionRPE.js';
+import { scoreAdherence, combineDomain, result as mkResult, isUsable } from './metricResult.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -244,27 +245,27 @@ export function computeAcuteChronicRatio(activities, dateStr, ftpPace, maxHR) {
   const d28 = new Date(ref); d28.setDate(d28.getDate() - 28);
   const fmt = d => ymd(d);
 
-  const runs = activities.filter(a =>
-    isRun(a) && a.avgPaceRaw && a.durationSecs
-  );
-
-  const sumTSS = (start, end) => {
-    return runs
-      .filter(r => r.date >= fmt(start) && r.date <= fmt(end))
-      .reduce((sum, r) => {
-        const { rTSS } = computeRTSS({
-          durationSecs: r.durationSecs,
-          avgPaceRaw: r.avgPaceRaw,
-          avgHR: r.avgHeartRate || r.avgHR,
-          ftpPace,
-          maxHR,
-        });
-        return sum + (rTSS || 0);
-      }, 0);
+  // Per-session INTERNAL load on the rTSS scale. Runs use pace/HR rTSS as before;
+  // sRPE (RPE×min ÷4.5) is a FLOOR for runs and the primary signal for HR-unreliable
+  // / non-run sessions (strength, cross-training) that used to add 0 to the ratio.
+  // max() means perceived effort can only RAISE a session's load, never lower a
+  // higher pace/HR-derived one. So a heavy lifting block now shows up in ACWR and the
+  // coach's hold/cut logic responds to it. (Phase 4r.load.1 — sRPE→ACWR wiring.)
+  const withDur = activities.filter(a => a && a.date && a.durationSecs);
+  const sessionLoad = (a) => {
+    const rt = (isRun(a) && a.avgPaceRaw)
+      ? (computeRTSS({ durationSecs: a.durationSecs, avgPaceRaw: a.avgPaceRaw, avgHR: a.avgHeartRate || a.avgHR, ftpPace, maxHR }).rTSS || 0)
+      : 0;
+    const sr = srpeEquivRTSS(a, a.date) || 0;
+    return Math.max(rt, sr);
   };
+  const sumLoad = (start, end) =>
+    withDur
+      .filter(r => r.date >= fmt(start) && r.date <= fmt(end))
+      .reduce((sum, r) => sum + sessionLoad(r), 0);
 
-  const acuteLoad = sumTSS(d7, ref);
-  const chronicWeekly = sumTSS(d28, ref) / 4; // average per week
+  const acuteLoad = sumLoad(d7, ref);
+  const chronicWeekly = sumLoad(d28, ref) / 4; // average per week
   const ratio = chronicWeekly > 0 ? Math.round((acuteLoad / chronicWeekly) * 100) / 100 : null;
 
   let zone = 'no_data';
@@ -765,62 +766,46 @@ export function computeDailyScore(dateStr) {
 
   // ═══ NUTRITION DOMAIN ═════════════════════════════════════════════════════
 
+  // Phase 2 (metricResult): the zero-vs-missing decision is centralized. macros
+  // are null when NO food is logged (don't fabricate); a number (incl 0) when
+  // logged. A logged-but-zero macro scores LOW; no food logged → combineDomain
+  // → no-data (the domain reads "—", never built from hydration alone).
   const todayNutEntries = nutritionLog.filter(e => e.date === today);
   const todayCrono = cronoData.find(c => c.date === today);
-  let nutProtein = 0, nutCalories = 0, nutWater = 0, hasNutData = false;
-
+  let nutProtein = null, nutCalories = null, nutWater = null;
   if (todayNutEntries.length > 0) {
+    nutProtein = 0; nutCalories = 0; nutWater = 0;
     todayNutEntries.forEach(e => {
-      const s = e.servings || 1;
-      nutProtein  += (e.macros?.protein  || 0) * s;
-      nutCalories += (e.macros?.calories || 0) * s;
-      nutWater    += (e.macros?.water    || 0) * s;
+      const sv = e.servings || 1;
+      nutProtein  += (e.macros?.protein  || 0) * sv;
+      nutCalories += (e.macros?.calories || 0) * sv;
+      nutWater    += (e.macros?.water    || 0) * sv;
     });
-    hasNutData = true;
   } else if (todayCrono) {
     nutProtein  = parseFloat(todayCrono.protein)  || 0;
     nutCalories = parseFloat(todayCrono.calories) || 0;
     nutWater    = parseFloat(todayCrono.water)    || 0;
-    hasNutData = true;
   }
+  // Water alone must NOT constitute a nutrition score: only count the day as
+  // "food logged" when calories/protein are actually present (else → no-data).
+  const foodLogged = (Number(nutCalories) || 0) > 0 || (Number(nutProtein) || 0) > 0;
+  if (!foodLogged) { nutProtein = null; nutCalories = null; nutWater = null; }
 
-  if (hasNutData) {
-    // ── Protein ──
-    const targetProtein = parseFloat(goals.dailyProteinTarget) || 150;
-    if (nutProtein > 0) {
-      const val = Math.min(nutProtein / targetProtein, 1.2);
-      buckets.nutrition.push({ val, w: FACTOR_W.protein });
-      factors.push({
-        label: 'Protein', value: `${Math.round(nutProtein)}g`, domain: 'nutrition',
-        status: val >= 0.85 ? 'good' : val >= 0.6 ? 'warning' : 'poor',
-      });
-    }
+  const tracksNutrition = cronoData.length > 0 || nutritionLog.length > 0; // expected?
+  const targetProtein = parseFloat(goals.dailyProteinTarget) || 150;
+  const targetCals    = parseFloat(goals.dailyCalorieTarget) || 2200;
+  const targetWaterL  = parseFloat(goals.dailyWaterTarget)   || 3;
+  const waterL = nutWater == null ? null : (nutWater > 50 ? nutWater / 1000 : nutWater);
 
-    // ── Calories ──
-    const targetCals = parseFloat(goals.dailyCalorieTarget) || 2200;
-    if (nutCalories > 0) {
-      const ratio = nutCalories / targetCals;
-      const dev = Math.abs(ratio - 1.0);
-      const val = Math.max(0.2, Math.min(1.2, 1 - dev / 0.4));
-      buckets.nutrition.push({ val, w: FACTOR_W.calories });
-      factors.push({
-        label: 'Calories', value: `${Math.round(nutCalories)}`, domain: 'nutrition',
-        status: dev <= 0.10 ? 'good' : dev <= 0.25 ? 'warning' : 'poor',
-      });
-    }
+  // Typed nutrition scoring extracted to a PURE helper (golden-testable).
+  const { domain: nutDomain, proR, calR, hydR } = nutritionScore({
+    nutProtein, nutCalories, waterL, tracksNutrition, targetProtein, targetCals, targetWaterL,
+  });
+  if (nutDomain.value != null) buckets.nutrition.push({ val: nutDomain.value, w: 1 });
 
-    // ── Hydration ──
-    const targetWaterL = parseFloat(goals.dailyWaterTarget) || 3;
-    if (nutWater > 0) {
-      const waterL = nutWater > 50 ? nutWater / 1000 : nutWater;
-      const val = Math.min(waterL / targetWaterL, 1.2);
-      buckets.nutrition.push({ val, w: FACTOR_W.hydration });
-      factors.push({
-        label: 'Hydration', value: `${waterL.toFixed(1)}L`, domain: 'nutrition',
-        status: val >= 0.8 ? 'good' : val >= 0.5 ? 'warning' : 'poor',
-      });
-    }
-  }
+  if (isUsable(proR)) factors.push({ label: 'Protein', value: `${Math.round(nutProtein)}g`, domain: 'nutrition', status: proR.value >= 0.85 ? 'good' : proR.value >= 0.6 ? 'warning' : 'poor' });
+  if (isUsable(calR)) { const dev = Math.abs(nutCalories / targetCals - 1); factors.push({ label: 'Calories', value: `${Math.round(nutCalories)}`, domain: 'nutrition', status: dev <= 0.10 ? 'good' : dev <= 0.25 ? 'warning' : 'poor' }); }
+  if (isUsable(hydR)) factors.push({ label: 'Hydration', value: `${waterL.toFixed(1)}L`, domain: 'nutrition', status: hydR.value >= 0.8 ? 'good' : hydR.value >= 0.5 ? 'warning' : 'poor' });
 
   // ═══ BODY DOMAIN ══════════════════════════════════════════════════════════
 
@@ -1061,4 +1046,30 @@ export function getAvgWeeklyTrainingHours(weeks = 4, refDate) {
     totalSeconds,
     daysWithActivity: Object.keys(dayBuckets).length,
   };
+}
+
+
+// PURE nutrition-domain scorer (no IO) — golden-testable core of the nutrition
+// block above. Inputs are ALREADY gated ("no food logged" → protein/calories/
+// waterL passed as null). Calories use a deviation score (over- AND under-eating
+// penalised); protein/hydration use ratio scoreAdherence; combineDomain folds
+// them. Water alone never yields a number (the 92% bug): null food → no-data.
+export function nutritionScore({ nutProtein = null, nutCalories = null, waterL = null, tracksNutrition = false, targetProtein = 150, targetCals = 2200, targetWaterL = 3 } = {}) {
+  // Defense in depth: hydration alone must NEVER constitute a nutrition score.
+  // If no food (protein AND calories absent), drop water too — so an upstream
+  // that forgot to gate can't re-open the "score from water alone" bug here.
+  if (nutProtein == null && nutCalories == null) waterL = null;
+  const calR = (nutCalories == null)
+    ? mkResult(null, tracksNutrition ? 'gap' : 'not-tracked')
+    : (targetCals > 0
+        ? mkResult(Math.max(0.2, Math.min(1.2, 1 - Math.abs(nutCalories / targetCals - 1) / 0.4)), 'ok')
+        : mkResult(null, 'no-target'));
+  const proR = scoreAdherence(nutProtein, targetProtein, { expected: tracksNutrition, cap: 1.2 });
+  const hydR = scoreAdherence(waterL, targetWaterL, { expected: tracksNutrition, cap: 1.2 });
+  const domain = combineDomain([
+    { w: FACTOR_W.protein,   r: proR },
+    { w: FACTOR_W.calories,  r: calR },
+    { w: FACTOR_W.hydration, r: hydR },
+  ]);
+  return { domain, proR, calR, hydR };
 }

@@ -53,6 +53,8 @@ import { fuelForToday } from "../core/fuelForWork.js";
 // in the codebase but unused — see comment near render site for context.
 import { computeRTSS, computeHrTSS, getEffectiveMaxHR } from "../core/trainingStress.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
+import { actualFamilyOf, PLAN_TYPE_FAMILY, PLAN_TYPE_LABEL, FAMILY_LABEL } from "../core/todayStatus.js";
+import { daySessions } from "../core/planner.js";   // planned sessions[] for two-a-day pre-tile
 import { getProfileZoneBpm } from "../core/derive/hr.js";
 import {
   signaturesForActivities,
@@ -72,20 +74,10 @@ const MIN_PROMOTE_MINUTES_BY_FAMILY = {
 };
 const OZ_PER_LITER = 33.814;
 
-const PLAN_TYPE_FAMILY = {
-  easy_run: 'run', long_run: 'run', tempo: 'run', intervals: 'run',
-  hiit: 'hiit', strength: 'strength', mobility: 'mobility', cross: 'cross',
-  race: 'race', rest: 'rest',
-  // Phase 4r.sports — full activity inventory is now plannable. Each new
-  // discipline is its own family (own figure/color/icon/variable set).
-  cycle: 'cycle', swim: 'swim', ski: 'ski', walk: 'walk',
-};
-const PLAN_TYPE_LABEL = {
-  easy_run: 'Easy run', long_run: 'Long run', tempo: 'Tempo', intervals: 'Intervals',
-  hiit: 'HIIT', strength: 'Strength', mobility: 'Mobility', cross: 'Cross-train',
-  race: 'Race', rest: 'Rest',
-  cycle: 'Cycling', swim: 'Swim', ski: 'Ski', walk: 'Walk/Hike',
-};
+// PLAN_TYPE_FAMILY, PLAN_TYPE_LABEL, FAMILY_LABEL and actualFamilyOf now live in
+// core/todayStatus.js (the single source of truth for workout classification +
+// labels) and are imported above — so the mobile tile and web EdgeIQ TODAY cell
+// can never again drift on how a logged workout is named.
 const FAMILY_COLOR = {
   // Phase 4r.color.1 — HIIT moved back to coral-pink (#fb7185) so it
   // reads distinct from tempo (amber) at small mobile-calendar tile
@@ -227,9 +219,42 @@ function deriveState({ planned, todayActivities, todayDate, nextRace }) {
   });
   if (raceToday && raceLogged) return { kind: 'race-complete', family: 'race', planType: 'race' };
   if (raceToday)               return { kind: 'race-pre',      family: 'race', planType: 'race' };
-  if (!planned || !family || family === 'rest') return { kind: 'none', family: null };
 
   const minsOf = (a) => (Number(a.durationSecs) || 0) / 60 || Number(a.durationMins) || 0;
+  // A real, meaningful session logged today (any non-mobility >= 20 min). Computed
+  // BEFORE the no-plan guard so the post-workout summary appears whether or not a
+  // plan existed for today — Start must reflect what ACTUALLY happened (the Daily
+  // tab + Calendar already do, off the same activity source). Mobility is excluded
+  // so a recovery stretch isn't mistaken for "the workout".
+  const meaningfulToday = todayActivities.filter(a => !isMobility(a) && minsOf(a) >= MIN_PROMOTE_MINUTES);
+  // Two-a-day: meaningful sessions OTHER than the chosen primary, for the secondary
+  // line under the summary. (Daily load already sums all sessions — this is display.)
+  const buildSecondaries = (primary) => meaningfulToday
+    .filter(a => a !== primary)
+    .sort((a, b) => minsOf(b) - minsOf(a))
+    .map(a => {
+      const f = actualFamilyOf(a);
+      const mi = Number(a.distanceMi) || 0;
+      return {
+        family: f,
+        label: FAMILY_LABEL[f] || 'Workout',
+        minutes: Math.round(minsOf(a)),
+        distanceMi: mi > 0 ? Math.round(mi * 10) / 10 : null,
+        pace: (isRun(a) && a.avgPaceRaw) ? a.avgPaceRaw : null,
+      };
+    });
+  const offPlanComplete = () => {
+    const primary = [...meaningfulToday].sort((a, b) => minsOf(b) - minsOf(a))[0];
+    return { kind: 'complete', family: actualFamilyOf(primary), planType: planned?.type || null,
+             activity: primary, offPlan: true, plannedFamily: family || null, secondaries: buildSecondaries(primary) };
+  };
+
+  // No plan (or a rest day): still surface a real logged workout; else render nothing.
+  if (!planned || !family || family === 'rest') {
+    if (meaningfulToday.length) return offPlanComplete();
+    return { kind: 'none', family: null };
+  }
+
   const matchFamily = (a) => {
     if (family === 'run')      return isRun(a);
     if (family === 'strength') return isStrength(a);
@@ -271,9 +296,20 @@ function deriveState({ planned, todayActivities, todayDate, nextRace }) {
   const completed = todayActivities.filter(a => matchFamily(a) && minsOf(a) >= minMins);
   if (completed.length) {
     const primary = [...completed].sort((a, b) => minsOf(b) - minsOf(a))[0];
-    return { kind: 'complete', family, planType: planned.type, activity: primary };
+    return { kind: 'complete', family, planType: planned.type, activity: primary, secondaries: buildSecondaries(primary) };
   }
-  return { kind: 'pre', family, planType: planned.type };
+  // Planned discipline wasn't done, but a real off-plan workout was — surface it.
+  if (meaningfulToday.length) return offPlanComplete();
+  // Two-a-day: the OTHER planned sessions (beyond the primary) so the pre tile can
+  // show "also planned: + PM Strength" instead of hiding the second session.
+  const plannedSecondaries = daySessions(planned).slice(1).map(s => ({
+    type: s.type,
+    label: PLAN_TYPE_LABEL[s.type] || s.type,
+    family: PLAN_TYPE_FAMILY[s.type] || null,
+    distanceMi: Number(s.distanceMi) || null,
+    slot: s.slot || null,
+  }));
+  return { kind: 'pre', family, planType: planned.type, plannedSecondaries };
 }
 
 // ── Pre-workout intelligence ──────────────────────────────────────────────
@@ -1778,6 +1814,13 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
             </span>
           </div>
         )}
+        {/* Two-a-day: name the OTHER planned session(s) so a double day doesn't read
+            as just the primary. The primary is the headline above. */}
+        {state.plannedSecondaries && state.plannedSecondaries.length > 0 && (
+          <div style={{ padding: '0 12px 5px 12px', marginTop: -2, fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.03em' }}>
+            {state.plannedSecondaries.map(s => `+ ${s.slot ? s.slot + ' ' : ''}${s.label}${s.distanceMi ? ` · ${s.distanceMi} mi` : ''}`).join('   ')}
+          </div>
+        )}
         <PerfOutputRow
           chips={outputChips}
           zones={targetZone}
@@ -2159,8 +2202,28 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
         }}>
           {[
             summary.effortBucket && summary.effortBucket[0].toUpperCase() + summary.effortBucket.slice(1),
-            state.planType && (PLAN_TYPE_LABEL[state.planType] || state.planType),
+            // Label by what was ACTUALLY done. If a DIFFERENT workout was planned,
+            // flag the swap ("Off-plan · Cycling"); if nothing was planned, just name
+            // the discipline ("Cycling"). Otherwise show the planned-type label.
+            state.offPlan
+              ? (state.plannedFamily
+                  ? `Off-plan · ${FAMILY_LABEL[family] || 'Workout'}`
+                  : (FAMILY_LABEL[family] || 'Workout'))
+              : (state.planType && (PLAN_TYPE_LABEL[state.planType] || state.planType)),
           ].filter(Boolean).join(' · ')}
+        </div>
+      )}
+      {/* Two-a-day: name the OTHER meaningful session(s) so a double day doesn't
+          read as just the primary. Load already includes them (see todayStatus). */}
+      {state.secondaries && state.secondaries.length > 0 && (
+        <div style={{
+          padding: '0 12px 4px',
+          fontSize: 10, fontWeight: 500,
+          color: 'rgba(255,255,255,0.45)',
+          letterSpacing: '0.03em',
+          marginTop: -2,
+        }}>
+          {state.secondaries.map(s => `+ ${s.label} ${s.minutes}m${s.distanceMi ? ` · ${s.distanceMi}mi` : ''}${s.pace ? ` · ${s.pace}/mi` : ''}`).join('   ')}
         </div>
       )}
       {qualityChips.length > 0 && <PerfQualityRow chips={qualityChips} reserveRightSpace={!!family}/>}

@@ -28,6 +28,31 @@ Legend: ☐ not started · ◐ in progress · ☑ code done (not yet build-verif
 | 3.1 | Visual hierarchy pass | ✅ | desaturation comprehensive (all 3 health grids) + readiness verdict on both heroes · build-verified. (Mobile Signal Cockpit values intentionally left — color encodes goal-progress there) |
 | 3.2 | True web/mobile parity | ◐ | core delivered: `readinessVerdict` + `healthStatusColor` + `healthFillTint` shared, HealthSystemTile JSX unified ✓ · **R63: Start post-workout card (PlannedWorkoutTile) parity — cycle/swim/ski/walk now flip to the post-workout summary like run/strength (added matchFamily cases + HR-based load fallback).** OPEN-ENDED: other duplicated surfaces could still be unified as found (diminishing returns) |
 
+## Sprint board — 2026-06-22 → ~2026-07-06 (2-week functional sprint)
+Target: all FUNCTIONAL work done by ~Jul 6; UI/UX polish nailed by end of July. Season = continuous-mileage
+(Option A): Berlin (Sep 27), NYC (Nov 1), Valencia (Dec 6) folded into weekly mileage, mini-tapers only, no full taper.
+Legend as above (✅ = build-verified by Emil this sprint).
+
+| Item | Status | Notes |
+|---|---|---|
+| Multi-session — `resolveTodayStatus` exposes all sessions (+tests) | ✅ | `core/todayStatus.js` `sessions[]`/`secondaries`/`multi` |
+| Multi-session — daily load sums all sessions | ✅ | verified: `trainingStress` already sums (no code) |
+| Multi-session — render: EdgeIQ TODAY + Start POST tile | ✅ | "+N" chip + disciplines (web); "+ X 46m" (mobile post) |
+| Multi-session — rule locked | ✅ | DESIGN_DECISIONS addendum |
+| Multi-session POLISH (remaining) | ☐ | **#4 planned-doubles PRE tile** (PlannedWorkoutTile pre-render — churn epicenter, do carefully), #5 per-session metrics, #1 calendar-tile metrics, #3 daily-web detail |
+| Coaching engine (Option A) + tests | ✅ | `core/seasonPlan.js` — weekly verdict; marathon-only taper/recovery; ACWR hold(>1.3)/cut(>1.5); feasibility (speed vs endurance) |
+| Coaching — live wrapper + debug hook | ✅ | `core/seasonCoach.js` → `window.seasonCoachDebug()` |
+| Coaching — on-screen panel (mobile Start) | ✅ | `components/SeasonCoachCard.jsx` (Marathon Coach card) |
+| FatSecret — Cloudflare Worker proxy + wrangler | ✅ | deploy-ready |
+| FatSecret — in-app endpoint Settings + Test | ✅ | `CloudSyncPanel` FatSecretSection |
+| FatSecret — GO-LIVE | ☐ | gated on Premier-Free approval (whitelist 0.0.0.0/0 → `wrangler deploy` → paste URL) |
+| Cronometer — stop scraping worker (ToS) | ✅ | replaced by compliant manual import |
+| Cronometer — in-app manual CSV import | ✅ | `CloudSyncPanel` CronometerImportSection → canonical full-day entries |
+| Race store consolidation (ONE source) | ✅ | dual-write engine+localStorage; GoalsHub reads shared store; planner-race migration; per-row ✕ delete |
+| Drawer EXPECTED card overflow fix | ✅ | `PredictedBandsCard` header wraps |
+| Annual race timeline → B1 + ✓N dropdown | ✅ | (ROUND 81) |
+| UI/UX polish batch | ☐ | **by end July**: Start cockpit + EdgeIQ governed-density refresh, card primitives, LogDay ski/non-run Vs-Goal, signal-tile desaturation, rebrand/name |
+
 ## Step 3.2 sub-checklist (parity in safe slices — each build-verifiable)
 - ☑ `readinessVerdict(score)` shared (web Daily hero + mobile Play hero) — round (g).
 - ☑ `healthStatusColor(status)` shared (web tile/detail + both grids' header dots + mobile) — no-visual extraction.

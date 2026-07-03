@@ -61,6 +61,10 @@ const CFG_LAST_REMOTE_ETAG = CFG_PREFIX + 'last-remote-etag';
 // Phase 4o.cloudsync.1 — persist the most recent pull failure so the
 // Cloud Sync panel can surface it. Stored as JSON: { code, message, t }.
 const CFG_LAST_PULL_ERROR = CFG_PREFIX + 'last-pull-error';
+// Phase — sync self-check (2026-07-02). Timestamp of the last SUCCESSFUL push,
+// stamped at snapshot-build time. Any key whose version is newer than this has
+// local changes that haven't reached the relay yet — see getUnsyncedKeys().
+const CFG_LAST_PUSH_OK = CFG_PREFIX + 'last-push-ok';
 
 // Passphrase / key cached. Phase 4o.cloudsync.3 — switched from
 // sessionStorage to localStorage so Capacitor cold-boots don't erase the
@@ -630,6 +634,11 @@ async function pushNow() {
   emit('push:start', {});
   try {
     const key = await getDerivedKey();
+    // Stamp the build time BEFORE snapshotting. On success this becomes
+    // CFG_LAST_PUSH_OK — keys whose version ≤ builtAt are on the relay; anything
+    // written after (version > builtAt) is still pending. Conservative in the
+    // safe direction: a write racing the push stays flagged until next push.
+    const builtAt = now();
     const snapshot = buildSnapshot();
     // Tile-sync diagnostic — confirm startTilePrefs is in the outgoing
     // snapshot, and what its value/timestamp look like at the moment of push.
@@ -661,6 +670,8 @@ async function pushNow() {
     }
     const payload = await res.json().catch(() => ({}));
     localStorage.setItem(CFG_LAST_REMOTE_ETAG, String(payload.updatedAt || ''));
+    // Mark everything up to the snapshot-build time as delivered.
+    try { localStorage.setItem(CFG_LAST_PUSH_OK, String(builtAt)); } catch {}
     emit('push:ok', { bytes: blob.byteLength, updatedAt: payload.updatedAt });
     return { ok: true, bytes: blob.byteLength, updatedAt: payload.updatedAt };
   } catch (err) {
@@ -826,6 +837,35 @@ function schedulePush() {
   _pushTimer = setTimeout(() => { _pushTimer = null; push(); }, DEBOUNCE_MS);
 }
 
+// Publish-before-background: flush pending/unsynced local changes NOW, bypassing
+// the debounce. Wired to visibilitychange→hidden and pagehide so a backgrounding
+// app can never strand a write whose 1s debounce hasn't fired yet (root cause of
+// the 2026-07-02 cross-device Cronometer loss). No-ops when unpaired, without a
+// passphrase, or when nothing is unsynced.
+export function flushPendingPush() {
+  if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
+  const cfg = getPairingConfig();
+  if (!cfg.paired || !hasPassphrase()) return Promise.resolve({ skipped: 'not_ready' });
+  if (getUnsyncedKeys().length === 0) return Promise.resolve({ skipped: 'clean' });
+  return push();
+}
+
+// Sync self-check: which keys have local changes not yet confirmed on the relay.
+// A key is "unsynced" when its version timestamp is newer than the last
+// successful push (CFG_LAST_PUSH_OK). Returns [] when unpaired (nothing to sync
+// to). Feeds the __arnoldDiag sync check and the Cloud Sync panel.
+export function getUnsyncedKeys() {
+  const cfg = getPairingConfig();
+  if (!cfg.paired) return [];
+  const versions = getVersions();
+  const lastPushOk = parseInt(localStorage.getItem(CFG_LAST_PUSH_OK) || '0', 10);
+  const out = [];
+  for (const [fullKey, t] of Object.entries(versions)) {
+    if ((Number(t) || 0) > lastPushOk) out.push(fullKey);
+  }
+  return out;
+}
+
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 let _started = false;
@@ -855,11 +895,22 @@ export async function startCloudSync() {
     if (hasPassphrase()) schedulePush();
   });
 
-  // Foreground visibility → pull
+  // Foreground visibility → pull; background (hidden) → flush pending push.
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && hasPassphrase()) pull();
+      if (document.visibilityState === 'visible') {
+        if (hasPassphrase()) pull();
+      } else {
+        // Publish-before-background — don't let the app suspend on top of an
+        // unsent write (the 2026-07-02 Cronometer loss).
+        flushPendingPush();
+      }
     });
+  }
+  // pagehide is the web unload signal (Capacitor backgrounding fires
+  // visibilitychange above; browsers fire pagehide on tab close / navigation).
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', () => { flushPendingPush(); });
   }
 
   // Periodic pull
@@ -887,12 +938,14 @@ export function getSyncStatus() {
   const cfg = getPairingConfig();
   const versions = getVersions();
   const lastPull = parseInt(localStorage.getItem(CFG_LAST_PULL) || '0', 10);
+  const lastPushOk = parseInt(localStorage.getItem(CFG_LAST_PUSH_OK) || '0', 10);
   const etag = localStorage.getItem(CFG_LAST_REMOTE_ETAG) || '';
   let lastPullError = null;
   try {
     const raw = localStorage.getItem(CFG_LAST_PULL_ERROR);
     if (raw) lastPullError = JSON.parse(raw);
   } catch {}
+  const unsyncedKeys = getUnsyncedKeys();
   return {
     paired: cfg.paired,
     hasPassphrase: hasPassphrase(),
@@ -902,7 +955,10 @@ export function getSyncStatus() {
     salt: cfg.salt,
     trackedKeys: Object.keys(versions).length,
     lastPull,
+    lastPushOk,
     remoteUpdatedAt: etag ? parseInt(etag, 10) : 0,
+    unsyncedKeys,                 // full keys with local changes not yet on the relay
+    unsyncedCount: unsyncedKeys.length,
     lastPullError,  // { code, message, t } | null
   };
 }

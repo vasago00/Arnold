@@ -37,6 +37,12 @@ export async function getRaces() {
 
 export async function saveRaces(races) {
   storage.set('races', races, { skipValidation: true });
+  // Mirror to raw localStorage — ~10 surfaces (EdgeIQ, LogDay, TrainingTab,
+  // goalModel, MobileHome's nextRace…) read 'arnold:races' straight from
+  // localStorage, which the IndexedDB engine does NOT auto-mirror. GoalsHub's
+  // saveGoalsV2 dual-writes the same way, so the Calendar and the Plan tab now
+  // share ONE consistent race list.
+  try { localStorage.setItem('arnold:races', JSON.stringify(races || [])); } catch {}
   return races;
 }
 

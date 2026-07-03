@@ -10,6 +10,194 @@
 ---
 
 ## Last updated (newest)
+2026-07-02 (ROUND 87) — **Sprint 2 CODE COMPLETE + foundation hardening: carry-queue audit clean, Monte-Carlo sim harness added.**
+Strategy set (Emil): stay a PERSONAL tool, build with clean seams, productize/add users only once it's a sustainable base.
+Next-phase north star (ROADMAP_NEXT §B): Coach-as-planner (goal model) → live plan-level re-solve (the flagship).
+This session, post-Sprint-2:
+(1) **Sprint 2 closed** — 2.3 transparency (Race Predictor + energy-Σ confidence wires; joins RMR + reactive bell-curve
+LearnedHero) and 2.4 fuel (already surfaced on the shared tile) done. See SPRINT_PLAN board (all ✅).
+(2) **Carry-queue audit — all landed, no pending code:** Slice-2 2-c (cutMode + EnergyTimingChart read `energyExpenditure`),
+TDEE Tier-1 BMR-floor gate (`dcy.tdeeWithTier`: `if(totalKcal>=base)`), worker monotonic guard (`upsertDailyEnergyRow`
+max() for today). Gap was only test coverage → now covered by the sim + unit tests below.
+(3) **Monte-Carlo sim harness (NEW, `src/core/sim/`):** seeded PRNG + synthetic-athlete generator (documented physiology
+dists) + autocorrelated random-walk day-streams + invariants (HARD zero-tolerance + STATISTICAL margins, all rationale'd) +
+`runSim` over 10k cases through the REAL `adaptSession`/`prescribeFuel`/`composeCalorieTarget` + `sim.test.js`. Validates the
+engine across the SPACE of athletes (the multi-user de-risk). Extracted `composeCalorieTarget` (`calorieTargetMath.js` +
+units) so the real calorie formula is directly testable.
+(4) **Sim-caught fix:** `adaptSession` was greenlighting mobility/recovery days (only `type==='rest'` was short-circuited) →
+added `NIL={rest,mobility,recovery}` guard. Re-ran: 0/10k violations. Also caught + fixed a bad margin of our own
+(greenlit floor 2%→0.0005; measured ~0.15% across 3 seeds).
+**VERIFICATION STATE:** in-sandbox (node) I verified 10k cases 0 violations for adaptation+calorie invariants + composeCalorieTarget
+units + 3-seed margin stability. The FUEL invariants (prescribeFuel F1–F4 + monotonicity) run only under Emil's Windows
+`npm test` (sandbox can't import fuelForWork's transitive deps, and vitest needs Windows-native binaries).
+**NEXT:** Emil rebuild + `npm test` — expect the new suites green (sim.test.js 10k-case, calorieTargetMath.test.js). Confirm,
+then open the flagship: **goal model (activity/race/body/nutrition goals) → live plan-level re-solve** (ROADMAP_NEXT 3→4),
+designed with clean seams per the personal-first/productize-later call. ──
+
+2026-07-02 (ROUND 86) — **Cross-device sync hardened, LearnedHero stale-window fixed, test suites consolidated (293 green).**
+All Emil build+`npm test`-verified GREEN (293 passed / 45 files). Three threads:
+(1) **Cross-device Cronometer loss fixed** — mobile-logged nutrition wasn't reaching web. Root cause: nutrition writes
+relied only on cloud-sync's 1s DEBOUNCED push, lost when the app backgrounds; relay is whole-blob last-push-wins.
+Fix: `cronometer-client.upsertFullDayEntry`/`importCronometerCsvText` now fire an immediate `flushCloudPush()` after
+writing (coalesced by push()'s in-flight guard). PLUS two durable guards in `cloud-sync.js`: **publish-before-background**
+(`flushPendingPush()` wired to `visibilitychange→hidden` + `pagehide`) and a **sync self-check** — `CFG_LAST_PUSH_OK`
+stamp + `getUnsyncedKeys()`; `getSyncStatus()` exposes `unsyncedCount`/`unsyncedKeys`; `diagnostics.runDiagnostics` adds
+`out.sync` + two checks (`cloud-unsynced`, `cloud-pull-error`) printed by `__arnoldDiag()`. Recovery for the stuck day:
+re-import CSV on mobile (now publishes immediately). *(Diagnosed live via web-console `getSyncStatus`/force-pull: force
+pull returned null → proved server blob lacked the data → mobile push side.)*
+(2) **LearnedHero "not updating"** — the card's `useMemo(...,[])` had EMPTY deps → footer (race fitness/sweat/maintenance)
++ sensitivities froze at mount, never refreshing on Cloud Sync pull / new sync. Fix: `useStorageVersion()` in both dep
+arrays (the pattern every other live card already uses). Systemic scan done: LearnedHero was the only live card with it;
+`HubPanel` has it too but is DEAD (no usages, superseded); the rest are forms/detail views where read-on-open is correct.
++ `src/components/LearnedHero.test.jsx` (jsdom) asserts it re-derives on a storage change.
+(3) **Test-suite split retired** — discovered `vitest.config` only includes `src/**/*.test.js(x)` and EXCLUDES `tests/**`,
+so the entire `tests/*.mjs` node:test suite (hub/coaching/energy) NEVER ran under `npm test` (why new tests didn't move
+the count). Ported all 22 pure-logic suites → co-located `src/tests/*.test.js` vitest (both runner styles converted, paths
+rewritten); `classifyActivityForHyrox.test.mjs` stays as `test:legacy`. Count 153 → **293**. Old `tests/*.mjs` deleted by
+Emil on Windows (sandbox mount blocks deletes).
+**2.2 daily adaptation — CLOSED (2026-07-02):** satisfied by the shared `PlannedWorkoutTile` — `adaptSession` runs on real
+signals and the tile shows adjusted chips + a Cleared/Adapted coach line with the reason, on BOTH mobile Start (`MobileHome`)
+and web Daily (`LogDay`) = one voice via one component. Web parity already existed (shared component); forward "tomorrow-
+preview" and a coach-voice lead were both descoped (Emil: the shared tile IS the one voice). `getTodayAdaptation()` stays the
+shared wrapper (used by `WeeklyPlanner`).
+**SPRINT 2 CODE COMPLETE (2026-07-02):** 2.1 plan generation · 2.2 daily adaptation (shared `PlannedWorkoutTile`) · 2.3
+transparency · 2.4 prescriptive fuel. **2.3 done** — `LearnedHero` hero (reactive, normal-distribution confidence per
+effect) + confidence woven into cards: RMR (Katch estimate, ages), **Race Predictor** (`tileMetrics.racePredictor` →
+confidence: race-effort=high·recent / long-run·stale=med / Garmin VO₂max=low), **energy Σ** (`EnergyTimingChart` shows
+`energyExpenditure().confidence` as a color dot). **2.4 done** — `fuelForWork.prescribeFuel` (+9 tests) rendered on the
+shared tile's fuel band (pre-carbs · PM protein · color-coded EA + RED-S low-EA flag), web + mobile; `activityNeeds` in
+`LogDay`. (2.2 + 2.4 were already satisfied by earlier work + the shared tile — verified before building.)
+**NEXT:** Emil rebuild + `npm test` to verify the 2.3 wires (Race Predictor + energy Σ confidence). Then the UI/UX parallel
+track (Start cockpit density, primitive adoption, LogDay ski profile, rebrand). **Carry (pre-existing, unverified):**
+coach-unification Slice-2 2-c wiring, TDEE Tier-1 BMR gate, worker monotonic guard — need one build/test+push. ──
+
+2026-07-01 (ROUND 85) — **Two real data-integrity bugs fixed + a false alarm made legible; self-check layer proved its worth.**
+Emil hit a calorie target stuck at RMR (1880) on a training day + a `duplicate-activity` error + a scary `cronometerCount: 0`.
+The NEW `core/diagnostics.js` self-check (`window.__arnoldDiag(date?)`) drove every diagnosis. Findings + fixes (Emil
+build+test-verified GREEN via `__arnoldDiag`; **sandbox VM served TRUNCATED/NUL-padded file copies all session** so no
+in-sandbox test gate — logic validated standalone in /tmp, 12 tests green; Emil runs authoritative `npm test` on Windows):
+(1) **Calorie target eat-back swallowed by RMR floor** — `goalModel.deriveDailyCalorieTarget` added eat-back BEFORE the floor
+(`round(base−deficit+eatBack)` then `if(<floor)=floor`), so on a low-base day the floor overwrote the replenishment. FIX:
+floor the MAINTENANCE part first, THEN stack eat-back on top → `round(max(base−deficit+recoveryAdj, floor) + eatBack + flatBonus)`.
+Training days now = RMR + replenishment (was 1880 → now 2047/2059 as sessions logged). (2) **Duplicate Garmin activity write**
+— `syncRecentActivities` snapshots `existing` ONCE before the download loop but pushes to a freshly-read `all` each iteration,
+so a session arriving twice in one run (list overlap / manual FIT + sync) slipped the up-front dedup. FIX: write-side
+idempotent guard before push (skip if same activityId OR exact signature already present; `forceReplace` bypasses) +
+run-every-load self-healing sweep in `Arnold.jsx` (removes exact-dup rows, keeps richer, idempotent) to clean the row already
+persisted. NEW shared `dcyMath.activitySignature(a)` = `date|canonType|dur|cal`, used by BOTH the write guard AND
+`diagnostics.detectDuplicateActivities` so "what we prevent" == "what we flag". Confirmed: dup healed to rawCount 1; later
+rawCount 2 was a REAL second session (mobility after strength), correctly kept (signature differs). (3) **Cronometer FALSE
+ALARM** — `cronometerCount: 0` was the diag counting the LEGACY CSV store; the live pull upserts a `full-day` entry into
+`nutritionLog` (id `cronometer-live:<date>`, upsert-in-place → 2-3 pulls = 1 entry, totals correct). FIX: diag `intake` now
+reports true `source` ('cronometer-live'/'manual'/'csv-legacy'/'none') + `fullDayEntry` + renamed `cronometerCsvCount`.
+**Files:** `goalModel.js`, `garmin-activities-client.js`, `dcyMath.js`, `diagnostics.js`, `Arnold.jsx`, `tests/diagnostics.test.mjs`,
+`POSTMORTEMS.md` (2 entries). **NEXT:** Emil rebuild to pick up the load-sweep + clearer intake diag; then resume Sprint 2
+(2.2 → 2.3 → 2.4) per SPRINT_PLAN. Open backlog unchanged (illness mode, stale-numbers date, Log Food cleanup, C4 dead
+PlanGeneratorPanel removal + month-header generator trigger). ──
+
+2026-06-24 (ROUND 84) — **★ NEW MASTER PLAN governs everything + big build session shipped (all Emil build+test-verified GREEN).**
+**PLANNING: `SPRINT_PLAN_2026-06.md` is now THE authoritative plan (2-week window Jun 25→Jul 8) and SUPERSEDES the
+EXECUTION_PLAN sprint board + all prior queues.** Sprint 1 (Jun 25–Jul 1) = **coach unification (P1)** + finish two-a-day
+polish (#4 pre-tile planned-doubles, #5 post metrics, #1 calendar-tile metrics, #3 daily-web detail, multi-session dots) +
+data-integrity (post-workout weight capture, sRPE→ACWR, TDEE audit) + FatSecret go-live (external gate) + HC Android verify.
+Sprint 2 (Jul 2–Jul 8) = **close the adaptive loop** (planGenerator + adaptPlan) + **transparency hero** (LearnedHero) +
+**prescriptive fuel** (fuelForWork + low-EA). UI/UX systemization = PARALLEL track to ~end-July (cockpit/EdgeIQ density,
+primitive adoption, LogDay ski, desaturation, parity, rebrand, weekly-totals gutter). Backlog parking lot: event-driven
+coach (narrativeGraph), coach dialogue, snapshot tests, button-height lint CI, dead ImportHub removal, ClinicalModule
+extraction. **Daily reporting:** scheduled task `arnold-daily-standup` (07:34 daily) reads SPRINT_PLAN + HANDOVER and
+appends a standup to SPRINT_PLAN §6 Daily Log. Companion: `CAPABILITY_GAP_ANALYSIS_2026-06.md` (vision + inventory + 6-pillar
+gap table; ranks **coach unification #1**).
+**SHIPPED this session (since R83, all build+test GREEN on Emil's machine):**
+(1) **Season coaching engine** — `core/seasonPlan.js` (pure, +tests): Option-A CONTINUOUS multi-marathon (Berlin 9/27,
+NYC 11/1, Valencia 12/6 — verified dates); **only marathons (≥24mi) get mini-taper/recovery**, tune-ups (10K/4M/half) run
+THROUGH; ACWR hold(>1.3)/cut(>1.5); weekly verdict (increase/hold/cut/taper/recover) + long-run target + per-race
+feasibility (speed-vs-endurance). `core/seasonCoach.js` live wrapper (`window.seasonCoachDebug()`), `components/SeasonCoachCard.jsx`
+on mobile Start. (2) **Multi-session render** — Start post-tile + EdgeIQ TODAY ("+N" chip + disciplines); todayStatus already
+exposes sessions[]; load already sums (R83). (3) **FatSecret** — `cloud-worker/fatsecret-proxy/{server.js,worker.js,wrangler.toml}`
++ `FatSecretSection` in CloudSyncPanel (endpoint + Test). Premier-Free requested (James emailing). (4) **Cronometer
+COMPLIANT** — STOPPED the scraping worker (ToS/429 block); built `importCronometerCsvText` + `CronometerImportSection`
+(manual CSV → canonical full-day entries). Cronometer confirmed **10 CSV downloads/day** = plenty. (5) **Race-store
+consolidation** — ONE source: GoalsHub + memory.saveRaces DUAL-WRITE engine+localStorage (~10 surfaces read raw
+localStorage); GoalsHub reads shared store + merges legacy goals.races + **migrates planner type:'race' days**; per-row ✕
+delete. Fixed Emil's "races on Calendar not in Plan tab". (6) **Taper-for-tune-up bug fixed in ALL THREE coaching engines**
+(`seasonPlan`, `planLoad.analyzeSeason`, `coachSignals.computeRaceHorizon`/CoachComment) — **this 3-engine drift is exactly
+why coach unification is Sprint-1 P1.** (7) Drawer EXPECTED card overflow fix (`PredictedBandsCard` header wraps). (8) B1
+race timeline + ✓N year-log dropdown (earlier R81). (9) `CAPABILITY_GAP_ANALYSIS` doc.
+**PROCESS:** sandbox/VM down ALL session → no in-sandbox gate, but **Emil built + `npm test` after every chunk, all GREEN**
+(edits via Edit tool + read-back). Next session: start Sprint 1.1 (coach unification). ──
+
+2026-06-22 (ROUND 83) — **Multi-session foundation (steps 1/2/4) + race-store divergence diagnosed; Berlin coaching scoped.**
+**Berlin Marathon = Sun 27 Sep 2026 (~14 wks out).** Emil feels undertrained for sub-3:40 (8:23/mi). Two Explore sweeps:
+(a) authoritative pending backlog logged; (b) coaching capability = "sensors, not a coach" — weekly mileage reads,
+ACWR (computeAcuteChronicRatio, run-only), race predictor (predictFromFitness/Riegel) EXIST; the prescriptive engine
+(ramp 10%/wk, long-run progression, rest/cutback, taper structure, periodized backward-solve from race day, sub-3:40
+feasibility verdict) is MISSING — RACES.md patternMarathonMileageBuild/PaceWork/Taper are still unbuilt stubs. Chosen
+path: **multi-session foundation FIRST, then a sub-3:40 feasibility check** (then decide full plan vs weekly verdicts).
+**Multi-session foundation:** step 1 DONE — `core/todayStatus.js` resolveTodayStatus() now additionally returns
+`sessions[]` (all qualifying, annotated, sorted longest-first), `secondaries`, `multi` (≥2 meaningful non-mob); existing
+primary/label/done unchanged (back-compat). +4 two-a-day tests in todayStatus.test.js. step 2 VERIFIED (no code needed) —
+`trainingStress.js` already SUMS all of a day's sessions (every today-run hrTSS L616-624, all strength/hyrox tonnage+load,
+cycling load; sessionType→'mixed'); computeAcuteChronicRatio SUMS all runs in 7/28d. Load was never the collapse point —
+only the display. step 4 DONE — DESIGN_DECISIONS today-status rule extended (surfaces MUST render full day; ACWR-run-only
+caveat noted). **step 3 PENDING** — render primary+secondaries on PlannedWorkoutTile (mobile Start, the churn epicenter),
+EdgeIQ TODAY cell (TrainingTab), MobileHome today's-plan, mobile+web.
+**Race-store bug diagnosed (task pending):** races live in THREE diverged places — `arnold:races` (Calendar store, 12),
+`goals.races` (GoalsHub goalsV2, Plan-tab list, 11), AND planner days `type:'race'` (12). Calendar writes 'races' + planner
+day; GoalsHub Plan tab reads/writes goals.races only → adds don't cross, deletes don't propagate, planner residue lingers
+(that's why Emil's June-28 delete from two surfaces didn't stick). UNBLOCK shipped: console `window.arnoldNukeRace(match)`
+(clears all 3 stores + planner + reloads) — Emil removed the June 28 race. **Proper fix to build:** consolidate to ONE
+canonical store (KEEP the richer goalsV2 fields type/priority/goalTimeSecs on every race), one-time reconcile the 12/11/12,
+route Plan-tab + Calendar add/edit/delete through it, clean planner residue on delete, cross-tab refresh, add a per-row
+delete button in the Plan-tab races list (the "delete a race that hasn't happened" control). NOTE: `window.__arnoldStorage`
+IS exposed at boot (Arnold.jsx L880, ungated) — console snippets work; the races UI just doesn't live-update, hard-reload after.
+**⚠ PROCESS: sandbox/VM down ALL session — esbuild/babel/vitest gate NEVER ran; every edit (this round: todayStatus.js +
+.test.js, DESIGN_DECISIONS) via Edit tool + read-back only. Stacked unverified since R81. RECOMMEND a build + full-gate
+checkpoint on device BEFORE doing step 3 (touches PlannedWorkoutTile) and the race-store refactor (data-model change w/
+reconciliation = data-loss risk if wrong).** ──
+
+2026-06-22 (ROUND 82) — **FatSecret backup-nutrition path: Premier-Free chosen, Cloudflare Worker proxy + in-app endpoint field built; today's Cronometer day logged manually.**
+Context: Cronometer limited Emil's CSV-export access after detecting the sync worker's automated hits (ToS). FatSecret is
+the backup food DB. Web-search verified the tiering: **Basic (free) = up to 15 *individual* IPs only** (→ needs a static-IP
+host); **Premier-Free = CIDR ranges** so you can whitelist `0.0.0.0/0` and run from a **free Cloudflare Worker** (rotating
+IPs OK) **+ barcode**. FatSecret's dev team (James) proactively emailed offering free Premier for "start-ups/non-profits";
+Emil sent a reply (drafted here) requesting Premier-Free, framed honestly as a personal non-commercial project, flagging
+the CIDR-whitelist need + barcode, and asking if it's ongoing-free or a trial. **Built (deploy-ready, gated on their
+approval):** `cloud-worker/fatsecret-proxy/worker.js` + `wrangler.toml` — a Cloudflare Worker variant of `server.js`
+(same routes/JSON passthrough so the client mappers are unchanged; default `scope=premier` for barcode; secrets via
+`wrangler secret put`, never in repo/app). **Built (app side):** `FatSecretSection` in `CloudSyncPanel.jsx` (renders in the
+paired+unlocked Cloud Sync card, after Cronometer + Garmin) — endpoint URL input + Save + **Test connection** (GET
+`/health`, shows scope) + Clear, wired to `fatsecret-client.js` (`get/setFatSecretEndpoint`, `isFatSecretConfigured`).
+Endpoint = per-device localStorage `arnold:fatsecret-endpoint` (NOT cloud-synced — paste the same Worker URL per device).
+Provider dispatch (FatSecret primary → OFF fallback) was already wired in `nutrition.js`. **Go-live once approved:**
+whitelist `0.0.0.0/0`+`::/0` → `wrangler secret put FATSECRET_CLIENT_ID/SECRET` → `wrangler deploy` → paste URL in the
+FatSecret field → Test connection (want "✓ Connected · scope: premier"). **Also:** logged today's (Jun 22) Cronometer
+printout into Arnold — the app has NO Cronometer-PDF importer (`pdfParser.js` is Garmin-only), so used a console snippet
+writing the canonical `full-day` nutritionLog entry (id `cronometer-live:2026-06-22`, macros + `extended` micros, mirrors
+`cronometer-client.js upsertFullDayEntry`) via `window.__arnoldStorage`. Totals: 1916 kcal · 138.3P · 190.4C (160.7 net) ·
+73.9F · 29.6 fiber · 68.9 sugar · 3316 ml water; micros Na 2866 / K 4402 / Mg 209 / Ca 1450 / Fe 10.6.
+**⚠ PROCESS: sandbox/VM still down — no esbuild/babel/vitest gate; CloudSyncPanel edits done via Edit tool + read-back
+(import added, `<FatSecretSection/>` rendered L526, component L1105, balanced, flows into HealthConnect L1255). Re-run the
+gate + eyeball after next build.** ──
+
+2026-06-22 (ROUND 81) — **Start-tab Race Timeline reworked to "B1" + tappable year race-log dropdown.**
+Emil: the annual timeline wasted its right third on empty next-year months ("2027 · F M A M", no races) and
+crushed past races into an unreadable green blob, with the Sept cluster stacking deep. After mockups he chose **B1**
+(equal-slot "A" REJECTED as time-dishonest; cluster-collapse "B2" tap-to-expand REJECTED — he wanted no in-the-moment
+decision). `AnnualTimeline` (MobileHome.jsx) geometry replaced: past races collapse into a fixed left **"✓N" cap**
+(STUB=0.09); the rest is a TRUE linear time axis from today → last-upcoming-race +14d (floored 8wk, capped 14mo) so dot
+spacing reflects real time-to-race and the dead tail is gone; soonest race filled/bold; every upcoming date stays
+labeled (lane-packed when close — nothing hidden); "2027" boundary tick only if the window crosses Jan 1. **Then:** the
+✓N cap is now a **dropdown** (`logOpen` state) → "Races done · YYYY" log = each completed race this year
+(name · date · actual distance · finish time), chronological. Time + actual distance derived in MobileHomeInner
+(`doneRaceLog`) by matching each race date to the longest activity logged that day (`unifiedActivities`); no match → "—".
+New `doneRaces` prop on AnnualTimeline. Removed vars: SPLIT/pastAnchor/horizon/horizonCap/lastRace/futureRaceDates.
+Binding rules logged in DESIGN_DECISIONS.md ("Annual Race Timeline — B1 geometry").
+**⚠ PROCESS THIS SESSION: the Linux sandbox/VM would NOT start — `bash`/`npm`/`python` unavailable. So (a) the
+esbuild + babel free-vars + vitest verify gate COULD NOT run, and (b) with no bash, edits were made via the **Edit
+tool** (against the usual rule) with read-back verification after each (JSX balanced, no stale refs, file intact);
+geometry math checked by hand. NEXT SESSION when the sandbox is back: run the full verify gate on MobileHome.jsx and
+rebuild on device to eyeball the timeline + dropdown before trusting these two changes.** ──
+
 2026-06-17 (ROUND 80) — **Calendar drawer: per-session chips + REMOVE ✕ (closes the multi-session visibility gap).**
 Emil: tried to swap Easy Run→Mobility, +Plan APPENDED mobility (R74d behavior) but the drawer only showed the PRIMARY
 session and had no remove → "no idea if I have two workouts / can't remove the Easy run." Fix in `DayDrawer`
@@ -2571,9 +2759,142 @@ Goal: Arnold owns its metrics & data; no reliance on Garmin/3rd-party computed v
   - Drawer figure strip **dedupes the race**: on a race day the dominant logged activity is skipped once (race-as-activity), and planned `race` sessions are skipped (race figure already shown). Fixes "3 figures when I had a race / race tile repeated."
   - (dead `glyphFamilies` const left unused in MobileDayTile — harmless; remove on next pass.)
 - DCY fuel bug fixed (core/dcy.js Phase 4r.dcy.3) — empty tracked day on a settled/after-bedtime date now scores N=0, not N=1. See POSTMORTEMS 2026-06-18.
-per-session carb adequacy).
-- Mobile HS tile names wrap to two lines (zero-width space after slash, `minHeight: 28`, `MobileSystemTile` in `MobileHome.jsx`).
 
-## How to update this file
-At each checkpoint: refresh **Last updated**, **Commit status**, **Current focus**, and **Active task**;
-tick backlog boxes as items ship; move shipped items into "Recently shipped".
+### 2026-06-18 — Planner: in-place mileage edit + hold-and-sweep drag (mobile)
+- **Inline mileage edit** (DayDrawer): run-family session chips now have an editable miles `<input>` (commit on Enter/blur via `updateSessionDistance`). No more ✕-and-rebook. Non-run chips unchanged.
+- **Hold-and-sweep drag** (mobile only, per Emil's picks: per-session, fling-off-to-remove, mobile only):
+  - Long-press (320ms, 8px move cancels) a drawer session chip → `beginSessionDrag` → floating ghost follows finger.
+  - Drop on a month-grid day cell (`data-cal-date` + `elementFromPoint`) → `movePlannedSession` (handles same-week and cross-week). Drop past the grid edge (`gridRef` bounds) → `deletePlannedSession`. Drop on source = cancel.
+  - Month-swipe-nav + panel scroll are disabled while `drag` is active (`swipeHandlers` gated on `!drag`, panel `touchAction:'none'`). Input/✕ guarded so edit + remove still work.
+  - esbuild + babel scope-check pass. NEEDS ON-DEVICE TUNING: long-press feel (320ms), fling-off threshold (±8px past grid), and confirm pointer-events + preventDefault stop scroll on the Samsung webview. Couldn't test touch here.
+
+### 2026-06-18 — Planner mileage edit reworked: popup instead of inline input
+- Removed the inline `<input>` from the drawer chip (Emil). Tapping/clicking a planned session now reopens **PlanPickerModal in edit mode**, pre-filled with the session's type + mileage; saving REPLACES that session in place (no duplicate append).
+- PlanPickerModal gained `editing` / `initialType` / `initialDist` props (header → "Edit workout", button → "Save"). `editPlan` state in CalendarTab + `openEditPlan(idx, session)`; `+Plan` clears `editPlan` so it still appends.
+- Chip gestures: mobile TAP = edit, LONG-PRESS (320ms) = drag (unchanged); web CLICK = edit. ✕ remove stops propagation. `updateSessionDistance` is now dead code (left in place, harmless).
+
+### 2026-06-18 — Drag gesture: pointer events → touch events (mobile reliability)
+- Hold-and-sweep wasn't firing on the Samsung Capacitor WebView. Converted the whole gesture from Pointer Events to **Touch Events** (`onTouchStart` on the chip; `touchmove`/`touchend`/`touchcancel` on window for the drag), which are reliable on the Android WebView.
+- Also loosened the long-press jitter tolerance 8px→**16px** and hold 320ms→**300ms** (finger jitter during a hold was tripping the old 8px cancel and killing the pickup). Chip cleans up its own listeners the moment a drag starts so the drag effect takes over cleanly.
+- esbuild OK. Still needs on-device confirmation.
+
+### 2026-06-18 — Drag fix round 2 (vibration fired but no drag/ghost)
+Symptom: long-press vibration fired (pickup ran) but nothing dragged and no ghost. Three root causes fixed:
+1. **Ghost invisible** — it was `position:fixed` inside the mobile pull-to-refresh `transform` wrapper (MobileHome.jsx:2924), so fixed resolved against that container. Now rendered via `createPortal(..., document.body)`.
+2. **Drag died instantly** — the panel's `touch-action` flipped `pan-y`→`none` when `drag` became active, which fires `touchcancel` mid-gesture. Removed the flip; the chip's own `touch-action:none` already prevents scroll for the gesture.
+3. **Render-gap** — move/drop listeners were attached via `useEffect` (runs after paint), missing the start of the gesture. Now attached **synchronously inside `beginSessionDrag`** (window touchmove/touchend/touchcancel); the `useEffect` was removed. Drop logic reads a local `data` object, not React state.
+esbuild + scope check pass. Awaiting on-device confirmation.
+
+### 2026-06-18 — Drag froze the app: cause was per-move re-render storm
+- Root cause (found by running the real module bundler, not just single-file esbuild): `beginSessionDrag` called `setDrag({...})` on EVERY `touchmove`, re-rendering the entire 2500-line CalendarTab ~60x/sec → WebView main-thread lock / freeze.
+- Fix: `drag` is now a **boolean** used ONLY to mount/unmount the ghost (and gate swipe). During the move the ghost position/label and the day-cell highlight are updated **imperatively via refs/DOM** (`ghostRef`, `cellEl.style.outline`) — zero React re-renders mid-drag. Ghost has no left/top in JSX (set imperatively) so stray re-renders don't reset it. `dragOverDate` prop to MonthGrid removed (highlight is imperative now).
+- Verified: full esbuild graph bundle (no real errors — only Vite `?url`/`import.meta` which build fine in Vite), babel scope-check (no unbound), single-file transform OK. Build can't run fully in-sandbox (rolldown native binary is Windows-built).
+
+### 2026-06-18 — Drag gesture DISABLED (kept freezing the WebView; couldn't repro/fix blind)
+- After 4 attempts (pointer→touch, portal ghost, sync listeners, imperative no-setState), the hold-and-sweep drag still froze the app on the Samsung Capacitor WebView. Confirmed via the file tool that edits ARE reaching the build (Windows path matches sandbox), and the full module graph bundles clean — so it's a runtime WebView behavior I can't reproduce without the device.
+- **Stabilized:** the chip handler is now a plain `onClick` → tap-to-edit (works web + mobile); no long-press, no touch listeners, no `beginSessionDrag` call. `drag` state never activates → ghost never renders → no freeze. The drag code (beginSessionDrag/ghost/move/delete-by-drag/refs) remains in the file but is DEAD (never invoked) — safe; remove on a later cleanup pass.
+- So planner UX today: tap a planned run → edit popup (change type/miles, Save, in-place); ✕ on a chip removes it. **No drag.**
+- Open question for Emil: reschedule-to-another-day should be done via a "Move to date" control in the edit popup (reliable, testable, no gesture) rather than free drag — pending his go-ahead. If he wants to keep pursuing real drag, it needs on-device console logging (chrome://inspect) to find where the touch sequence dies.
+
+### 2026-06-18 — Drag REBUILT from the calendar TILE (Emil's design) + real fix
+- Console proved the drawer-chip drag failed because dynamically-added window touchmove listeners never fired (`moves 0`) and the ghost never mounted. Root cause: you can't reliably add a touch listener mid-gesture on this WebView.
+- Redesigned per Emil: drag starts on the **calendar tile**, not the drawer. `MobileDayTile` long-press (320ms) on a day that HAS a plan (`!isPast && hasPlan && !hasRace`) → `onTileDragStart`. Touch handlers are bound to the tile element; the **touchmove is a native non-passive listener on the tile** (`el.addEventListener('touchmove', …, {passive:false})`) so it (a) actually receives the in-progress touch and (b) can `preventDefault()` to stop scroll during the drag. No window listeners, no touch-action flips.
+- CalendarTab controller: `tileDragStart/Move/End` + `moveDayPlan` (moves the whole day's plan, same/cross-week) + `clearDayPlan` (fling-off-grid). Ghost + highlight imperative via `ghostRef`/`hlCellRef` (no per-move re-render). `drag` stays a boolean (mount/unmount ghost).
+- Drawer chip reverted to plain `onClick` tap-to-edit. Old `beginSessionDrag`/`movePlannedSession`/`deletePlannedSession` are now dead (left in file).
+- Temporary `[tiledrag]` console logs kept this round for on-device confirmation; remove once confirmed working.
+
+### 2026-06-18 — Calendar: completed-✕ guard + mobile tile major/minor figures
+- #2 DONE: planned-session remove ✕ now hidden once the day has a logged activity (`!isPast && activities.length === 0`) — can't delete a workout you've done.
+- #1 + #3(mobile tile) DONE: `MobileDayTile` now classifies each workout MAJOR (>=30min) vs MINOR (<30min) via `estPlanMin`/`actMin` + `TYPE_MIN` table. Center shows up to **2 major figures side-by-side**; **minor (<30min) workouts render small on the right rim**; a short-only day shows rim-only, empty center. (Old `sigImg`/`glyphFamilies`/`hasMobilitySecondary` now dead in MobileDayTile.)
+- Decisions locked for the REMAINING pieces (not yet built): web tile two figures (#3.1 tile); **web drawer = two cards side-by-side**; **mobile drawer = swipe between the two workouts** (no stacking); **Start/Play pre/post = two side-by-side compact tiles** (#4). Build these in focused passes.
+
+### 2026-06-18 — Drawer: per-workout EXPECTED cards + ✕ render fix + Added-load removable
+- Fixed: chip remove button was rendering literal `✕` (JSX text doesn't interpret \u escapes) → restored to ✕.
+- #3.1 (web) STARTED: the drawer now renders one `PredictedBandsCard` (EXPECTED) **per planned workout** (maps `daySessions(planned)`), so a race-day + Strength shows EXPECTED·RACE then EXPECTED·STRENGTH stacked "one after the other" in the web sidebar — not squashed. Fuel/Core stay once (day-level). NOTE: on mobile this currently stacks too; Emil wanted SWIPE on mobile — still to do.
+- AddedLoad now fully removable: hide state lifted to LogDay, tile renders nothing when hidden (web grid is auto-fit so the row reflows), re-add via "+ load" in the Details header.
+- RPE tile relabelled "Perceived"→"RPE", value is the number only.
+
+### 2026-06-19 — DATA INTEGRITY Phase 1: dataHealth() + DataHealthBanner (the "piping" fix begins)
+- Context: the "no food → fake Fuel %/Nutrition" hallucination was ONE architectural gap (no shared contract for missing-vs-real-zero) surfacing in 3 scorers. Root plan: `DATA_INTEGRITY_PLAN.md` (root).
+- **Phase 0 (done):** patched the 3 fuel/nutrition hallucinations (POSTMORTEMS 2026-06-19 + addendum).
+- **Phase 1 (done, this session):**
+  - `core/dataHealth.js` — `dataHealth()` returns per-source `{configured,status,lastDate,ageDays,lastError,retry}` for nutrition(Cronometer)/wellness(Garmin sleep+hrv)/weight/activities. status ∈ ok|stale|down|never|not-tracked. Daily sources stale at ≥2d (weight 7d); activities never "stale" on age (sporadic). Built on `isConfigured`/`isGarminConfigured`/`getGarminWellnessMeta` + bucket data-age. Also `freshnessPhrase(src)`.
+  - `components/DataHealthBanner.jsx` — renders only when `anyIssue`; lists stale/down sources + freshness + error, a **Retry sync** (calls the real per-source fetchers), a Dismiss, and the line "Affected scores show — until logged/synced — they are not estimated." Wired into MobileHome Start (above HeroRail) + EdgeIQ web (top).
+  - Verified: esbuild per-file + full dependency-graph bundle (all imports/exports resolve) + scope-clean.
+- **Phase 2 (next):** typed `{value,status}` results + one shared `scoreAdherence()`; migrate dcy/trainingStress/healthSystems so missing→no-data propagates (instead of per-scorer guards). **Phase 3:** golden failure-matrix tests + dev Data-Health panel.
+
+### 2026-06-19 — Race-tile dedupe + race-✕ glyph fix; DATA_SOURCING_STRATEGY.md
+- Bug: mobile MobileDayTile showed 2 figures on a race day (race + the logged race-run). Fixed: dedupe the dominant completed activity on race days (race-as-activity), matching web's single figure. Extra completed sessions (e.g. a separate strength) still show.
+- Bug: drawer race-line remove rendered literal `✕` (JSX text doesn't decode \u). Fixed → ✕. (The remaining `✕` at CalendarTab ~L403 is a JS string in the drag ghost — correct.)
+- NEW doc `DATA_SOURCING_STRATEGY.md` (root): own-the-pipeline / rent-the-data. Garmin-for-food = NO (Connect+ paywall + no nutrition API → another scrape). Build-own food DB = NO. Recommended: source-adapter layer + first-party manual logger + a sanctioned nutrition API (Nutritionix/FatSecret/USDA/OFF) + prefer official device APIs (Health Connect/HealthKit). Sequencing: Integrity Phase 2 FIRST, then adapter, then logger, then API. Includes a provider cost/terms checklist to fill in.
+- NEXT: Integrity Phase 2 (typed {value,status} + scoreAdherence; migrate dcy/trainingStress/healthSystems), pending Emil's go.
+
+### 2026-06-21 — Weight cutoff bug fixed + staleness catch + Integrity Phase 2 foundation
+- BUG (POSTMORTEMS 2026-06-21): `bodyWeight.js MORNING_CUTOFF_HOUR=10` rejected a 10:01 morning weigh-in by 1 min → showed yesterday's weight. Fixed → noon (12). 10:01 now counts; earliest-per-day still picks most-fasted; 13:00+ still excluded.
+- Weight staleness CATCH: `currentTrueWeight(rows)` → `{lbs,date}`, `weightAsOf(date)` → "Jun 20"/''. Start hero weight stat shows `lbs · <date>` only when the value is a fallback from an earlier day (normally just `lbs`). EdgeIQ/other surfaces get the same in Phase 2's display pass.
+- INTEGRITY PHASE 2 STARTED: `core/metricResult.js` (`result`, `scoreAdherence`, `combineDomain`, `isUsable`). scoreAdherence centralizes zero-vs-missing (real 0 → ok/low; missing+expected → gap; missing+!expected → not-tracked). Self-test PASSES incl. the food=0+water case → 0.14 not 0.92. NOT yet wired into scorers.
+- NEXT (Phase 2 migration, do each + verify separately): trainingStress nutrition domain → dcy fuelAdequacy → healthSystems, onto metricResult; then propagate `partial`/`no-data`/`asOf` to the display layer (incl. EdgeIQ weight "as of"). Then Phase 3 golden tests. Then the source-adapter + fallback logger (DATA_SOURCING_STRATEGY.md — fallback, not replacement; FatSecret Premier Free + Open Food Facts).
+
+### 2026-06-21 (cont) — Phase 2 migration 1/3: trainingStress nutrition domain
+- `core/trainingStress.js` nutrition domain now routes protein + hydration through `scoreAdherence`, calories through an inline deviation `mkResult` (gated by the same present/absent rule), folded by `combineDomain`. macros are null when no food logged → no-data; logged-but-zero macro scores LOW (no longer skipped).
+- Behavioral test (vs real metricResult) PASSES: water-only → no-data (not 92); on-target day → 96; food+0 protein → 44; nothing → no-data. esbuild + scope clean.
+- NEXT (migration 2/3): `dcy` fuelAdequacy. CAUTION: `N` must remain a NUMBER for `F·N − G·(1.1−R)`, so the no-data/gap state can't live in N itself — carry a `fuelStatus` alongside (fuelBreakdown) and let the Fuel pill render "—" on no-data, while N falls back to a neutral that doesn't fabricate "absorbing". Then migration 3/3: `healthSystems`. Then Phase 3 golden tests.
+
+### 2026-06-21 (cont) — Phase 2 migrations 2/3 + 3/3
+- 2/3 dcy fuelAdequacy → `fuelResult(){N,status}` on metricResult. N stays numeric; `fuelStatus` via dcy()+fuelBreakdown; Start Fuel pill + DcyDetails render "—" on no-data. Node-verified (water-only→N0/no-data; on-target→0.97; food+0protein→0.61 scored; non-tracker→not-tracked).
+- 3/3 healthSystems AUDITED, NOT migrated: `scoreSystem` pct=value/target → empty day = 0%/deficient (low), not a favorable fabrication. Bug class CLOSED (only trainingStress + dcy had it; both fixed).
+- REMAINING (optional/lower-priority): healthSystems explicit no-data vs 0% during outage; EdgeIQ weight "as of" + Fuel "—" (status now available on dcyDaily.fuelStatus). Then **Phase 3**: golden failure-matrix tests (the {food=0,water>0}, {configured+empty}, {stale}, {not-tracked} cases) + dev Data-Health panel.
+- Then DATA_SOURCING_STRATEGY adapter + fallback logger (FatSecret Premier Free + OFF; fallback not replacement).
+
+### 2026-06-21 — Data Integrity Phase 3 DONE (golden tests + dev panel)
+- Golden failure-matrix tests added (run on Windows via `npm test`; vitest can't run in the sandbox — rollup native binary):
+  - `arnold-app/src/core/metricResult.test.js` — the contract (scoreAdherence + combineDomain), incl. the exact "food=0+water → <0.2 not 0.92" regression.
+  - `arnold-app/src/core/dcy.fuel.test.js` + `trainingStress.nutrition.test.js` — the two migrated scorers.
+- Refactor for testability: extracted PURE cores `dcy.fuelScore()` and `trainingStress.nutritionScore()` (storage IO stays in `fuelResult`/`computeDailyScore`). Behavior-preserving; esbuild+scope+bundle clean.
+- LATENT bug found + fixed during extraction: `nutritionScore` in isolation scored 0.83 from hydration alone; added internal water-gate (no food → water dropped) matching `fuelScore`. Hydration can never score nutrition.
+- Dev panel: `window.dataHealthDebug()` (in `core/dataHealth.js`) → per-source availability table + live typed scorer outputs (no-data/partial render "—").
+- Bug class CLOSED and now LOCKED by tests. Next options: optional display polish (healthSystems explicit no-data; EdgeIQ weight 'as of'/Fuel '—'), then the source-adapter + fallback nutrition logger (DATA_SOURCING_STRATEGY).
+
+### 2026-06-21 — FatSecret integration (foundation, FatSecret-ready)
+- FatSecret chosen as the sanctioned PRIMARY nutrition provider; Open Food Facts stays as automatic fallback. "Own the pipeline, rent the data."
+- NEW `arnold-app/src/core/fatsecret-client.js` — config (`setFatSecretEndpoint`/`isFatSecretConfigured`), PURE mappers (`parseFsDescription`, `mapFsSearchResults`, `mapFsFood`, `per100gFromServings`, …) + proxy calls (`fsSearchFoods`/`fsGetFood`/`fsLookupBarcode`). Unit-tested: `fatsecret-client.test.js` (10 assertions, node-verified).
+- `core/nutrition.js`: `searchFood()`/`lookupBarcode()` now dispatch FatSecret-first (when configured) → OFF fallback. No UI change; existing `NutritionInput.jsx` logger (manual/search/barcode/photo/voice + live BarcodeDetector camera) now runs on FatSecret data.
+- NEW deploy-ready proxy `arnold-app/cloud-worker/fatsecret-proxy/` (server.js + README). MUST run on a STATIC-IP host (CF Workers can't be IP-whitelisted by FatSecret). Routes: /fatsecret/search|food|barcode, OAuth2 client-credentials w/ token cache.
+- REMAINING (Emil, his machine/infra): deploy proxy to static-IP host (Fly.io dedicated IPv4 / VPS), whitelist its IP in FatSecret dashboard, set FATSECRET_CLIENT_ID/SECRET env, then `setFatSecretEndpoint('https://host')`. Barcode lookup needs Premier scope (free `basic` → OFF fallback).
+- OPEN: `BarcodeDetector` web API may not fire in all Android WebView versions — if scanning doesn't trigger on device, add a Capacitor barcode plugin (native). Verify on-device first.
+- esbuild + babel-scope + full-graph bundle clean on all touched core files.
+
+### 2026-06-21 — Data-integrity display polish (DONE)
+- MobileEdgeIQ Weight cockpit tile: shows "as of <date>" when the morning-fasted
+  weight isn't from today (stale fallback reads as stale, not as a fresh number).
+  Uses currentTrueWeight()+weightAsOf() (same catch already on the Start hero stat).
+- DataHealthBanner now also renders on MobileEdgeIQ and the Fuel tab (NutritionInput),
+  not just Start + web EdgeIQ. Those surfaces host the macro dials + Health Systems
+  grid, which read LOW (not fabricated-high) when nutrition is missing; the banner
+  honestly explains the low reading during a Cronometer outage.
+- Deliberately did NOT refactor healthSystems scoreSystem (prior audit: it errs
+  low/deficient, never favorable — safe). The banner closes the visibility gap
+  without touching the scorer. Fuel "—" on no-data already handled via DcyDetails.
+- esbuild transform + babel scope clean on all three touched files.
+
+### 2026-06-21 — Today-status centralized (ends the per-surface "Rest day" whack-a-mole)
+- NEW `core/todayStatus.js` — `resolveTodayStatus()` single source of truth + shared maps
+  (PLAN_TYPE_FAMILY/LABEL, FAMILY_LABEL, actualFamilyOf). Node-tested (`todayStatus.test.js`, 9 cases).
+- `TrainingTab.jsx` (web EdgeIQ) TODAY cockpit cell + "Today" attention tile now use it →
+  a logged off-plan/no-plan workout reads as the discipline ("Cycling"/"Off-plan · Cycling"),
+  not "Rest day ✓". (This was the user-reported web bug.)
+- `PlannedWorkoutTile.jsx` deduped onto todayStatus (imports the maps + actualFamilyOf;
+  removed local copies) so mobile + web can't drift.
+- Audited the other two today-status surfaces: `intelligence.js` trainStatus and
+  `CoachComment.jsx` already key off "trained-today" and label by the actual session → correct.
+- DESIGN_DECISIONS updated with the binding rule. esbuild+scope+bundle clean on all touched files.
+
+### 2026-06-21 — AnnualTimeline → Option B (compressed past + forward horizon)
+- `MobileHome.jsx` AnnualTimeline reworked: piecewise xOf() maps the elapsed year into
+  a small left stub (SPLIT=0.18) and the rest into a linear forward horizon (~11 mo,
+  stretched to include the last known race +21d, capped 14 mo). Today is pinned at SPLIT.
+- Removed the `getFullYear() !== currentYear` race filter (the bug that hid next-year
+  races) → races now shown for the window [yearStart, horizon], so early-next-year races
+  appear early. Added a dashed year-boundary tick ("2027") and truthful month ticks
+  placed at xOf(monthStart). Lane-packing + goal bars untouched.
+- Tunables: SPLIT (0.15–0.20) and the 11/14-month horizon base/cap. Geometry node-verified.

@@ -39,6 +39,7 @@ import { storage } from './storage.js';
 import { getGoals } from './goals.js';
 import { localDate, ymd } from './time.js';
 import { classifyChronicRecoveryDebt } from './recoveryDebt.js';
+import { composeCalorieTarget } from './calorieTargetMath.js';
 
 const OVERRIDE_KEY = 'arnold:overrides:targets';
 const LEDGER_KEY   = 'arnold:outcomeLedger:weekly';
@@ -277,17 +278,20 @@ export function deriveDailyCalorieTarget(opts = {}) {
   const racePrep = getRaceProximityModifier(today);
   const eatBack = Math.round(correctedBurn * racePrep.eatBackFraction);
 
-  // ── Composition ────────────────────────────────────────────────────────
-  let derived = Math.round(baseTarget + recoveryAdj + eatBack + racePrep.flatBonus);
-
-  // ── Phase floor ────────────────────────────────────────────────────────
-  // NEVER below RMR. If recovery debt is high, lift floor higher.
-  const effectiveFloor = (rmr || 1500) + (recovery.debt >= 2 ? 100 : 0);
-  let floored = false;
-  if (derived < effectiveFloor) {
-    derived = effectiveFloor;
-    floored = true;
-  }
+  // ── Composition + phase floor ───────────────────────────────────────────
+  // Floor the MAINTENANCE part (TDEE − deficit) at RMR — never eat below resting — and then
+  // add the training eat-back + race bonus ON TOP, so a training day always replenishes
+  // ABOVE the floor.
+  //
+  // Bug fixed 2026-07-01 (Emil): the eat-back used to be added BEFORE the floor, so whenever
+  // the deficit math dipped below RMR (e.g. thin/under-logged intake → low empirical TDEE)
+  // the floor overwrote the whole number, eat-back included. Result: a hard workout showed
+  // the flat RMR target (1880) instead of RMR + replenishment. Flooring maintenance first,
+  // then stacking eat-back, makes a training day = RMR + what you burned.
+  // Shared pure composition (also exercised directly by unit tests + the sim harness).
+  const { derived, effectiveFloor, floored } = composeCalorieTarget({
+    baseTarget, recoveryAdj, eatBack, flatBonus: racePrep.flatBonus, rmr, debt: recovery.debt,
+  });
 
   return {
     derived,

@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Sparkline } from "./Sparkline.jsx";
+import { DataHealthBanner } from "./DataHealthBanner.jsx";
 // STATUS/statusFromPct removed — readiness now computed by trainingStress.js
 import { getGoals } from "../core/goals.js";
 import { storage } from "../core/storage.js";
@@ -18,7 +19,7 @@ import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isStrengthVolume, isMobility, isHIIT, activityKind, iconTypeFor } from "../core/activityClass.js";
 import { dcy as dcyToday, dcyWeekly, formatDcy, glyphFor, stateFor } from "../core/dcy.js";
 import { todayPlanned, checkTodayCompletion, DAY_TYPES, getPlannerWeek, weekKey, dayRunMiles } from "../core/planner.js";
-import { currentTrueWeightLbs } from "../core/bodyWeight.js";
+import { currentTrueWeightLbs, currentTrueWeight, weightAsOf } from "../core/bodyWeight.js";
 import { NutritionInput } from "./NutritionInput.jsx";
 import { DataSync } from "./DataSync.jsx";
 import { dailyTotals as nutDailyTotals } from "../core/nutrition.js";
@@ -76,6 +77,7 @@ import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { buildHubFromStorage } from "../core/hub/hubDebug.js";
 import { hubScoreTile } from "../core/hub/promote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
+import SeasonCoachCard from "./SeasonCoachCard.jsx";
 import { MetricTile } from "./ui/MetricTile.jsx";
 import { CoachComment } from "./CoachComment.jsx";
 import { CoachSigil } from "./CoachSigil.jsx";
@@ -294,7 +296,7 @@ function useMobileData() {
     // immediately, instead of lingering until midnight on race day.
     const _raceDoneOn = (rDate) => (activities || []).some(a => a?.date === rDate && !isMobility(a)
       && (((Number(a.durationSecs) || 0) / 60) >= 30 || (Number(a.distanceMi) || 0) >= 5));
-    const nextRace = (() => { try { const races = JSON.parse(localStorage.getItem('arnold:races') || '[]'); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => { const d = parseLocalDate(r.date); return d && d >= n2 && !_raceDoneOn(r.date); }).sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null; } catch { return null; } })();
+    const nextRace = (() => { try { const races = (storage.get('races') || []); const n2 = new Date(); n2.setHours(0, 0, 0, 0); return races.filter(r => { const d = parseLocalDate(r.date); return d && d >= n2 && !_raceDoneOn(r.date); }).sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))[0] || null; } catch { return null; } })();
 
     return {
       G, profile, today, d30Cutoff,
@@ -1234,7 +1236,8 @@ export function DcyDetails({ dcyDaily }) {
   const [open, setOpen] = useState(false);
   if (!dcyDaily) return null;
 
-  const { F = 0, G = 0, N = 0, R = 0 } = dcyDaily;
+  const { F = 0, G = 0, N = 0, R = 0, fuelStatus } = dcyDaily;
+  const fuelNoData = fuelStatus === 'no-data' || fuelStatus === 'not-tracked';
   const src = dcyDaily.sources || {};
   const nut = src.nutritionIntake || {};
   const intake = nut.intake || {};
@@ -1281,7 +1284,7 @@ export function DcyDetails({ dcyDaily }) {
       {open && (
         <div>
           <SectionHead>
-            Fuel — N {(N * 100).toFixed(0)}%
+            Fuel — N {fuelNoData ? '—' : `${(N * 100).toFixed(0)}%`}
             {nut.forecastMode === 'partial' && (
               <span
                 title={`Today is in progress. N reflects what you've logged so far — it'll rise as you eat. Projected end-of-day total shown below.`}
@@ -1444,32 +1447,66 @@ function ThisWeekCard({ headline, miles, sessions, runs, time, weeklyMiPct, week
 
 // ─── ANNUAL TIMELINE ────────────────────────────────────────────────────────
 // Elegant horizontal year bar with race markers and goal progress
-function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsActual, totalSessions, projected = false }) {
+function AnnualTimeline({ races, doneRaces = [], runMiGoal, runMiActual, workoutsGoal, workoutsActual, totalSessions, projected = false }) {
   const now = new Date();
+  const today = now;
   const yearStart = new Date(now.getFullYear(), 0, 1);
-  const yearEnd = new Date(now.getFullYear(), 11, 31);
-  const yearProgress = (now - yearStart) / (yearEnd - yearStart);
-  const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
 
-  // Parse races into markers with positions — deduplicate by date, truncate names, fix UTC
+  // ── B1 geometry: collapse the past, true-time future, trim the dead tail ──
+  // The left STUB is a fixed "✓N done" cap — completed races collapse there so
+  // they never crowd the line. The rest is a TRUE linear time axis from today to
+  // (last upcoming race + 2 weeks), so dot spacing reflects real time-to-race and
+  // the bar wastes no width on empty future months. Every upcoming race keeps its
+  // own date label (lane-packed downward when two fall close) — nothing hidden.
+  const STUB = 0.09;
+  const addMonths = (d, m) => { const x = new Date(d); x.setMonth(x.getMonth() + m); return x; };
+  const addDays   = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n);   return x; };
+
+  // Dedupe races by date.
   const seen = new Set();
-  const raceMarkers = (races || [])
-    .filter(r => {
-      if (!r.date) return false;
-      const d = new Date(r.date + 'T12:00:00');
-      if (d.getFullYear() !== now.getFullYear()) return false;
-      const key = r.date;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .map(r => {
-      const d = new Date(r.date + 'T12:00:00');
-      const pct = (d - yearStart) / (yearEnd - yearStart);
-      const isPast = d < now;
-      return { name: shortRaceName(r.name), date: d, pct: Math.max(0, Math.min(1, pct)), isPast, distMi: r.distanceMi };
-    })
-    .sort((a, b) => a.pct - b.pct);
+  const rawRaces = (races || [])
+    .filter(r => { if (!r.date || seen.has(r.date)) return false; seen.add(r.date); return true; })
+    .map(r => ({ ...r, _d: new Date(r.date + 'T12:00:00') }));
+
+  const upcoming = rawRaces.filter(r => r._d >= today).sort((a, b) => a._d - b._d);
+  const doneThisYear = rawRaces.filter(r => r._d < today && r._d >= yearStart).length;
+
+  // Forward window: today → last upcoming race + 2 weeks. Floored at 8 weeks so a
+  // single near race doesn't sit alone at the far edge; capped at 14 months so a
+  // very distant goal race can't over-compress the nearer ones.
+  const lastUp = upcoming.length ? upcoming[upcoming.length - 1]._d : addMonths(today, 3);
+  let winEnd = addDays(lastUp, 14);
+  const minEnd = addDays(today, 56);
+  if (winEnd < minEnd) winEnd = minEnd;
+  const capEnd = addMonths(today, 14);
+  if (winEnd > capEnd) winEnd = capEnd;
+
+  // Linear true-time mapping for the forward zone → [STUB, 1].
+  const xOf = (d) => {
+    const fr = (d.getTime() - today.getTime()) / ((winEnd.getTime() - today.getTime()) || 1);
+    return STUB + Math.max(0, Math.min(1, fr)) * (1 - STUB);
+  };
+
+  const todayX = STUB;
+  const jan1Next = new Date(now.getFullYear() + 1, 0, 1);
+  const boundaryX = (jan1Next > today && jan1Next <= winEnd) ? xOf(jan1Next) : null;
+
+  // Upcoming-only race markers, true-time. The soonest race is emphasized (isNext).
+  const raceMarkers = upcoming.map((r, i) => ({
+    name: shortRaceName(r.name), date: r._d,
+    pct: Math.max(0, Math.min(1, xOf(r._d))),
+    isPast: false, isNext: i === 0, distMi: r.distanceMi,
+  }));
+
+  // Month ticks at TRUE positions across the forward window (from next month on;
+  // today itself is the STUB boundary).
+  const monthTicks = [];
+  { let m = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    while (m <= winEnd) {
+      monthTicks.push({ x: xOf(m), label: 'JFMAMJJASOND'[m.getMonth()], cur: false });
+      m = addMonths(m, 1);
+    }
+  }
 
   const runPct = runMiGoal > 0 ? Math.min(runMiActual / runMiGoal, 1) : 0;
   const wkPct = workoutsGoal > 0 ? Math.min(workoutsActual / workoutsGoal, 1) : 0;
@@ -1477,6 +1514,7 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
   // Measure the actual bar width so date-tag collision packing is accurate.
   const barRef = useRef(null);
   const [barW, setBarW] = useState(320);
+  const [logOpen, setLogOpen] = useState(false);
   useEffect(() => {
     const el = barRef.current; if (!el) return;
     const measure = () => setBarW(el.clientWidth || 320);
@@ -1505,36 +1543,49 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
       <div style={{ position: 'absolute', top: 0, left: 14, right: 14, height: 1, background: `linear-gradient(90deg, transparent, rgba(212,139,78,0.15), transparent)` }} />
 
       {/* Year label */}
-      <div style={{ fontSize: 10, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>{now.getFullYear()} Timeline</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: T4, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Race Timeline</div>
 
-      {/* Month markers */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2, padding: '0 1px' }}>
-        {months.map((m, i) => (
-          <span key={i} style={{ fontSize: 7, color: i === now.getMonth() ? T1 : T4, fontWeight: i === now.getMonth() ? 700 : 400 }}>{m}</span>
+      {/* Month markers — positioned at true x() so spacing is truthful in the
+          linear future zone; the compressed stub naturally bunches its months. */}
+      <div style={{ position: 'relative', height: 9, marginBottom: 2 }}>
+        {monthTicks.map((m, i) => (
+          <span key={i} style={{ position: 'absolute', left: `${m.x * 100}%`, transform: 'translateX(-50%)', fontSize: 7, color: m.cur ? T1 : T4, fontWeight: m.cur ? 700 : 400, whiteSpace: 'nowrap' }}>{m.label}</span>
         ))}
       </div>
 
       {/* Timeline bar with markers */}
       <div ref={barRef} style={{ position: 'relative', height: 20, marginBottom: 4 }}>
+        {/* "Done" cap — tap to expand the year's completed-race log */}
+        <div
+          onClick={() => doneRaces.length > 0 && setLogOpen(o => !o)}
+          style={{ position: 'absolute', top: 2, left: 0, width: `${todayX * 100}%`, height: 16, borderRadius: 4, background: doneThisYear > 0 ? 'rgba(91,191,138,0.12)' : 'rgba(255,255,255,0.03)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, cursor: doneRaces.length > 0 ? 'pointer' : 'default' }}>
+          {doneThisYear > 0 && <span style={{ fontSize: 8, fontWeight: 700, color: C.green, whiteSpace: 'nowrap' }}>✓{doneThisYear}</span>}
+          {doneRaces.length > 0 && <span style={{ fontSize: 6, color: C.green, lineHeight: 1, transform: logOpen ? 'rotate(180deg)' : 'none' }}>▾</span>}
+        </div>
         {/* Track */}
         <div style={{ position: 'absolute', top: 8, left: 0, right: 0, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)' }} />
-        {/* Progress fill */}
-        <div style={{ position: 'absolute', top: 8, left: 0, width: `${yearProgress * 100}%`, height: 4, borderRadius: 2, background: `linear-gradient(90deg, ${C.blue}, ${C.cyan})`, opacity: 0.7 }} />
+        {/* Year-boundary tick — next year starts here */}
+        {boundaryX != null && (
+          <>
+            <div style={{ position: 'absolute', top: 0, left: `${boundaryX * 100}%`, width: 0, height: 20, borderLeft: `1px dashed ${T3}`, transform: 'translateX(-0.5px)' }} />
+            <div style={{ position: 'absolute', top: -9, left: `${boundaryX * 100}%`, transform: 'translateX(-50%)', fontSize: 7, fontWeight: 700, color: T3, whiteSpace: 'nowrap' }}>{now.getFullYear() + 1}</div>
+          </>
+        )}
         {/* Today marker */}
-        <div style={{ position: 'absolute', top: 4, left: `${yearProgress * 100}%`, width: 2, height: 12, borderRadius: 1, background: T1, transform: 'translateX(-1px)' }} />
+        <div style={{ position: 'absolute', top: 4, left: `${todayX * 100}%`, width: 2, height: 12, borderRadius: 1, background: T1, transform: 'translateX(-1px)' }} />
 
-        {/* Race marker dots */}
+        {/* Race marker dots — upcoming only; the soonest race is filled/emphasized */}
         {raceMarkers.map((r, i) => (
           <div key={i} style={{
             position: 'absolute', top: -1, left: `${r.pct * 100}%`, transform: 'translateX(-6px)',
           }}>
             <div style={{
               width: 14, height: 14, borderRadius: 6,
-              background: r.isPast ? 'rgba(91,191,138,0.15)' : 'rgba(212,139,78,0.15)',
-              border: `1.5px solid ${r.isPast ? C.green : C.orange}`,
+              background: r.isNext ? C.orange : 'rgba(212,139,78,0.15)',
+              border: `1.5px solid ${C.orange}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <span style={{ fontSize: 8 }}>{r.isPast ? '✓' : '⚑'}</span>
+              <span style={{ fontSize: 8, color: r.isNext ? '#1a1205' : C.orange }}>⚑</span>
             </div>
           </div>
         ))}
@@ -1547,20 +1598,38 @@ function AnnualTimeline({ races, runMiGoal, runMiActual, workoutsGoal, workoutsA
         <div style={{ position: 'relative', height: laneCount * LANE_H + 2, marginBottom: 8 }}>
           {raceMarkers.map((r, i) => {
             const lane = dateLanes[i];
-            const col = r.isPast ? C.green : C.orange;
+            const col = C.orange;
             const tx = r.pct < 0.06 ? '0' : r.pct > 0.94 ? '-100%' : '-50%';
             return (
               <div key={i}>
                 <div style={{ position: 'absolute', left: `${r.pct * 100}%`, top: 0, width: 1, height: lane * LANE_H + 4, background: col, opacity: 0.25, transform: 'translateX(-0.5px)' }} />
                 <div style={{
                   position: 'absolute', left: `${r.pct * 100}%`, top: lane * LANE_H, transform: `translateX(${tx})`,
-                  fontSize: 8, fontWeight: 600, color: col, whiteSpace: 'nowrap',
+                  fontSize: 8, fontWeight: r.isNext ? 800 : 600, color: col, whiteSpace: 'nowrap',
                 }}>
                   {r.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Year race log — expands from the ✓N done cap. Each row: name · date ·
+          actual distance · finish time (from the activity logged on race day). */}
+      {logOpen && doneRaces.length > 0 && (
+        <div style={{ marginBottom: 8, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8, padding: '6px 8px' }}>
+          <div style={{ fontSize: 8, fontWeight: 700, color: C.green, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>Races done · {now.getFullYear()}</div>
+          {doneRaces.map((r, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, padding: '3px 0', borderTop: i ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                <div style={{ fontSize: 7, color: T4 }}>{new Date(r.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+              </div>
+              <span style={{ fontSize: 9, color: T4, whiteSpace: 'nowrap' }}>{r.distMi ? `${r.distMi.toFixed(1)} mi` : ''}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.green, whiteSpace: 'nowrap', minWidth: 44, textAlign: 'right' }}>{r.time || '—'}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -2289,10 +2358,13 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
     const nPct = Math.round((dcyDaily.N || 0) * 100);
     const rPct = Math.round((dcyDaily.R || 0) * 100);
     const overloaded = F > 0 && G > 1.5 * F;
+    // Honest fuel: when there's no logged food (no-data) or the user doesn't
+    // track nutrition (not-tracked), show "—" rather than a fabricated %.
+    const fuelNoData = dcyDaily.fuelStatus === 'no-data' || dcyDaily.fuelStatus === 'not-tracked';
     return [
       { label: `Fitness ${Math.round(F)}`,   type: 'neutral' },
       { label: `Fatigue ${Math.round(G)}`,   type: overloaded ? 'warn' : 'neutral' },
-      { label: `Fuel ${nPct}%`,              type: nPct < 80 ? 'warn' : 'ok' },
+      { label: fuelNoData ? 'Fuel —' : `Fuel ${nPct}%`, type: fuelNoData ? 'neutral' : (nPct < 80 ? 'warn' : 'ok') },
       { label: `Recovery ${rPct}%`,          type: rPct < 80 ? 'warn' : 'ok' },
     ];
   }, [dcyDaily]);
@@ -2627,6 +2699,10 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         hrZones: result.hrZones || null,
         status: result.status || null,
         metricId: id,
+        // Sprint 2 · 2.3 — generic confidence passthrough: any metric whose compute
+        // returns `confidence: { level, text, title }` shows a small color-coded
+        // source/confidence chip on the tile (MetricTile affordance). Opt-in per metric.
+        confidence: result.confidence || null,
         // Phase 4o.autopromote.2 — passed through so the renderer can show
         // a hollow vs filled star and surface the score reasons on long-press.
         source: entry.source,
@@ -2677,7 +2753,27 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
 
   // ── Races from localStorage ──
   const allRaces = (() => {
-    try { return JSON.parse(localStorage.getItem('arnold:races') || '[]'); } catch { return []; }
+    try { return (storage.get('races') || []); } catch { return []; }
+  })();
+
+  // Completed-race log for the year (name · date · actual distance · finish time
+  // from the matching activity on race day) — feeds the Annual Timeline ✓N dropdown.
+  const doneRaceLog = (() => {
+    try {
+      const nowD = new Date(); const yStart = new Date(nowD.getFullYear(), 0, 1);
+      const acts = unifiedActivities || [];
+      const durSecs = (a) => Number(a?.durationSecs) || (Number(a?.durationMins) || 0) * 60;
+      const fmt = (s) => { if (!s || s <= 0) return null; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60); return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
+      return allRaces
+        .filter(r => { const d = new Date(r.date + 'T12:00:00'); return d < nowD && d >= yStart; })
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .map(r => {
+          const sameDay = acts.filter(a => (a.date || '').startsWith(r.date)).sort((a, b) => durSecs(b) - durSecs(a));
+          const best = sameDay[0];
+          const mi = best && Number(best.distanceMi) > 0 ? Number(best.distanceMi) : (Number(r.distanceMi) || 0);
+          return { name: r.name || 'Race', date: r.date, distMi: mi, time: best ? fmt(durSecs(best)) : null };
+        });
+    } catch { return []; }
   })();
 
   // ── Today's plan items ──
@@ -2933,6 +3029,8 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
 
       <Header greeting={greeting} profileName={profileName} />
 
+      <DataHealthBanner />
+
       <HeroRail
         score={mainScore}
         moonScore={moonScore}
@@ -2991,7 +3089,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
-            source={t.source} autoReasons={t.autoReasons}
+            source={t.source} autoReasons={t.autoReasons} confidence={t.confidence}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -3005,7 +3103,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
-            source={t.source} autoReasons={t.autoReasons}
+            source={t.source} autoReasons={t.autoReasons} confidence={t.confidence}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -3019,7 +3117,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
-            source={t.source} autoReasons={t.autoReasons}
+            source={t.source} autoReasons={t.autoReasons} confidence={t.confidence}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -3033,7 +3131,7 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
             label={t.label} todayVal={t.todayVal} todayUnit={t.todayUnit}
             trendText={t.trendText} trendColor={t.trendColor}
             avg30={t.avg30} gaugePct={t.gaugePct} color={t.tileColor} statusIcon={t.statusIcon} statusIconColor={t.statusIconColor}
-            source={t.source} autoReasons={t.autoReasons}
+            source={t.source} autoReasons={t.autoReasons} confidence={t.confidence}
             onTap={() => onOpenTab?.(t.tapTab)}
           />
         ))}
@@ -3051,10 +3149,14 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         weeklyTarget={G.weeklyRunDistanceTarget || 30}
       />
 
+      {/* Marathon Coach — live season verdict + targets + feasibility */}
+      <SeasonCoachCard />
+
       {/* Annual Timeline */}
       <div style={sectionHeader}>Annual Goals <div style={shLine} /></div>
       <AnnualTimeline
         races={allRaces}
+        doneRaces={doneRaceLog}
         runMiGoal={annualRunMiGoal}
         runMiActual={Math.round(totalMi || 0)}
         workoutsGoal={annualWorkoutsGoal}
@@ -3339,7 +3441,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
     if (name === 'Weekly Hours') return { value: (wk7.reduce((s, a) => s + (a.durationSecs || 0), 0) / 3600).toFixed(1), unit: 'hrs' };
     if (name === 'Strength Sessions') return { value: wk7Str.length, unit: 'this wk' };
     if (name === 'Avg Pace') { const p = wk7Runs.map(a => { if (!a.avgPaceRaw) return null; const [m, s] = a.avgPaceRaw.split(':').map(Number); return m * 60 + (s || 0); }).filter(Boolean); return p.length ? { value: `${Math.floor(p.reduce((s, v) => s + v, 0) / p.length / 60)}:${String(Math.round(p.reduce((s, v) => s + v, 0) / p.length % 60)).padStart(2, '0')}`, unit: '/mi' } : { value: '—', unit: '' }; }
-    if (name === 'Weight') return { value: currentTrueWeightLbs(recentWeight)?.toFixed(1) || '—', unit: 'lbs' };
+    if (name === 'Weight') { const w = currentTrueWeight(recentWeight); const ao = w ? weightAsOf(w.date) : ''; return { value: w ? w.lbs.toFixed(1) : '—', unit: ao ? `lbs \u00b7 ${ao}` : 'lbs' }; }
     if (name === 'Body Fat %') return { value: recentWeight[0]?.bodyFatPct?.toFixed(1) || '—', unit: '%' };
     if (name === 'Lean Mass') return { value: recentWeight[0]?.skeletalMuscleMassLbs?.toFixed(1) || '—', unit: 'lbs' };
     return { value: '—', unit: '' };
@@ -4202,6 +4304,12 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
     .filter(w => w.date && new Date(w.date + 'T12:00:00') >= d7cut && w.weightLbs)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const latestWeight = currentTrueWeightLbs(recentWeight);
+  // Staleness catch (DATA_INTEGRITY Layer 3): when the morning-fasted weight is
+  // NOT from today, show its date ("as of Jun 19") instead of a 7d trend — a
+  // stale fallback must read as stale, never as a fresh today number.
+  const trueW = currentTrueWeight(recentWeight);
+  const weightStaleSub = (trueW && trueW.date && trueW.date !== localDate())
+    ? `as of ${weightAsOf(trueW.date)}` : null;
   const weightDelta = wk7Weight.length >= 2
     ? +(wk7Weight[wk7Weight.length - 1].weightLbs - wk7Weight[0].weightLbs).toFixed(1)
     : null;
@@ -4224,7 +4332,7 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
     { label: 'Protein', value: fmt0(protein7.v), unit: 'g',    sub: subDays(protein7.n), goal: G.dailyProteinTarget,             color: C.pink },
     { label: 'Weight',  value: latestWeight != null ? fmt1(latestWeight) : '—',
       unit: 'lb',
-      sub: weightDelta != null ? `${weightDelta >= 0 ? '+' : ''}${weightDelta} in 7d` : '7d trend',
+      sub: weightStaleSub || (weightDelta != null ? `${weightDelta >= 0 ? '+' : ''}${weightDelta} in 7d` : '7d trend'),
       // Phase 4r.cockpit.4 — was reading from profile.targetWeight (wrong
       // store). targetWeight is in the goals store alongside targetRHR.
       // Bug meant Weight tile never got a goal value → no progress bar.
@@ -4280,6 +4388,11 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
           whiteSpace: 'nowrap', marginTop: 4,
         }}>{(()=>{const d=new Date();return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});})()}</span>
       </div>
+
+      {/* Data-integrity: surface a source outage HERE too, since the Health
+          Systems grid below reads nutrition-driven systems LOW during a Cronometer
+          gap. The banner only renders when something is actually stale/down. */}
+      <DataHealthBanner />
 
       {/* Phase 4r.intel.24 — MobileCalibrationStrip ("BEHIND +0.6 lb drift")
           removed. The same calibration signal is already encoded in the

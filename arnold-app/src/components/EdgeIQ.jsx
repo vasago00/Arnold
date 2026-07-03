@@ -30,6 +30,7 @@ import { getCurrentBodyComp, computeRMR } from "../core/energyBalance.js";
 import { getEffectiveTargets as getDerivedTargets } from "../core/goalModel.js";
 import { KRITile, InlineKRIStat } from "./KRITile.jsx";
 import { CoachComment } from "./CoachComment.jsx";
+import { DataHealthBanner } from "./DataHealthBanner.jsx";
 import { CockpitRail } from "./CockpitRail.jsx";
 import { MobileEdgeIQ } from "./MobileHome.jsx";
 
@@ -650,6 +651,7 @@ export function EdgeIQ({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mo
 
   return(
     <div style={S.sec}>
+      <DataHealthBanner showToast={showToast} />
       {/* Phase 4r.narrative.5.fix.5 — page-title headers removed across
           web tabs. The top nav already highlights the active tab, so a
           duplicate "◈ Trend" label inside the content was visual noise.

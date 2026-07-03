@@ -22,6 +22,7 @@ import { storage } from './storage.js';
 import { getGoals } from './goals.js';
 import { dailyTotals, nutritionBaseline, partialDayState, forecastTotals } from './nutrition.js';
 import { allActivities } from './dcyMath.js';
+import { scoreAdherence, combineDomain } from './metricResult.js';
 import {
   fitnessStock, fatigueStock, dailyStress,
   meanSkipNull, clip, geomMeanWeighted, metFor,
@@ -346,8 +347,14 @@ export function tdeeWithTier(dateStr) {
   const activeKcal = Number(log?.activeCalories) || 0;
   const steps = Number(log?.steps) || 0;
 
-  // Tier 1 — Device daily total wins when present.
-  if (totalKcal > 0) {
+  // Tier 1 — Device daily total wins, but ONLY when it's physiologically plausible.
+  // A full-day device total ALWAYS includes 24h of BMR, so a value BELOW resting (base)
+  // means the summary is partial/stale — today still in progress, or the watch hadn't
+  // pushed the full day when the worker pulled it (we've seen 689 kcal at 7pm while
+  // Garmin itself showed ~1800). Distrust a sub-resting total and fall through to the
+  // steps/model tiers rather than reporting a TDEE below RMR. This is the BMR floor the
+  // doc above promised but Tier 1 wasn't actually enforcing. (Phase 4r.energy.9)
+  if (totalKcal >= base) {
     return {
       value: Math.round(totalKcal + tef),
       tier: 1,
@@ -443,59 +450,54 @@ function effectiveIntake(dateStr) {
   };
 }
 
-export function fuelAdequacy(dateStr) {
+export function fuelResult(dateStr) {
   const eff = effectiveIntake(dateStr);
   const { intake: totals, date, baseline } = eff;
   const intakeCal = Number(totals.calories) || 0;
   const intakeProtein = Number(totals.protein) || 0;
-  // dailyTotals.water is in mL — convert to L for goal comparison.
   const intakeWaterL = (Number(totals.water) || 0) / 1000;
-
-  // Phase 4r.dcy.2 — distinguish "user doesn't track nutrition" from
-  // "user tracks but hasn't eaten yet today". Phase 4r.dcy.1 fixed the
-  // *projection* side (no more forecasting today's intake from past
-  // patterns) but left this short-circuit, which returned N=1 every
-  // morning before breakfast and hid the very signal the user asked
-  // for: "the DCY needs to tell me to eat."
-  //
-  //   • Tracker (≥3 days of logged history) + 0 intake today → N = 0
-  //     so DCY drags down until food is logged.
-  //   • Non-tracker (no baseline) + 0 intake → N = 1 neutral, so the
-  //     score isn't penalized for someone who's not using the feature.
-  // Phase 4r.dcy.3 — the tracker-vs-non-tracker check must NOT depend on
-  // partial-day state. `baseline` is only populated on in-progress days; on a
-  // SETTLED day (after bedtime, or any historical date) it's null, which made
-  // every empty *tracked* day look like a non-tracker and return N=1
-  // ("assume normal") instead of N=0. Symptom: a day with zero nutrition
-  // logged (e.g. Cronometer down) still scored "fully fuelled / Strongly
-  // Absorbing." Resolve history directly, and only when actually needed.
-  let _histResolved;
-  const hasBaselineHistory = () => {
-    if (_histResolved === undefined) _histResolved = baseline || nutritionBaseline(date);
-    return (_histResolved?.daysWithData || 0) >= 3;
-  };
-  const isEmptyDay = intakeCal === 0 && intakeProtein === 0 && intakeWaterL === 0;
-  if (isEmptyDay) return hasBaselineHistory() ? 0 : 1;
-
+  let _hist;
+  const isTracker = (() => {
+    if (_hist === undefined) _hist = baseline || nutritionBaseline(date);
+    if ((_hist?.daysWithData || 0) >= 3) return true;
+    try {
+      if ((storage.get('cronometer') || []).length > 0) return true;
+      if ((storage.get('nutritionLog') || []).length > 0) return true;
+      if (storage.get('cronometerAuth')) return true;
+    } catch {}
+    return false;
+  })();
   const goals = getGoals();
-  const proteinGoal = Number(goals.dailyProteinTarget) || 0;
-  const waterGoalL = Number(goals.dailyWaterTarget) || 0;
-  const totalTdee = tdee(date) || 0;
-
-  const nCal = totalTdee > 0 ? clip(intakeCal / totalTdee, 0, 1.1) : null;
-  const nPro = proteinGoal > 0 ? clip(intakeProtein / proteinGoal, 0, 1.1) : null;
-  const nHyd = waterGoalL > 0 ? clip(intakeWaterL / waterGoalL, 0, 1.1) : null;
-
-  const N = geomMeanWeighted([
-    { w: N_WEIGHT_CAL,     v: nCal },
-    { w: N_WEIGHT_PROTEIN, v: nPro },
-    { w: N_WEIGHT_HYDRO,   v: nHyd },
-  ]);
-  // Same tracker-vs-non-tracker fallback when geomMean has no usable
-  // inputs (e.g. user only logged water with no calorie target set).
-  if (N == null) return hasBaselineHistory() ? 0 : 1;
-  return +N.toFixed(3);
+  return fuelScore({
+    intakeCal, intakeProtein, intakeWaterL, isTracker,
+    tdee: tdee(date) || 0,
+    proteinGoal: Number(goals.dailyProteinTarget) || 0,
+    waterGoalL: Number(goals.dailyWaterTarget) || 0,
+  });
 }
+
+// PURE fuel scorer (no IO) — golden-testable. "No food logged" = no
+// calories/protein; hydration alone must NOT score fuel (the 92% bug). A genuine
+// 0 (food logged) scores LOW, never dropped. N stays numeric for the DCY
+// formula; status drives the "\u2014" display.
+export function fuelScore({ intakeCal = 0, intakeProtein = 0, intakeWaterL = 0, isTracker = false, tdee: tdeeV = 0, proteinGoal = 0, waterGoalL = 0 } = {}) {
+  const foodLogged = intakeCal > 0 || intakeProtein > 0;
+  const cal = scoreAdherence(foodLogged ? intakeCal     : null, tdeeV,       { expected: isTracker, cap: 1.1 });
+  const pro = scoreAdherence(foodLogged ? intakeProtein : null, proteinGoal, { expected: isTracker, cap: 1.1 });
+  const hyd = scoreAdherence(foodLogged ? intakeWaterL  : null, waterGoalL,  { expected: isTracker, cap: 1.1 });
+  const dom = combineDomain([
+    { w: N_WEIGHT_CAL,     r: cal },
+    { w: N_WEIGHT_PROTEIN, r: pro },
+    { w: N_WEIGHT_HYDRO,   r: hyd },
+  ]);
+  if (dom.value != null) return { N: +dom.value.toFixed(3), status: dom.status };
+  return { N: isTracker ? 0 : 1, status: isTracker ? 'no-data' : 'not-tracked' };
+}
+
+// Back-compat numeric N for the DCY formula.
+export function fuelAdequacy(dateStr) { return fuelResult(dateStr).N; }
+// Display status so the Fuel pill renders "\u2014" on no-data, not a fabricated 0%/92%.
+export function fuelAdequacyStatus(dateStr) { return fuelResult(dateStr).status; }
 
 // Diagnostic — full breakdown for the dcy() sources block and the
 // Limiting-Factor line. Never mutates; safe to call multiple times.
@@ -567,6 +569,7 @@ export function fuelBreakdown(dateStr) {
     forecastElapsed: +(eff.forecastState.fractionElapsed || 0).toFixed(3),
     baselineDays:    eff.baseline?.daysWithData || 0,
     N: fuelAdequacy(date),
+    status: fuelAdequacyStatus(date),
   };
 }
 
@@ -828,7 +831,8 @@ export function dcy(dateStr) {
   const F = fitnessStock(date);
   const G = fatigueStock(date);
   const stressToday = dailyStress(date);
-  const N = fuelAdequacy(date);
+  const fr = fuelResult(date);
+  const N = fr.N;
   const R = recoveryCoef(date);
   const rBreak = recoveryBreakdown(date);
   const fBreak = fuelBreakdown(date);
@@ -852,6 +856,7 @@ export function dcy(dateStr) {
     dcy: value,
     state: stateFor(value),
     F, G, N, R,
+    fuelStatus: fr.status,
     contributions: {
       // What the F·N − G·(1.1−R) formula evaluates to in each term.
       fitness: +(F * N).toFixed(2),

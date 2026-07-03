@@ -4,6 +4,7 @@
 // load, not "no rest"); and a week UNDER the mileage goal can never be "heavy".
 // Pure (no storage/DOM) so it's node-testable and can feed any surface.
 import { daySessions, dayRunMiles } from './planner.js';
+import { racePhase } from './seasonPlan.js';   // ONE source of the race periodization phase (coach unification)
 
 const QUALITY  = new Set(['tempo', 'intervals', 'hiit', 'race']); // high intensity
 const LONG     = new Set(['long_run']);                            // key long run
@@ -139,8 +140,11 @@ export function analyzeSeason(weeks, opts = {}) {
   const dOut = r => Math.round((new Date(r.date + 'T12:00:00') - new Date(today + 'T12:00:00')) / 86400000);
   const withDays = races.map(r => ({ ...r, daysOut: dOut(r) }));
   const next = withDays[0] || null;
-  // A race within ~10 days is TAPER — you can't (and shouldn't) build base for it.
-  const imminent = next && next.daysOut <= 10 ? next : null;
+  // Taper detection now comes from the ONE shared source (seasonPlan.racePhase) —
+  // only a marathon mini-taper/race-week triggers it; tune-ups (10K/4M/half) never do.
+  const rp = racePhase({ races, today });
+  const imminent = (rp.phase === 'mini-taper' || rp.phase === 'race-week') && rp.nextMarathon
+    ? { name: rp.nextMarathon.name, daysOut: rp.daysToMarathon } : null;
   // "Build volume" only makes sense toward a race far enough out to train for.
   const goalRace = withDays.find(r => r.daysOut > 21) || null;
   const wks = d => Math.max(1, Math.round(d / 7));

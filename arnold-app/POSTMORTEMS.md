@@ -26,6 +26,77 @@ the most important field — it's how the doc earns its keep.
 
 ---
 
+## 2026-07-02 — Sim-caught: mobility/recovery days could be "greenlit"; + Monte-Carlo harness added
+
+**Symptom**
+Not user-reported — caught by the new simulation harness on its first run: 5 of 10,000 synthetic athlete-days violated the invariant "a recovery-type session is never reshaped." `adaptSession` was returning `action: 'greenlit'` for mobility days.
+
+**Root cause**
+`adaptPlan.adaptSession` only short-circuited to `hold` for `planned.type === 'rest'`. A **mobility/recovery** session (type/intensityClass 'mobility'/'recovery', not 'rest') fell through: not in the HARD set so never eased, but on a high-readiness/no-debt/full-battery day it reached the green-light branch → "cleared for the full session" on a recovery day. Harmless-ish, but wrong: you don't clear a rest day.
+
+**Fix**
+Introduced a `NIL = {rest, mobility, recovery}` set (mirrors fuelForWork's recovery concept) and short-circuit to `hold` when either `type` or `intensityClass` is NIL. Re-ran the sim: 0/10,000 violations. Existing `adaptPlan.test.js` (10 tests) unaffected (none asserted mobility behavior).
+
+**What would have prevented it** — and what this session added
+This IS the prevention: a **Monte-Carlo property-test harness** (`src/core/sim/`): a seeded PRNG (reproducible), a synthetic-athlete generator (documented physiology distributions), autocorrelated random-walk day-streams, and an invariants file split into HARD contracts (zero-tolerance) + STATISTICAL properties (explicit, rationale'd margins). `runSim` drives the REAL engine (`adaptSession`, `prescribeFuel`, `composeCalorieTarget` — imported, not mirrored) over 10k cases; `sim.test.js` runs it in `npm test`. It validates the engine across the *space* of athletes, not just Emil's one trajectory — and it's the de-risking that has to precede multi-user. Calibration matters: the first run also caught a *bad margin of our own* (greenlit floor set at 2%, actual ~0.15%) — margins are now measured across 3 seeds and documented. Also extracted `composeCalorieTarget` (calorieTargetMath.js, +unit tests) so the real calorie formula is directly testable (no drift).
+
+## 2026-07-02 — "What Arnold has learned" footer frozen; a whole test suite wasn't running
+
+**Symptom**
+The LearnedHero card (race fitness / sweat / maintenance footer + learned sensitivities) didn't update when new data synced in — it showed mount-time values until a full app restart. Separately: adding tests to `tests/*.mjs` never changed the `npm test` count (stuck at 139, then 153).
+
+**Root cause**
+Two independent issues, same theme (things silently not refreshing).
+(1) `LearnedHero.jsx` computed `facts`/`energy` in `useMemo(..., [])` — empty deps, so it ran once at mount and never re-derived on a storage change (Cloud Sync pull, fresh Garmin/Cronometer sync). Every other live card uses `useStorageVersion()` in its deps; LearnedHero didn't. (2) `vitest.config.js` `include` is `src/**/*.test.js(x)` and `exclude` is `tests/**` — so the entire `tests/` directory (24 Node `node:test` files: hub/coaching/energy suites) was invisible to `npm test`. Those only ran via manual `node --test`. New tests written there never counted.
+
+**Fix**
+(1) `LearnedHero` now calls `useStorageVersion()` and includes it in both `useMemo` dep arrays → re-derives on every storage change. Added `src/components/LearnedHero.test.jsx` (jsdom) that mounts the card, fires a storage change, and asserts the footer updates. (2) Ported the 22 pure-logic `tests/*.mjs` suites into co-located vitest files under `src/tests/*.test.js` (converted both runner styles — `node:test` default import and the homemade `const test = …` helper — to `import { test } from 'vitest'`, kept `node:assert`, rewrote `../src/` → `../`). `classifyActivityForHyrox.test.mjs` stays as the `test:legacy` fs-fixture script. Net: the hub/coaching/energy suites now run under `npm test`.
+
+**What would have prevented it**
+(1) A lint/grep guard for `useMemo(() => …storage/derivation…, [])` in components that render live data — the repo already had the `useStorageVersion` pattern; LearnedHero just missed it. The scan (grep for derived-data components lacking a reactivity signal) is the reusable check. (2) One test runner, one glob. A split where a whole directory of tests isn't in the default `npm test` means "green" was never the whole story — consolidating on vitest removes the blind spot.
+
+## 2026-07-02 — Cronometer data logged on mobile never reached the web
+
+**Symptom**
+Emil uploaded Cronometer data on mobile; the web version never showed it. Web diagnostics: cloud sync paired, pulled 0 min ago, no pull error, but `todayFullDayEntry: null` and `nutritionLog` version frozen at the previous day. A **force pull** (bypasses etag + LWW, overwrites local from the server blob) STILL showed null — proving the server blob itself lacked today's entry. Manual "Push now" on mobile + "Pull now" on web didn't fix it either.
+
+**Root cause**
+The nutrition write path (`upsertFullDayEntry` in `cronometer-client.js`, used by both the live pull and the manual CSV import) writes to `nutritionLog` and relies solely on cloud-sync's **debounced** auto-push — `onStorageChange` → `bumpVersion` → `schedulePush` with a 1s timer. If the app loses foreground before that 1s timer fires (typical right after a one-shot mobile import), the push never happens. And the relay stores the **whole blob last-push-wins** (per-key LWW is applied only on *pull*, in `applySnapshot`), so with mobile's fresh data never uploaded, the server only ever held web's stale-nutrition snapshot — which web then re-pulled and even re-pushed (pull-first) on each load, keeping the loop stale. Net: the data was written locally on mobile but never published.
+
+**Fix** (cronometer sync-publish, 2026-07-02)
+Added `flushCloudPush()` (dynamic import of `cloud-sync.push()`, best-effort, no-ops when unpaired) and called it right after the write: in `upsertFullDayEntry` when the day's macros actually changed (skips idle 5-min live-pulls that only bump `createdAt`), and unconditionally at the end of `importCronometerCsvText` (a manual import is an explicit action + the recovery path). `push()`'s in-flight guard coalesces a burst (multi-day import) into ~one network push. A one-shot nutrition write now publishes immediately instead of waiting on a debounce that a backgrounding app can eat.
+
+**What would have prevented it**
+Any storage write that must cross devices needs a *guaranteed* publish, not a best-effort debounce that a lifecycle transition can drop. Two durable guards: (1) flush pending cloud pushes on `visibilitychange`/`pagehide` (publish-before-background), and (2) a sync self-check/invariant — "a local key whose version is newer than the last successful push" should surface as an unsynced-changes warning, the sync-layer analogue of the `__arnoldDiag` data checks. The force-pull-still-null test was the key move: it isolated the failure to the push side (server blob) vs the pull/merge side in one step.
+
+## 2026-07-01 — Calorie target stuck at RMR (1880) on a training day; eat-back "did nothing"
+
+**Symptom**
+After a logged strength session, the daily calorie target didn't move — it read 1880 (Emil's RMR) exactly, same as a rest day. Emil: "since I lost calories in training I should see a higher caloric intake than 1880 to replenish — what actually failed?" `__arnoldDiag()` showed `derived: 1880`, `components.eatBack: 163` — so the eat-back WAS computed but wasn't reaching the target.
+
+**Root cause**
+`src/core/goalModel.js` `deriveDailyCalorieTarget`: order of operations. It computed `derived = round(baseTarget + recoveryAdj + eatBack + flatBonus)` FIRST, then applied the RMR floor AFTER (`if (derived < floor) derived = floor`). On a day where the deficit base (tdeeBase 1834 − deficit 500 = 1334) sits below RMR, `1334 + 163 = 1497` is still < floor, so the floor overwrote the whole number — swallowing the 163 eat-back. The floor itself ("never eat below RMR") is intentional and correct; the bug was that replenishment was folded in *below* the floor instead of stacked *on top* of it.
+
+**Fix** (goalModel dup-fix 2026-07-01)
+Reordered: floor the MAINTENANCE part first, then add training/race calories on top — `derived = round(max(baseTarget + recoveryAdj, floor) + eatBack + flatBonus)`. A training day is now RMR + replenishment (≈2043 for the reported case) and always exceeds the rest-day floor when there's a burn.
+
+**What would have prevented it**
+A property test on the composition: "for any inputs with eatBack > 0, derived must be strictly greater than the same inputs with eatBack = 0" — would have caught the floor swallowing replenishment. The composition is worth extracting into a pure, unit-tested helper (it currently reads storage, so it's awkward to test directly). The `workout-no-eatback` diagnostics invariant only fires when eatBack === 0, so it didn't catch a *computed-but-swallowed* eat-back; a "floored AND eatBack > 0" tripwire would cover the regression path.
+
+## 2026-07-01 — Duplicate activity row inflates calories / load (raw count 2, one real session)
+
+**Symptom**
+`__arnoldDiag()` flagged a `duplicate-activity` error: `rawCount: 2, duplicateCount: 1, duplicates: ['strength|3197|291']` for a single strength session. The dedup-on-read layer kept the unified kcal correct (`unifiedCount: 1, activityKcal: 291`), but raw-reading surfaces (e.g. a readiness card showing "582") doubled it.
+
+**Root cause**
+`src/core/garmin-activities-client.js` `syncRecentActivities`: `existing` is snapshotted ONCE before the download loop (line ~495) and the up-front dedup filters candidates against that stale snapshot. But each iteration pushes to a freshly-read `all` and persists. So a session arriving twice within a single sync run — Garmin list overlap/pagination, or a manual FIT plus a synced copy of the same workout — slips past the up-front filter and gets written twice. Dedup was read-side only; the write wasn't idempotent.
+
+**Fix** (dup-write fix 2026-07-01)
+Added a write-side idempotent guard right before the push: skip if the same Garmin `activityId` is already present, OR an exact signature match exists (`date|canonType|duration|calories`). `forceReplace` bypasses it. The signature is a new shared helper `activitySignature` in `dcyMath.js`, used by BOTH the write guard and the diagnostics checker (`detectDuplicateActivities`) so "what we prevent" and "what we flag" can never drift. Date is part of the key, so real morning+evening sessions and same-shaped sessions on different days are preserved.
+
+**What would have prevented it**
+Idempotent writes as a rule for any sync that reads-modify-writes a collection in a loop — dedup against the *live* collection at push time, not a pre-loop snapshot. The read-side dedup masked the write bug for a long time; the diagnostics self-check layer (added the same day) is what finally surfaced it. Sharing ONE signature between the detector and the preventer is the durable guard against the two drifting.
+
 ## 2026-06-16 — Fuel buttons "grossly oversized"; many rounds of inline-height edits did nothing
 
 **Symptom**
@@ -586,3 +657,32 @@ fix fast; a future polish pass can collapse the two.
 **Root cause:** `fuelAdequacy()` distinguishes tracker (≥3 days history → empty day = N 0) from non-tracker (no history → empty day = N 1, don't penalize). But the history check read `eff.baseline`, which `effectiveIntake()` only populates when `state.isPartial` (an in-progress day). After bedtime or on any historical/settled day, `partialDayState` returns `isPartial:false` → `baseline = null` → `hasBaselineHistory` false → every empty *tracked* day fell through to the non-tracker `N = 1` "assume normal" branch.
 **Fix (Phase 4r.dcy.3):** Resolve the tracker history independent of partial-day state — lazily call `nutritionBaseline(date)` when the empty-day / N==null branches actually need it, instead of relying on the partial-only `baseline`. Empty tracked day now correctly returns N=0 (DCY goes depleting, FUEL N shows 0%). `nutritionBaseline` only counts days with ≥ minKcal within the 14-day lookback, so a non-tracker still gets N=1.
 **Caveat:** if Cronometer stays down >14 days the baseline empties and the user reads as a non-tracker again (N=1). Acceptable for now.
+
+## 2026-06-18 — Shipped a drawer card that overflowed off-screen (quality miss)
+**Symptom:** Two EXPECTED cards laid out `gridTemplateColumns: '1fr 1fr'` inside the ~340px web day-drawer rail pushed the 2nd card off the right edge of the entire app. Also added a stray lowercase "✕ race" pill wedged between chips.
+**Cause:** Grid tracks default to `min-width: auto`, so `1fr 1fr` won't shrink below each child's min-content; `PredictedBandsCard` is not designed for ~160px, so the row overflowed the fixed-width rail (which doesn't clip) and spilled past the viewport. I had even flagged the cramping risk but shipped it anyway.
+**Fix:** Stack the EXPECTED cards (`'1fr'`) in the rail. Race remove moved inline onto the race line (small ✕), not a separate pill.
+**Rule (DESIGN_DECISIONS):** Do NOT place 2+ content cards side-by-side inside the fixed ~340px web drawer rail — stack them. If side-by-side is truly wanted, widen the rail first. Never ship a layout whose overflow I couldn't visually verify when reasoning says it's tight — default to the safe (stacked) layout.
+
+## 2026-06-19 — Fuel showed 92% / "Strongly Absorbing" with ZERO food logged (hallucination)
+**Symptom:** Start screen at 9pm, no food logged (Cronometer outage), yet Fuel pill = 92% and DCY = "+41 Strongly Absorbing." Implied data the user never entered.
+**Root cause:** `geomMeanWeighted` filters `p.v > 0`, so it DROPS components that are exactly 0 (treats "ate 0 cal" as *missing*, not *zero fuel*). With food=0 but water logged (~2.75 L / 3 L = 0.92), N was computed from **hydration alone** → 0.92. The earlier empty-day guard (Phase 4r.dcy.3) didn't fire because it required water===0 too.
+**Fixes (Phase 4r.dcy.4):**
+1. `isEmptyDay = intakeCal === 0 && intakeProtein === 0` (dropped the `&& intakeWaterL === 0` — hydration is NOT fuel and must not mask an empty food day).
+2. Made `hasBaselineHistory()` robust to sync outages: also true if `storage.get('cronometer')`/`nutritionLog` has any history or `cronometerAuth` is configured — so a tracker whose recent lookback is empty (Cronometer down) still scores empty days N=0, never the non-tracker N=1.
+**Result:** empty food day for a tracker → N=0 → DCY negative → "Depleting", Fuel 0%. No more invented fuelling.
+**Lesson:** geometric-mean helpers that drop zeros silently turn "real zero" into "no data" — never feed a hard-zero, must-count input (calories) through a `v>0`-filtering mean without guarding the zero case first.
+
+### 2026-06-19 (addendum) — Same hydration-masks-empty bug in the EdgeIQ/Daily "Nutrition" domain
+The Start "Fuel %" (dcy.js) and the EdgeIQ "Nutrition" pillar are SEPARATE scorers and both had the bug. `trainingStress.js` computeDailyScore builds the nutrition domain from protein/calories/hydration factors, each guarded `if (x > 0)` — so with food=0 + water logged, only hydration is scored → domain ≈ 92. Fix: `hasNutData = nutProtein > 0 || nutCalories > 0` (water alone no longer constitutes a nutrition score → domain reads "no data" / "—" instead of a fake 92).
+**Meta-lesson:** the "no food but X% fuel" hallucination lived in THREE places (dcy fuelAdequacy via geomMean v>0 drop, dcy isEmptyDay requiring water=0, and trainingStress nutrition-domain `if(x>0)` skips). When a metric must count a hard zero, audit EVERY scorer that surfaces it — they don't share code.
+
+## 2026-06-21 — Body weight showed yesterday's value; a 10:01 morning weigh-in was rejected
+**Symptom:** Arnold showed 184.2 lb; Garmin (and the actual morning weigh-in) was 186.8 lb. `window.weightDebug()` showed today's only reading — 2026-06-21 @ **10:01**, 186.8 — flagged `fasted: FALSE`, so the selector fell back to June 20's 06:03 reading (184.2).
+**Root cause:** `bodyWeight.js` `MORNING_CUTOFF_HOUR = 10` with `time < 10:00`. A 10:01 reading misses by **one minute** → excluded as non-fasted → trend falls back to the previous fasted day and presents it as current.
+**Fix:** cutoff 10:00 → **noon (12:00)**. A genuine morning weigh-in (06:00–noon) now counts; the EARLIEST-per-day rule still selects the most-fasted reading on multi-reading days; 13:00+ intraday/evening readings remain excluded.
+**Durable catch (proposed, ties to DATA_INTEGRITY Layer 3):** when the displayed body weight is NOT from today (fallback to an earlier fasted day), label it **"as of <date>"** instead of presenting a stale value as current — the same staleness-honesty the data-health banner uses. The weight selectors should return the value's DATE so the UI can show it.
+**Note:** arbitrary hard time-thresholds are fragile; consider making the morning window profile-configurable later.
+
+### 2026-06-21 (Phase 2) — fuel/nutrition scorers migrated onto metricResult
+trainingStress nutrition domain + dcy fuelAdequacy now route the zero-vs-missing decision through `core/metricResult.js` (`scoreAdherence`/`combineDomain`). Structural guarantees (verified by node tests, not just patches): water-only/no-food → no-data (never a fabricated %); a logged-but-zero macro is SCORED LOW, not dropped (fixes the partial-day geomMean `v>0` skip); non-tracker → not-tracked. `dcy.N` stays numeric (formula needs it) with a sibling `fuelStatus`; Start Fuel pill + DcyDetails render "—" on no-data.

@@ -33,8 +33,8 @@ export function SessionRPE({ fd, dateStr, onSaved }) {
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fb7185" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
           <path d="M3 12h4l2 5 4-12 2 7h6" />
         </svg>
-        <span style={labelS}>Perceived</span>
-        <span style={valueS}>{rpe != null ? `RPE ${rpe}` : 'Log'}</span>
+        <span style={labelS}>RPE</span>
+        <span style={valueS}>{rpe != null ? rpe : 'Log'}</span>
       </div>
       {open && (
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>

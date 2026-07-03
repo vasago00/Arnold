@@ -326,12 +326,24 @@ function writeMeta(patch) {
 // EVERY platform (works on web too, unlike Health Connect which is Android-only).
 function upsertDailyEnergyRow(date, summary) {
   if (!summary || !date) return;
-  const steps = Number(summary.steps) || 0;
-  const totalCalories = Number(summary.totalCalories) || 0;
-  const activeCalories = Number(summary.activeCalories) || 0;
+  let steps = Number(summary.steps) || 0;
+  let totalCalories = Number(summary.totalCalories) || 0;
+  let activeCalories = Number(summary.activeCalories) || 0;
   if (steps < 100 && totalCalories === 0) return;            // don't write an empty day
   const all = storage.get('hcDailyEnergy') || [];
   const idx = all.findIndex(r => r?.date === date);
+  // TODAY is still accumulating — steps / active / total only ever go UP through the
+  // day. Garmin's API can briefly return a STALE-LOW partial on a re-pull (we logged
+  // 689 kcal at 7pm while Garmin itself showed ~1800). Without a guard, "Garmin wins"
+  // lets that partial REGRESS a fuller earlier value and the gauge bounces down. So for
+  // the CURRENT date, keep the max of existing vs incoming. Past dates overwrite, since
+  // Garmin's finalized value is authoritative once the day is closed. (Phase 4r.energy.9)
+  if (idx >= 0 && date === localDate()) {
+    const prev = all[idx];
+    steps          = Math.max(steps,          Number(prev.steps) || 0);
+    totalCalories  = Math.max(totalCalories,  Number(prev.totalCalories) || 0);
+    activeCalories = Math.max(activeCalories, Number(prev.activeCalories) || 0);
+  }
   const row = { date, steps, activeCalories, totalCalories, wellnessSource: 'garmin', wellnessUpdatedAt: new Date().toISOString() };
   if (idx >= 0) all[idx] = { ...all[idx], ...row };          // Garmin wins for this date
   else all.push(row);
