@@ -17,7 +17,7 @@ import { ymd } from '../core/time.js';
 // (cut → deficit is GOOD/green, surplus is BAD/red; bulk → opposite;
 // maintain → close-to-zero is good). Read goal direction from
 // getOutcomeGoal.
-import { getOutcomeGoal } from '../core/goalModel.js';
+import { getOutcomeGoal, getEffectiveTargets } from '../core/goalModel.js';
 
 function formatKcal(n) {
   if (!Number.isFinite(n)) return '—';
@@ -82,9 +82,18 @@ export function EnergyTimingChart({ dateStr, totals, target: targetProp }) {
       if (!ds) continue;
       let dayTarget = 0, dayIntake = 0;
       try {
-        const t = computeTDEE(ds) || {};
-        const eatBack = (t.activityKcal || 0) * 0.75;
-        dayTarget = (t.rmr || 0) + (t.neatKcal || 0) + (t.tefKcal || 0) + eatBack;
+        // Use the SAME effective daily target the header's Surplus/Deficit hero
+        // uses, so a day the header calls a surplus reads as a surplus here too.
+        // (Was: a separate rmr+neat+tef+0.75·activity formula that ran higher, so
+        // real surplus days computed as deficits and the whole strip painted green
+        // under a cut goal. 2026-07-02, Emil.)
+        const eff = getEffectiveTargets({ date: ds })?.dailyCalories?.effective;
+        if (Number.isFinite(eff) && eff > 0) {
+          dayTarget = eff;
+        } else {
+          const t = computeTDEE(ds) || {};
+          dayTarget = (t.rmr || 0) + (t.neatKcal || 0) + (t.tefKcal || 0) + (t.activityKcal || 0) * 0.75;
+        }
       } catch {}
       try { dayIntake = nutDailyTotals(ds)?.calories || 0; } catch {}
       days.push({

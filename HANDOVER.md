@@ -10,6 +10,35 @@
 ---
 
 ## Last updated (newest)
+2026-07-03 (ROUND 88) — **Sprint 3 opened (Coach with a plan). 3.0 coach-unification finished + 3.1a goal model in; 317 green.**
+Strategy reaffirmed (Emil): personal-first, clean seams, productize/add-users once it's a sustainable base. Sprint 3 north
+star = Coach-as-planner (goal model) → live plan-level re-solve (ROADMAP_NEXT §B). Sequence: 3.0 finish one-coach-voice →
+3.1 goal model → 3.2 coach-as-planner → 3.3 live re-solve → 3.4 sim-extends-to-plans.
+This session (all Emil build+`npm test` GREEN, 302→317):
+(1) **Fuel-tab trend color fix** — the 7-day Energy-Balance trend painted all-green because it computed each day's target
+with its OWN formula (rmr+neat+tef+0.75·activity) that ran higher than the header's; now uses the SAME
+`getEffectiveTargets` effective target, so surplus days show (red for a cut) and match the header's Surplus/Deficit hero.
+(`EnergyTimingChart.jsx`).
+(2) **3.0 coach unification — DONE.** Audit finding: Sprint-1 Slice 1 already unified the LIVE phase (`seasonPlan.racePhase`
+is the one source; `resolveSeasonPlan`/`planLoad.analyzeSeason`/`coachSignals.computeRaceHorizon` all delegate). Only the
+DEAD `phaseForWeeksOut` (old weeks-out rule, never called) + stale vocab/doc remained → removed. Added
+`coachUnification.test.js` — a delegation LOCK: 6 scenarios + a tune-up guard assert all three surfaces AGREE on the taper
+call vs `racePhase` (asserts agreement, not thresholds). Verdict-unification (surfaces present resolveSeasonPlan verbatim)
+intentionally NOT done — phase drift is closed+locked; per-surface messaging is presentation; the flagship reads
+resolveSeasonPlan as the authoritative verdict.
+(3) **3.1a goal model — IN.** `core/goalResolve.js`: pure `buildGoalModel(inputs)` assembles the scattered goal stores into
+one structured model — race (A-race+daysOut, tune-ups, phase, feasibility) / training (volume goals, ongoing) / body
+(weight target + cut|bulk|maintain direction + loss-rate on a deadline) / nutrition (cals/macros + EA floor 30) + meta +
+empty `conflicts[]`. Clean seams (inputs, no Emil constants → sim/any-athlete feed it the same). `resolveGoalModel()` thin
+storage wrapper. `goalResolve.test.js` +8 tests.
+**Decisions locked for 3.1 (Emil):** conflicts are USER-decided — the coach SURFACES the conflict + trade-offs BOTH ways and
+the user picks; it never silently resolves (conflicts are first-class objects carrying both trade-off directions + a stored
+resolution, null=unresolved→keep surfacing). 3.1 scope = read-model **+ expand inputs** (explicit A-race designation +
+per-goal deadlines → storage + GoalsHub editor).
+**NEXT: 3.1b** — conflict detection (generalize cut-vs-taper) + trade-off-both-ways + stored user-resolution plumbing. Then
+3.1c (expand inputs + editor), 3.1d (sim → synthetic goals → model invariants). **Uncommitted at ROUND 88:** trend fix, 3.0,
+3.1a (verified 317 green; commit pending). ──
+
 2026-07-02 (ROUND 87) — **Sprint 2 CODE COMPLETE + foundation hardening: carry-queue audit clean, Monte-Carlo sim harness added.**
 Strategy set (Emil): stay a PERSONAL tool, build with clean seams, productize/add users only once it's a sustainable base.
 Next-phase north star (ROADMAP_NEXT §B): Coach-as-planner (goal model) → live plan-level re-solve (the flagship).

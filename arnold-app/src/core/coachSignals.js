@@ -1921,49 +1921,30 @@ export function computeGoalProgress(weightArr, outcomeGoal, opts = {}) {
 }
 
 // ─── 20. Race horizon + training phase ─────────────────────────────────────
-// Phase 4r.narrative.2.4. Reads the user's upcoming races + outcome goal,
-// identifies the soonest future race, and derives the current training
-// phase from weeks-out. The phase is what biases everything in race-prep
-// coaching — what to push, what to back off, when to taper, when nutrition
-// shifts from cut → maintenance, etc.
+// Reads the user's upcoming races + outcome goal and returns the current
+// training phase + race-prep context for the coach's race-horizon narrative.
 //
-// Phase boundaries (weeks-until-race):
-//
-//   ≥ 12     base       — aerobic engine, volume up, intensity moderate
-//   6 to 12  build      — race-specific intensity, sustain volume
-//   3 to 6   peak       — race-pace work, sharpening, volume tapers
-//   1 to 3   taper      — volume drops sharply, intensity stays, sleep up
-//   0 to 1   race-week  — minimal load, fuel + sleep are the leverage
-//   −2 to 0  recovery   — post-race rebuild
-//   ∞       general    — no upcoming race, no phase bias
+// The PHASE itself is NOT computed here — it comes from the ONE shared source,
+// `seasonPlan.racePhase` (marathon-anchored, continuous Option-A model), so the
+// periodization rule lives in exactly one place (coach unification). This
+// surface only MAPS racePhase's vocab to its own labels and layers the
+// cut-vs-race conflict flag on top. (The old weeks-out phase table + its
+// `phaseForWeeksOut` helper were retired 2026-07-03, Sprint 3.0 — they had
+// already been superseded by the racePhase delegation and were dead code.)
 //
 // Cut–race interaction:
-//   A calorie deficit competes directly with race performance during the
-//   final 3-4 weeks. The signal exposes `phaseConflict: 'cut-vs-taper'`
-//   when the user is mid-cut AND we're inside the taper window. The
-//   macro narrative uses this to flag "wind down the cut before race week."
+//   A calorie deficit competes with race performance in the final weeks. The
+//   signal exposes `phaseConflict: 'cut-vs-taper'` when the user is mid-cut AND
+//   inside the taper/race-week window, so the macro narrative can flag
+//   "wind down the cut before race week."
 
 const PHASE_LABEL = {
-  base:       'Base',
   build:      'Build',
-  peak:       'Peak',
   taper:      'Taper',
   'race-week': 'Race week',
   recovery:   'Post-race recovery',
   general:    'General training',
 };
-
-function phaseForWeeksOut(weeksOut) {
-  if (weeksOut < 0) {
-    if (weeksOut >= -2) return 'recovery';
-    return 'general';
-  }
-  if (weeksOut < 1)  return 'race-week';
-  if (weeksOut < 3)  return 'taper';
-  if (weeksOut < 6)  return 'peak';
-  if (weeksOut < 12) return 'build';
-  return 'base';
-}
 
 export function computeRaceHorizon(outcomeGoal, opts = {}) {
   const today = opts.today || localDate();
