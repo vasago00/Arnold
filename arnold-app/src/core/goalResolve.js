@@ -104,12 +104,83 @@ export function buildGoalModel(i = {}) {
   };
 
   const horizonDays = aRace?.daysOut ?? body.weight.daysOut ?? null;
+  const conflicts = detectConflicts({ race, body, training, nutrition }, i.resolutions || {});
 
   return {
-    race, training, body, nutrition,
-    conflicts: [],   // populated in 3.1b (detection + trade-offs + user resolution)
+    race, training, body, nutrition, conflicts,
     meta: { asOf: today, horizonDays, dimensions: ['race', 'training', 'body', 'nutrition'] },
   };
+}
+
+/**
+ * detectConflicts — pure. Given the built dimensions, surface goals that are in
+ * tension, each with the trade-off spelled out BOTH ways. The coach NEVER picks a
+ * winner: `resolution` is the user's stored choice (an option key) or null, and a
+ * null resolution means "still surface this" (the user hasn't decided yet).
+ *
+ * @param dims { race, body, training, nutrition }
+ * @param resolutions { [conflictId]: optionKey }
+ * @returns Conflict[]  { id, between, severity, summary, options:[{key,label,action,cost}], resolution, resolved }
+ */
+export function detectConflicts({ race, body, training, nutrition } = {}, resolutions = {}) {
+  const out = [];
+  const push = (c) => out.push({ ...c, resolution: resolutions[c.id] || null, resolved: !!resolutions[c.id] });
+
+  const aRace = race?.aRace || null;
+  const daysOut = aRace?.daysOut ?? null;
+  const weeksOut = daysOut != null ? Math.max(0.1, daysOut / 7) : null;
+  const dir = body?.weight?.direction;
+  const rate = num(body?.weight?.rateLbPerWk);
+  const milesTarget = num(training?.weeklyMiles?.target) || 0;
+
+  // 1. Cut vs race — a calorie deficit competes with race performance + recovery
+  //    in the final block (sharpest in the taper). Mountjoy/ACSM: low EA impairs
+  //    performance; a deficit blunts glycogen resynthesis + power.
+  if (dir === 'cut' && aRace && daysOut != null && daysOut <= 28) {
+    const inTaper = race.phase === 'mini-taper' || race.phase === 'race-week';
+    const deferLb = (rate != null && weeksOut != null) ? Math.round(rate * weeksOut * 10) / 10 : null;
+    push({
+      id: 'cut-vs-race', between: ['body', 'race'], severity: inTaper ? 'high' : 'medium',
+      summary: `You're cutting with ${aRace.name} ${daysOut}d out — a calorie deficit competes with race performance and recovery.`,
+      options: [
+        { key: 'race', label: 'Protect the race', action: 'Shift to maintenance calories through race day.',
+          cost: deferLb != null ? `~${deferLb} lb of planned loss deferred until after the race.` : 'Weight-loss progress pauses until after the race.' },
+        { key: 'body', label: 'Keep the cut', action: 'Hold the deficit.',
+          cost: 'Flatter race legs and slower recovery — the deficit blunts glycogen and power.' },
+      ],
+    });
+  }
+
+  // 2. Aggressive cut vs training volume — a steep deficit undercuts adaptation at
+  //    high volume and raises injury/illness risk.
+  if (dir === 'cut' && rate != null && rate > 1.5 && milesTarget >= 30) {
+    push({
+      id: 'cut-vs-training', between: ['body', 'training'], severity: rate > 2 ? 'high' : 'medium',
+      summary: `A ${rate} lb/wk cut is steep for a ${milesTarget}-mi training week — under-fuelling undercuts adaptation.`,
+      options: [
+        { key: 'training', label: 'Protect training', action: 'Slow the cut to ≤1 lb/wk.',
+          cost: 'Your target-weight date slips out by a few weeks.' },
+        { key: 'body', label: 'Keep the fast cut', action: 'Hold the steep deficit.',
+          cost: 'Session quality and recovery suffer; higher injury/illness risk at this volume.' },
+      ],
+    });
+  }
+
+  // 3. Race goal time vs current fitness — the target and the projection disagree.
+  if ((race?.feasibility === 'unrealistic' || race?.feasibility === 'aggressive') && aRace?.goalTimeSecs) {
+    push({
+      id: 'goaltime-vs-fitness', between: ['race', 'training'], severity: race.feasibility === 'unrealistic' ? 'high' : 'medium',
+      summary: `Your ${aRace.name} goal time looks ${race.feasibility} versus current fitness.`,
+      options: [
+        { key: 'goal', label: 'Keep the goal time', action: 'Hold the target and train toward it.',
+          cost: race.feasibility === 'unrealistic' ? 'A big fitness jump is needed in the window — likely to fall short.' : 'A stretch — it needs everything to go right.' },
+        { key: 'adjust', label: 'Adjust the goal', action: 'Set a goal time in line with your current projection.',
+          cost: 'A less ambitious target, but one you can pace and hit.' },
+      ],
+    });
+  }
+
+  return out;
 }
 
 /**
@@ -141,7 +212,25 @@ export async function resolveGoalModel(opts = {}) {
     longestRecentMi: num(opts.longestRecentMi) || 0,
     predictedMarathonSecs: num(opts.predictedMarathonSecs),
     targetWeightDate: goals.targetWeightDate || null,
+    resolutions: getGoalResolutions(),
   });
+}
+
+// ── User conflict resolutions (the user decides; the coach only surfaces) ──────
+const RESOLUTIONS_KEY = 'arnold:goalResolutions';
+
+export function getGoalResolutions() {
+  try { return JSON.parse(localStorage.getItem(RESOLUTIONS_KEY) || '{}') || {}; }
+  catch { return {}; }
+}
+
+/** Record the user's choice for a conflict (optionKey), or clear it (null). */
+export function setGoalResolution(conflictId, optionKey) {
+  if (!conflictId) return;
+  const all = getGoalResolutions();
+  if (optionKey == null) delete all[conflictId];
+  else all[conflictId] = optionKey;
+  try { localStorage.setItem(RESOLUTIONS_KEY, JSON.stringify(all)); } catch {}
 }
 
 export default buildGoalModel;

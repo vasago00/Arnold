@@ -80,3 +80,60 @@ describe('buildGoalModel', () => {
     expect(m.nutrition.calories.target).toBe(null);
   });
 });
+
+describe('buildGoalModel — conflicts (3.1b, user-decided)', () => {
+  const cutNearRace = {
+    today: TODAY, goals: { ...baseGoals, targetWeight: 170 },
+    races: [{ name: 'City Marathon', date: shift(14), distanceMi: 26.2 }],
+    aRaceDate: shift(14), currentWeightLbs: 180, targetWeightDate: shift(90),
+  };
+
+  it('flags cut-vs-race with both trade-off directions, unresolved by default', () => {
+    const m = buildGoalModel(cutNearRace);
+    const c = m.conflicts.find(x => x.id === 'cut-vs-race');
+    expect(c).toBeTruthy();
+    expect(c.between).toEqual(['body', 'race']);
+    expect(c.options.map(o => o.key)).toEqual(['race', 'body']);   // both directions offered
+    expect(c.options.every(o => o.action && o.cost)).toBe(true);
+    expect(c.resolution).toBe(null);
+    expect(c.resolved).toBe(false);
+  });
+
+  it('stamps the user resolution when provided (coach reflects, never picks)', () => {
+    const m = buildGoalModel({ ...cutNearRace, resolutions: { 'cut-vs-race': 'race' } });
+    const c = m.conflicts.find(x => x.id === 'cut-vs-race');
+    expect(c.resolution).toBe('race');
+    expect(c.resolved).toBe(true);
+  });
+
+  it('no cut-vs-race when maintaining, or when the race is far out', () => {
+    const maintain = buildGoalModel({ ...cutNearRace, currentWeightLbs: 170 });   // 170 → 170
+    expect(maintain.conflicts.some(c => c.id === 'cut-vs-race')).toBe(false);
+    const farRace = buildGoalModel({ ...cutNearRace, races: [{ name: 'M', date: shift(60), distanceMi: 26.2 }], aRaceDate: shift(60) });
+    expect(farRace.conflicts.some(c => c.id === 'cut-vs-race')).toBe(false);
+  });
+
+  it('flags an aggressive cut against a high training volume', () => {
+    const m = buildGoalModel({
+      today: TODAY, goals: { ...baseGoals, targetWeight: 175, weeklyRunDistanceTarget: 40 },
+      races: [], currentWeightLbs: 190, targetWeightDate: shift(42),   // 15 lb / 6 wk = 2.5 lb/wk
+    });
+    const c = m.conflicts.find(x => x.id === 'cut-vs-training');
+    expect(c).toBeTruthy();
+    expect(c.severity).toBe('high');   // rate > 2
+    expect(c.between).toEqual(['body', 'training']);
+  });
+
+  it('flags goal-time vs current fitness when the projection is off', () => {
+    const m = buildGoalModel({
+      today: TODAY, goals: baseGoals,
+      races: [{ name: 'Berlin', date: shift(90), distanceMi: 26.2, goalTimeSecs: 3 * 3600 }],
+      aRaceDate: shift(90), predictedMarathonSecs: 15000,   // ~4:10 vs a 3:00 goal → unrealistic
+      weeklyMiles: 20, longestRecentMi: 10,
+    });
+    expect(['unrealistic', 'aggressive']).toContain(m.race.feasibility);
+    const c = m.conflicts.find(x => x.id === 'goaltime-vs-fitness');
+    expect(c).toBeTruthy();
+    expect(c.options.map(o => o.key)).toEqual(['goal', 'adjust']);
+  });
+});

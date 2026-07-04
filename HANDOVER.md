@@ -35,9 +35,10 @@ storage wrapper. `goalResolve.test.js` +8 tests.
 the user picks; it never silently resolves (conflicts are first-class objects carrying both trade-off directions + a stored
 resolution, null=unresolved→keep surfacing). 3.1 scope = read-model **+ expand inputs** (explicit A-race designation +
 per-goal deadlines → storage + GoalsHub editor).
-**NEXT: 3.1b** — conflict detection (generalize cut-vs-taper) + trade-off-both-ways + stored user-resolution plumbing. Then
-3.1c (expand inputs + editor), 3.1d (sim → synthetic goals → model invariants). **Uncommitted at ROUND 88:** trend fix, 3.0,
-3.1a (verified 317 green; commit pending). ──
+**3.1b DONE** (`detectConflicts` + `get/setGoalResolution`, 322 green). **NEXT: 3.1c** — expand inputs (explicit A-race
+designation + per-goal deadlines → storage) + GoalsHub UI to surface a conflict's two trade-offs and let the user tap a
+choice (calls `setGoalResolution`). Then 3.1d (sim → synthetic goals → model invariants). **Uncommitted:** trend fix, 3.0,
+3.1a, 3.1b + doc updates (verified 322 green; commit pending). ──
 
 2026-07-02 (ROUND 87) — **Sprint 2 CODE COMPLETE + foundation hardening: carry-queue audit clean, Monte-Carlo sim harness added.**
 Strategy set (Emil): stay a PERSONAL tool, build with clean seams, productize/add users only once it's a sustainable base.
