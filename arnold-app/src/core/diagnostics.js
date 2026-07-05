@@ -18,6 +18,7 @@ import { dailyActivityCalories } from './energyBalance.js';
 import { deriveDailyCalorieTarget, getEffectiveTargets } from './goalModel.js';
 import { dailyTotals } from './nutrition.js';
 import { getSyncStatus } from './cloud-sync.js';
+import { buildHubFromStorage } from './hub/hubDebug.js';
 
 // PURE: exact-duplicate detection. Two rows on the same day with the same canonical type,
 // duration, AND calories are the SAME physical session written twice (a real morning+evening
@@ -112,6 +113,22 @@ export function runDiagnostics(dateStr) {
     };
   } catch (e) { sync = { error: String(e?.message || e) }; }
   out.sync = sync;
+
+  // ── Learning view ──
+  // What the hub has learned + HOW MANY observations back it. This answers "did my
+  // latest weigh-in / run get incorporated?" — watch the counts, not the values: a
+  // single day shouldn't move a rate, but it should bump the observation count `n`
+  // and nudge confidence. (Sweat n grows per post-run weigh-in; response effects'
+  // confidence grows as more efforts accumulate.)
+  let learning = null;
+  try {
+    const facts = buildHubFromStorage()?.facts || {};
+    learning = {
+      sweat: facts.sweat ? { rateLhr: facts.sweat.rateLhr, n: facts.sweat.n ?? null, confidence: facts.sweat.confidence ?? null } : null,
+      responses: (facts.responses || []).map(r => ({ factor: r.factor, perUnitPct: r.perUnitPct, confidence: r.confidence })),
+    };
+  } catch (e) { learning = { error: String(e?.message || e) }; }
+  out.learning = learning;
 
   out.checks = buildChecks({
     duplicateCount: dups.length, activityKcal, eatBack,

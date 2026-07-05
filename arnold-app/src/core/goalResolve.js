@@ -14,7 +14,6 @@
 import { racePhase, marathonFeasibility } from './seasonPlan.js';
 
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; };
-const MARATHON_MIN_MI = 24;   // matches seasonPlan.isMarathon threshold
 const EA_FLOOR_KCAL_PER_KG = 30;   // RED-S guardrail (Mountjoy IOC 2018) — a cited population constant, not user-specific
 
 function daysBetween(fromISO, toISO) {
@@ -45,10 +44,19 @@ export function buildGoalModel(i = {}) {
   const races = Array.isArray(i.races) ? i.races : [];
 
   // ── RACE dimension ──
-  const rp = racePhase({ races, today, aRaceDate: i.aRaceDate || null });
-  const isMarathon = (r) => (num(r?.distanceMi) || 0) >= MARATHON_MIN_MI;
-  const aRaceRaw = i.aRaceDate
-    ? races.find(r => r.date === i.aRaceDate) || null
+  // A-race resolution (explicit designation): an explicit aRaceDate wins; else the
+  // soonest FUTURE race the user marked priority 'A' (the race editor already sets
+  // A/B/C); else fall back to the next marathon. The whole periodization (taper via
+  // racePhase) anchors on this one race, so only the A-race tapers — tune-ups run
+  // through (matches 2.1's A-race model).
+  const futureRaces = races
+    .filter(r => r?.date && r.date >= today)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const aRaceByPriority = futureRaces.find(r => String(r.priority || '').toUpperCase() === 'A') || null;
+  const effectiveARaceDate = i.aRaceDate || aRaceByPriority?.date || null;
+  const rp = racePhase({ races, today, aRaceDate: effectiveARaceDate });
+  const aRaceRaw = effectiveARaceDate
+    ? (races.find(r => r.date === effectiveARaceDate) || null)
     : rp.nextMarathon;
   const aRace = aRaceRaw ? {
     name: aRaceRaw.name || 'Goal race',
@@ -57,8 +65,8 @@ export function buildGoalModel(i = {}) {
     goalTimeSecs: num(aRaceRaw.goalTimeSecs),
     daysOut: daysBetween(today, aRaceRaw.date),
   } : null;
-  const tuneUps = races
-    .filter(r => r?.date >= today && (!aRace || r.date !== aRace.date) && !isMarathon(r))
+  const tuneUps = futureRaces
+    .filter(r => !aRace || r.date !== aRace.date)
     .map(r => ({ name: r.name || 'Race', date: r.date, distanceMi: num(r.distanceMi), daysOut: daysBetween(today, r.date) }));
   const feasibility = marathonFeasibility({
     predictedMarathonSecs: num(i.predictedMarathonSecs),
@@ -204,7 +212,7 @@ export async function resolveGoalModel(opts = {}) {
 
   return buildGoalModel({
     today, goals, races,
-    aRaceDate: opts.aRaceDate || goals.aRaceDate || null,
+    aRaceDate: opts.aRaceDate || null,   // else buildGoalModel infers the soonest priority-'A' race
     currentWeightLbs: comp?.weightLbs ?? null,
     currentBodyFatPct: comp?.bodyFatPct ?? null,
     effectiveCalories,

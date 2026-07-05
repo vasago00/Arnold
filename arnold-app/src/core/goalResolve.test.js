@@ -40,6 +40,16 @@ describe('buildGoalModel', () => {
     expect(m.meta.horizonDays).toBe(70);       // anchored to the A-race
   });
 
+  it('designates the priority-A race as the A-race (no explicit date needed)', () => {
+    const races = [
+      { name: 'Goal Half', date: shift(30), distanceMi: 13.1, priority: 'A' },
+      { name: 'Tune 10K',  date: shift(10), distanceMi: 6.2,  priority: 'B' },
+    ];
+    const m = buildGoalModel({ today: TODAY, goals: baseGoals, races });
+    expect(m.race.aRace.name).toBe('Goal Half');   // priority A wins even though the 10K is sooner
+    expect(m.race.tuneUps.map(t => t.name)).toContain('Tune 10K');
+  });
+
   it('no races → aRace null, feasibility no-goal', () => {
     const m = buildGoalModel({ today: TODAY, goals: baseGoals, races: [] });
     expect(m.race.aRace).toBe(null);

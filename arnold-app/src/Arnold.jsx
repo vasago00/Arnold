@@ -1388,7 +1388,7 @@ export default function App(){
         window.__allActs=_allActs;
         // Self-check / provenance — window.__arnoldDiag(date?) → derived-number provenance
         // (calorie target components, intake, activity dedup) + invariant warnings.
-        window.__arnoldDiag=(d)=>{ try { const r = runDiagnostics(d); console.log('%c[arnold-diag]', 'color:#5eead4;font-weight:700', r.date); if (r.checks?.length) r.checks.forEach(c => console.log(`  ${c.level==='error'?'⛔':'⚠️'} [${c.id}] ${c.message}`)); else console.log('  ✓ no issues detected'); console.log('  calorieTarget:', r.calorieTarget); console.log('  activity:', r.activity); console.log('  intake:', r.intake); console.log('  sync:', r.sync); return r; } catch(e){ console.warn('[arnold-diag] failed', e); } };
+        window.__arnoldDiag=(d)=>{ try { const r = runDiagnostics(d); console.log('%c[arnold-diag]', 'color:#5eead4;font-weight:700', r.date); if (r.checks?.length) r.checks.forEach(c => console.log(`  ${c.level==='error'?'⛔':'⚠️'} [${c.id}] ${c.message}`)); else console.log('  ✓ no issues detected'); console.log('  calorieTarget:', r.calorieTarget); console.log('  activity:', r.activity); console.log('  intake:', r.intake); console.log('  sync:', r.sync); console.log('  learning:', r.learning); return r; } catch(e){ console.warn('[arnold-diag] failed', e); } };
         // Manual labs migration — bypasses the auto-condition entirely.
         // Reads vitals-v4 directly via window.storage and writes to the
         // storage layer (which triggers cloud-sync push). Use when the

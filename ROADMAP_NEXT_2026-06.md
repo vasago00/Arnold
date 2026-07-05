@@ -123,6 +123,20 @@ goals to recalibrate *against*) and the transparency-hero direction in `UX_UI_RE
 
 ---
 
+### 5. Longitudinal / seasonal learning — "this happened last year" (Emil, 2026-07-03)
+**Goal:** the coach learns from year-over-year patterns, not just aggregate sensitivities.
+Origin: Emil's hot-day run forced a walk at 5.3mi — and the SAME thing happened on the
+same date last year during the lead-up to his 3 marathons. The aggregate heat effect IS
+learned (hub response model → "+~0.7%/°C cardiac cost" in LearnedHero; expectedRanges
+widens bands on hot/humid days; backfill seeds models from history). What's MISSING is the
+*calendar-/race-aligned retrospective*: align this year's block to last year's marathon
+builds, surface recurring patterns (July heat breakdowns, taper responses), and feed the
+coach a concrete lesson + adjustment ("hot spell like last year → drop pace X, pre-hydrate").
+**Direction:** a build-retrospective analyzer (align blocks by race-relative week or
+calendar date; diff volume/heat/outcomes; emit lessons the coach voice can speak). Pairs
+with the goal model (3.1) + flagship re-solve (3.3), and is naturally sim-testable. Candidate
+for after the flagship, or a parallel analysis slice.
+
 ## Sequencing note
 Items **1 → 2** are a tight, low-risk pair (data plumbing) and a good warm-up. Items **3 → 4** are
 the high-value, higher-design coach evolution and should be scoped deliberately (goal model first,

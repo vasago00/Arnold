@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:legacy": "node tests/classifyActivityForHyrox.test.mjs"
+    "test:legacy": "node tests/classifyActivityForHyrox.test.mjs",
+    "sim": "node scripts/simHeavy.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",

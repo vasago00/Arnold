@@ -35,10 +35,18 @@ storage wrapper. `goalResolve.test.js` +8 tests.
 the user picks; it never silently resolves (conflicts are first-class objects carrying both trade-off directions + a stored
 resolution, null=unresolved→keep surfacing). 3.1 scope = read-model **+ expand inputs** (explicit A-race designation +
 per-goal deadlines → storage + GoalsHub editor).
-**3.1b DONE** (`detectConflicts` + `get/setGoalResolution`, 322 green). **NEXT: 3.1c** — expand inputs (explicit A-race
-designation + per-goal deadlines → storage) + GoalsHub UI to surface a conflict's two trade-offs and let the user tap a
-choice (calls `setGoalResolution`). Then 3.1d (sim → synthetic goals → model invariants). **Uncommitted:** trend fix, 3.0,
-3.1a, 3.1b + doc updates (verified 322 green; commit pending). ──
+**3.1 COMPLETE (2026-07-03):** 3.1a assembler + 3.1b conflicts + **3.1c** (A-race designation reuses the existing race
+A/B/C priority — no new UI; `GoalConflicts.jsx` conflict card mounted in GoalsHub, top of tab: shows both trade-off
+directions + tap-to-choose → `setGoalResolution`) + **3.1d** (`goalModelSim.test.js`: 5,000 synthetic goal-sets, model
+always well-formed). Deferred (minor): training-goal deadline *editor fields* (model treats training as ongoing = correct).
+**Observability:** `__arnoldDiag()` now prints a `learning` block — `learning.sweat.{rateLhr,n,confidence}` + learned
+responses. To confirm a data point landed, watch **`n`** (not the rate): a post-run weigh-in with fluid bumps sweat `n`+1.
+PREREQ: the weigh-in must be captured as post-run (PostRunWeigh / timestamped) to feed sweat, else it's excluded as
+non-fasted (or, if untimed, wrongly counted as a morning weight).
+**NEXT: 3.2 — Coach as planner** (coach generates/owns the plan from the goal model, on `planGenerator`/`seasonPlan`), then
+3.3 live re-solve, 3.4 sim-extends-to-plans. Backlog added: ROADMAP §5 longitudinal/seasonal "this happened last year"
+retrospective. **Uncommitted:** everything since ee850a9 — trend fix, 3.0, 3.1a–d, GoalConflicts, sim heavy-runner, docs,
+`__arnoldDiag` learning block (verify build + `npm test` ~324, then commit). ──
 
 2026-07-02 (ROUND 87) — **Sprint 2 CODE COMPLETE + foundation hardening: carry-queue audit clean, Monte-Carlo sim harness added.**
 Strategy set (Emil): stay a PERSONAL tool, build with clean seams, productize/add users only once it's a sustainable base.

@@ -44,6 +44,7 @@ import {
   clearOverride,
 } from "../core/goalModel.js";
 import { getGoals, setGoals } from "../core/goals.js";
+import { GoalConflicts } from "./GoalConflicts.jsx";   // Sprint 3.1c — surfaces goal-model conflicts + trade-offs
 import { predictRaceFinish } from "../core/derive/tileMetrics.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 
@@ -1497,6 +1498,8 @@ export function GoalsHub({ showToast }) {
     <PlanHeroRail goalsV2={goalsV2}/>
     {/* Cut Mode badge — shows the classifier's verdict + manual override */}
     <CutModeBadge showToast={showToast}/>
+    {/* Sprint 3.1c — goals in tension surfaced with both trade-offs; user decides */}
+    <GoalConflicts style={{ marginTop: 10 }}/>
     <div style={{ background: 'var(--bg-surface)', border: '0.5px solid var(--border-default)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       {/* Collapsible header */}
       <div
