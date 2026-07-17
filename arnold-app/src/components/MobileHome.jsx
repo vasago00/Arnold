@@ -77,9 +77,10 @@ import { resolveAllStartTiles } from "../core/derive/autoPromote.js";
 import { buildHubFromStorage } from "../core/hub/hubDebug.js";
 import { hubScoreTile } from "../core/hub/promote.js";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
-import SeasonCoachCard from "./SeasonCoachCard.jsx";
+import MobilePlanTicker from "./MobilePlanTicker.jsx";
 import { MetricTile } from "./ui/MetricTile.jsx";
 import { CoachComment } from "./CoachComment.jsx";
+import { TrainingProfileCard } from "./RecipePath.jsx";
 import { CoachSigil } from "./CoachSigil.jsx";
 // Phase 4r.hygiene.1 — InsightsPanel import removed. Its last consumer in
 // this file (MobileEdgeIQ) was removed in 4r.intel.24 when the legacy
@@ -362,11 +363,15 @@ export const NAV_ITEMS = [
   // request). The nav now reads: training-focused Start/EdgeIQ/Play,
   // then Fuel/Calendar for planning, then Core for body data.
   { id: 'calendar', label: 'Calendar', tab: 'races' },
-  { id: 'core',     label: 'Core',     tab: 'clinical' },
+  // Phase 3.2 (2026-07-05) — Core (clinical/labs) demoted to the More menu.
+  // Its daily signals (HRV/RHR/weight) already live on EdgeIQ's signal cockpit;
+  // the unique value (lab history) is occasional reference, so it fits the
+  // consult-on-click pattern. Mirrors the earlier Labs→More demotion. Frees a
+  // primary slot (held in reserve for the living-plan/coach if it earns one).
   { id: 'more',     label: 'More' },
 ];
 
-const SWIPE_ORDER = ['start', 'edgeiq', 'play', 'fuel', 'calendar', 'core'];
+const SWIPE_ORDER = ['start', 'edgeiq', 'play', 'fuel', 'calendar'];
 
 // ─── Swipe navigation hook ──────────────────────────────────────────────────
 // Tracks the touchstart coordinates in useRef so they survive React
@@ -637,7 +642,7 @@ export const TAB_TO_NAV_ID = {
   weekly:           'edgeiq',
   activity:         'play',
   nutrition_mobile: 'fuel',
-  clinical:         'core',
+  clinical:         'more',   // Core demoted to More (2026-07-05) — highlights More, like Labs
   // Phase 4r.nav.2 — Calendar promoted to primary nav, Labs demoted
   // to overflow. 'races' is the internal tab id (legacy) for the
   // Calendar tab content; the nav label says Calendar.
@@ -1883,6 +1888,7 @@ function MoreMenu({ onClose, onMenuTap }) {
   // Underlying data still drives DCY/intake/etc. — this only hides the
   // edit UI on mobile.
   const items = [
+    { id: 'core', label: 'Core', desc: 'Labs, HRV, RHR, body composition, RMR, VO₂max', Icon: Icon.Pulse, color: C.red, tint: 'rgba(239,68,68,0.10)' },
     { id: 'sync', label: 'Cloud Sync', desc: 'Pair devices, Health Connect, Cronometer', Icon: Icon.Cloud, color: C.blue, tint: 'rgba(107,171,223,0.10)' },
   ];
 
@@ -2925,7 +2931,8 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   const swipeHandlers = {};
 
   const handleMoreMenuTap = (id) => {
-    if (id === 'goals') onOpenTab?.('goals');
+    if (id === 'core') onOpenTab?.('clinical');
+    else if (id === 'goals') onOpenTab?.('goals');
     else if (id === 'races') onOpenTab?.('races');
     else if (id === 'stack') onOpenTab?.('supplements');
     else if (id === 'sync') onOpenTab?.('settings');
@@ -3077,6 +3084,12 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         return <CoachingHeroCard />;
       })()}
 
+      {/* ── Plan WEEK STRIP (Task #40) — sits UNDER the daily Pre/Post tile:
+          each day drawn in the plan's workout language (run silhouettes,
+          strength chevron, rest crescent). Bridges "today" into the rest of the
+          screen; taps through to the full plan on the Calendar. ── */}
+      <MobilePlanTicker onOpenTab={onOpenTab} />
+
       {/* Phase 4r.intel.12-fix6 — InsightsPanel moved off Start screen and
           onto EdgeIQ where the rest of the analytical surface lives. Play
           stays focused on "what to do now" instead of pattern callouts. */}
@@ -3149,8 +3162,9 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
         weeklyTarget={G.weeklyRunDistanceTarget || 30}
       />
 
-      {/* Marathon Coach — live season verdict + targets + feasibility */}
-      <SeasonCoachCard />
+      {/* Marathon Coach retired from Start (Task #41) — its verdict/targets/why/
+          feasibility now live inside the EdgeIQ Training Profile. The living plan's
+          glanceable read moved to the slim ticker below the hero rail (Task #40). */}
 
       {/* Annual Timeline */}
       <div style={sectionHeader}>Annual Goals <div style={shLine} /></div>
@@ -4413,6 +4427,13 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
           the recovery/readiness read (HRV/sleep/RHR), distinct from Start
           which shows "the one thing." surface='edgeiq_mobile'. */}
       <CoachComment surface="edgeiq_mobile" />
+
+      {/* ── TRAINING PROFILE (Sprint 3.2b) — the recipe→finish path. Compact
+          strip that expands in place to the full wired SVG. Renders nothing
+          until there's a projectable finish or recipe ingredients, so cold
+          starts stay quiet. The weak link here is what the living plan (3.2c)
+          will prioritize. ── */}
+      <TrainingProfileCard />
 
       {/* ── HEALTH SYSTEMS ── */}
       <div style={sectionHeader}>Health Systems

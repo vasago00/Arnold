@@ -126,8 +126,28 @@ const SESSION_RUN_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals',
 // Normalize a day record (legacy OR new) → array of real sessions (rest excluded).
 export function daySessions(day) {
   if (!day) return [];
-  if (Array.isArray(day.sessions)) return day.sessions.filter(s => s && s.type && s.type !== 'rest');
-  return (day.type && day.type !== 'rest') ? [{ ...day }] : [];
+  const raw = Array.isArray(day.sessions)
+    ? day.sessions.filter(s => s && s.type && s.type !== 'rest')
+    : ((day.type && day.type !== 'rest') ? [{ ...day }] : []);
+  // Two-a-day expansion. The plan generator marks a run+strength DOUBLE as a
+  // `strength: true` FLAG on the run session — NOT a second session — so multi-session
+  // readers (the calendar's planned secondary rail, workout counts, the day drawer)
+  // saw only ONE session and the strength half never posted on the calendar. Surface
+  // it as an explicit Strength session here, in the one normalizer everything reads.
+  // Idempotent + non-mutating: skip if a standalone strength session already exists (so
+  // it can't stack after a makeDay round-trip), return COPIES (never touch the stored
+  // day), and drop the flag on the run copy so strength is represented exactly once.
+  if (raw.some(s => s.type === 'strength')) return raw;
+  const out = [];
+  for (const s of raw) {
+    if (s.strength && s.type !== 'strength') {
+      out.push({ ...s, strength: false });
+      out.push({ type: 'strength', label: 'Strength', slot: 'PM', strength: true });
+    } else {
+      out.push(s);
+    }
+  }
+  return out;
 }
 
 // A planned rest day = no real sessions.

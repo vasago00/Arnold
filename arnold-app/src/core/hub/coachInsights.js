@@ -66,7 +66,11 @@ export function fitnessInsight(facts, race) {
   }
   const p = facts.predictions.find(x => x.dist === target);
   if (!p || !(p.secs > 0)) return null;
-  const conf = Math.round(facts.fitnessConfidence * 100);
+  // Confidence GATES this insight (FIT_MIN_CONF above) — we stay silent when we
+  // aren't reasonably sure — but we no longer SPEAK the raw percentage. A bare
+  // "(confidence 61%)" reads clinical and, repeated across surfaces, feels like a
+  // stuck template. Confidence lives as a visual affordance (LearnedHero bell
+  // curve / RecipePath), not a spoken clause.
   const label = (race && race.label) ? race.label : target;
 
   if (race && race.goalSecs > 0) {
@@ -78,10 +82,10 @@ export function fitnessInsight(facts, race) {
     }
     const side = gap > 0 ? 'behind' : 'ahead of';
     return { kind: 'fitness', tag: 'Race readiness', severity: gap > 0 ? 'gentle' : 'positive',
-      text: `On current fitness you're tracking ~${p.time} for the ${label} — about ${mins} min ${side} your goal (confidence ${conf}%).` };
+      text: `On current fitness you're tracking ~${p.time} for the ${label} — about ${mins} min ${side} your goal.` };
   }
   return { kind: 'fitness', tag: 'Fitness', severity: 'neutral',
-    text: `Your fitness models a ~${p.time} ${target} right now (confidence ${conf}%).` };
+    text: `Your fitness models a ~${p.time} ${target} right now.` };
 }
 
 // Per-factor phrasing for the OTHER learned sensitivities (sleep / fuel). Heat is

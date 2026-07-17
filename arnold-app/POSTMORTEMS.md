@@ -26,6 +26,116 @@ the most important field — it's how the doc earns its keep.
 
 ---
 
+## 2026-07-12 — Training Profile stuck on "set a goal" even after committing the goal (wrong race)
+
+**Symptom**
+Emil set GOAL TIME 3:30 on Valencia in the Adjust panel and pressed Enter, yet the EdgeIQ
+Training Profile kept saying "set a goal to see the gap" — no goal, no targets. Cost ~10 rounds
+of goal-fallback patching that all missed the point.
+
+**Root cause**
+`resolveTrainingProfile` didn't pass an `aRaceDate`, so `buildRaceRecipe.nextARace` fell to
+"soonest marathon" — which was NY/Berlin, NOT Valencia. Emil built toward (and set the goal on)
+Valencia, but the profile silently anchored on a different, goal-less marathon. Every goal-source
+fallback was irrelevant because the profile was reading the wrong race's `goalTimeSecs`. Also
+surfaced: the Adjust GOAL TIME field showed the grey placeholder "3:30" (goalInput init '' + a
+pre-fill that read the wrong `getGoals().marathon` path), so Emil thought it was set when the box
+was empty.
+
+**Fix**
+`resolveTrainingProfile` now reads `planPrefs.target` and passes it as `aRaceDate`, so the profile
+anchors on the SAME race the plan/Adjust panel targets. Pre-fill effect reads the real v2 path
+(`goals.performance.marathon.targetSecs`); placeholder changed to "e.g. 3:30". Tests added.
+
+**What would have prevented it**
+When two surfaces (Adjust panel + profile) claim to be "about your race," they must resolve the
+SAME race from the SAME source — not one honoring the user's choice and the other auto-picking.
+Diagnosing sooner: check WHICH race the profile anchored on before patching goal-read paths.
+(#59 — one canonical goal/race — remains the real cleanup.)
+
+## 2026-07-11 — Training Profile projected "22:01" and asked to "set a goal time" (both already set)
+
+**Symptom**
+The EdgeIQ Training Profile finish read 22:01 (a ~22-min 4-miler time) and still said
+"Tracking 22:01 — set a goal time," even though Emil had a Berlin marathon with a goal.
+
+**Root cause**
+Two disconnects. (1) `buildRaceRecipe.nextARace` picked "soonest priority-'A' race", but
+`normalizeRace` defaults EVERY race's priority to 'A', so a near 4-mile tune-up out-ranked the
+marathon → the profile projected/anchored on the tune-up (distance 4mi → ~22 min). (2) The goal
+was set in Performance goals (`goals.marathon.targetSecs`), but `buildTrainingProfile` only read
+the race's own `goalTimeSecs`, so `goalSecs` stayed null → "set a goal time" + no targets +
+monochrome graphic.
+
+**Fix**
+(1) `nextARace` now prefers a MARATHON (the build's actual target) over the priority signal:
+aRaceDate → soonest marathon → a race with a goalTime → explicit-A. (2) `resolveTrainingProfile`
+reads `goals.marathon.targetSecs` and passes it as `goalSecsFallback`; `buildTrainingProfile`
+uses race goalTimeSecs ?? fallback ?? recorded finish. Tests added in trainingProfile.test.js.
+
+**What would have prevented it**
+A default of 'A' for every race makes "priority-A" meaningless as a selector — defaults should be
+neutral (unset), not the top tier. And a goal that lives in one store but is read from another is
+the same class of bug as the race-resurrection one: single source, or explicit fallbacks wired at
+the read site.
+
+## 2026-07-10 — Training Profile FINISH ring vanished even with a goal set
+
+**Symptom**
+The EdgeIQ Training Profile lost its finish circle (the "4:12" ring Emil liked); the
+connector edges fanned into empty space. Emil had set the race goal time, so "something
+is not connected."
+
+**Root cause**
+`buildTrainingProfile` (trainingProfile.js) computed the finish projection only
+`if (predict && distKm)`, where `distKm = raceDistanceKm(nextARace)`. For a race with
+no explicit `distanceKm`/`distanceMi` and a name that doesn't literally contain
+"marathon" (his race is just "Berlin"), `raceDistanceKm` returns null → projection
+no-ops → `finish.now` null → ring guarded off. The INGREDIENTS still rendered because
+`distMi` independently falls back to 26.2, masking the problem (graphic half-worked).
+
+**Fix**
+Derive `projKm = distKm ?? distMi * 1.60934` and gate the projection on `projKm`, so
+the inferred marathon distance drives the prediction when the race carries no explicit
+distance. Ring returns.
+
+**What would have prevented it**
+Two code paths inferring the same thing (distance) with different fallbacks is a smell —
+`distMi` fell back to 26.2 but the projection used the un-fallen-back `distKm`. Single
+source: compute one canonical race distance and feed BOTH the requirements and the
+projection from it.
+
+## 2026-07-10 — Deleted race keeps coming back (hero + season phase + strip)
+
+**Symptom**
+Emil deleted a race from the Calendar AND from the Plan tab's race list, but it
+still showed up on Start (hero race, "BUILD · to Berlin" phase) and the week strip.
+
+**Root cause**
+Races have THREE stores that drift: the canonical `storage['races']` (+`arnold:races`
+localStorage mirror), races nested in the goals blob, and planner days with
+`type:'race'` (the same race also lives on the Calendar as a planner day — the red
+flag on the strip). `GoalsHub.loadGoalsV2()` (GoalsHub.jsx ~L164) intentionally
+RESURRECTS from the latter two: `mergeRaces(canonical, legacyGoalsBlob)` +
+`plannerRaceDays()` fold both back into `storage['races']` and persist on every
+Plan-tab open. Both delete paths only removed from one/two stores (CalendarTab:
+races store only; GoalsHub: goals blob + races store), never the planner race day —
+so opening the Plan tab re-promoted the leftover planner race day into the canonical
+store, which the hero (MobileHome L300) and seasonCoach (seasonCoach.js L44) read.
+
+**Fix**
+New `memory.deleteRaceEverywhere(id, dateHint)` clears all three: canonical store
+(+mirror via saveRaces), goals-blob races (by id and date), and the planner race day
+(pure, tested `clearPlannerRaceDay`). Wired into both CalendarTab `onDeleteRace`
+sites and `GoalsHub.deleteRace` (grabs the date before dropping from state). Test:
+`core/memory.test.js`.
+
+**What would have prevented it**
+A single authoritative delete from the start instead of per-surface filters, given
+we already KNEW there were 3 drift sources (loadGoalsV2 was written specifically to
+reconcile them). Rule: any entity with N storage representations needs ONE
+delete/write path that touches all N — never an ad-hoc `list.filter()` at the call site.
+
 ## 2026-07-02 — Sim-caught: mobility/recovery days could be "greenlit"; + Monte-Carlo harness added
 
 **Symptom**

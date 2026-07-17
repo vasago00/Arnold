@@ -102,16 +102,31 @@ export function resolveTodayStatus({ activities = [], planned = null, today = lo
   const plannedFamily = plannedType ? (PLAN_TYPE_FAMILY[plannedType] || null) : null;
   const plannedLabel = plannedType ? (PLAN_TYPE_LABEL[plannedType] || plannedType) : null;
 
+  // ALL planned disciplines for the day, not just the primary — else a two-a-day (e.g. Tempo +
+  // Strength) marks a logged strength "off-plan" because only the primary (Tempo→run) was checked.
+  // Expands the run+strength double-flag the same way planner.daySessions() does (no import needed).
+  const plannedFamilies = (() => {
+    if (!planned) return new Set();
+    const raw = Array.isArray(planned.sessions) && planned.sessions.length
+      ? planned.sessions.filter((s) => s && s.type && s.type !== 'rest')
+      : (planned.type && planned.type !== 'rest' ? [{ type: planned.type, strength: planned.strength }] : []);
+    const fams = new Set();
+    for (const s of raw) {
+      const f = PLAN_TYPE_FAMILY[s.type] || s.type; if (f) fams.add(f);
+      if (s.strength && s.type !== 'strength') fams.add('strength');   // the double's lift half
+    }
+    return fams;
+  })();
+
   const actualFamily = primary ? actualFamilyOf(primary) : null;
   const primaryMins = primary ? minutesOf(primary) : 0;
 
   // "Meaningful" = a real, non-mobility session of decent length.
   const meaningful = !!primary && !isMobility(primary) && primaryMins >= minMinutes;
-  // Plan satisfied: same discipline as planned, with a sensible duration floor
-  // (mobility plans are often short, so a lower bar there).
-  const matchedPlan = !!primary && !!plannedFamily && plannedFamily !== 'rest'
-    && actualFamily === plannedFamily
-    && (plannedFamily === 'mobility' ? primaryMins >= 5 : primaryMins >= minMinutes);
+  // Plan satisfied: the actual discipline matches ANY planned discipline for the day, with a
+  // sensible duration floor (mobility plans are often short, so a lower bar there).
+  const matchedPlan = !!primary && !!actualFamily && plannedFamilies.has(actualFamily)
+    && (actualFamily === 'mobility' ? primaryMins >= 5 : primaryMins >= minMinutes);
 
   const done = meaningful || matchedPlan;
   const offPlan = done && !matchedPlan;
@@ -120,7 +135,9 @@ export function resolveTodayStatus({ activities = [], planned = null, today = lo
   let label;
   if (done) {
     if (matchedPlan) {
-      label = plannedLabel;                                  // did the planned thing
+      // On-plan: primary match keeps the specific planned label (e.g. "Tempo"); a secondary
+      // match (did the planned Strength on a Tempo+Strength day) names what was actually done.
+      label = (actualFamily === plannedFamily) ? plannedLabel : (FAMILY_LABEL[actualFamily] || plannedLabel);
     } else if (plannedFamily && plannedFamily !== 'rest') {
       label = `Off-plan · ${FAMILY_LABEL[actualFamily] || 'Workout'}`; // planned X, did Y
     } else {

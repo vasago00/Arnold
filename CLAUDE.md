@@ -3,9 +3,11 @@
 This file orients any new Cowork/Claude session working in this folder.
 
 ## Resume protocol (read first)
-1. **Read `DESIGN_DECISIONS.md`** at the repo root FIRST — binding UI/design rules + how to work here (do the
-   smallest change, restate-the-ask-before-building, one-source-of-truth, no narrative on the card except Coach).
-   Treat it as law; if a rule is wrong, Emil edits that doc once.
+1. **Read `DESIGN_DECISIONS.md` AND `DESIGN_LESSONS.md`** at the repo root FIRST — binding UI/design rules + hard-won
+   design memory (MOCK-FIRST workflow, density/use-the-canvas/no dead black space, no progress-bar "shopping lists",
+   the mobile `.arnold-compact-input`/`.arnold-compact-btn` trap, forward-looking modeling, surface de-dup). Treat both
+   as law; if a rule is wrong, Emil edits the doc once. When a NEW design lesson is learned, APPEND it to
+   `DESIGN_LESSONS.md` (dated) — this is our memory; keep it current.
 2. **Read `HANDOVER.md`** — the canonical "where we are" state.
 3. **Read `EXECUTION_PLAN_2026-06.md`** — the LIVING uplift plan (Status Board + Progress Log).
    This is the active multi-phase improvement track; keep its board + log current as steps move.

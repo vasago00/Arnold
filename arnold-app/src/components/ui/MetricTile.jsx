@@ -78,14 +78,14 @@ export function MetricTile({
             <span style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: TEXT.primary }}>{todayVal}</span>
             {todayUnit ? <span style={{ fontSize: 11, color: TEXT.muted, marginLeft: 2 }}>{todayUnit}</span> : null}
           </div>
-          <div style={{ fontSize: 10, fontWeight: 600, color: trendColor || TEXT.muted, marginTop: 3, height: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span>{trendText || ' '}</span>
+          <div style={{ fontSize: 10, fontWeight: 600, color: trendColor || TEXT.muted, marginTop: 3, height: 13, display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{trendText || ' '}</span>
             {statusIcon ? (
-              <span style={{ fontSize: 10, fontWeight: 700, color: statusIconColor || TEXT.muted, lineHeight: 1 }}>{statusIcon}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: statusIconColor || TEXT.muted, lineHeight: 1, flexShrink: 0 }}>{statusIcon}</span>
             ) : null}
             {confidence && confidence.text ? (
               <span title={confidence.title || ''} aria-label={confidence.title || confidence.text}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: (trendText || statusIcon) ? 4 : 0 }}>
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: (trendText || statusIcon) ? 4 : 0, flexShrink: 0 }}>
                 <span style={{ width: 6, height: 6, borderRadius: 3, background: CONF_COLOR[confidence.level] || TEXT.faint, flexShrink: 0 }} />
                 <span style={{ fontSize: 10, fontWeight: 600, color: TEXT.faint, whiteSpace: 'nowrap' }}>{confidence.text}</span>
               </span>

@@ -23,10 +23,12 @@
 // so the Coach is internally consistent: the fueling line on Daily and the
 // leverage line on EdgeIQ reflect the same tick of data.
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { storage } from '../core/storage.js';
 import { allActivities as _allActivities } from '../core/dcyMath.js';
 import { getGoals } from '../core/goals.js';
+import { buildGoalModel } from '../core/goalResolve.js';   // canonical A-race resolver (goal race, not soonest)
+import { resolveARace } from '../core/aRace.js';           // the ONE A-race resolver (goal race)
 import { safeCompute } from '../core/safeCompute.js';
 import { computeUserState, synthesizeRecommendations } from '../core/intelligence.js';
 import { composeNarrative } from '../core/narrativeComposer.js';
@@ -37,8 +39,61 @@ import { getIFProfile, isInFastingWindow } from '../core/intermittentFasting.js'
 import { hubFacts } from '../core/hub/hubFacts.js';
 import { racePredictionOpts } from '../core/derive/tileMetrics.js';
 import { hubCoachInsights } from '../core/hub/coachInsights.js';
+import { refuelPhrase, fuelGapAdvice } from '../core/coachRefuel.js';
+import { recoveryCoef } from '../core/dcy.js';
+import { getSeasonCoach } from '../core/seasonCoach.js';
+import { narrateSurface } from '../core/coachNarrative.js';          // Coach Narrative engine (Phase B)
+import { buildCoachContext } from '../core/coachContext.js';         // live context assembler
+import { recordShown } from '../core/coachMemory.js';                // episodic memory — record what was shown
+import { recordEngagement } from '../core/coachPersonalization.js';  // preference learning — record interaction (Stage 4)
+import { localDate } from '../core/time.js';                         // local YYYY-MM-DD
+import { resolveTrainingProfile } from '../core/trainingProfile.js'; // async goal-vs-current profile → weakLink (slice 2b)
 
 const COACH_TEAL = '#5eead4';
+
+// Map the training profile's weak-link ingredient (key: threshold|longest|volume — the biggest
+// GOAL gap) onto the engine's BUILDS lever, so gPurpose can say "this is the exact gap the
+// profile flags" on a day whose session trains that limiter. Only present when the profile finds
+// a real goal-anchored gap → no fabricated limiter claims.
+const WEAKLINK_LEVER = { threshold: 'threshold', longest: 'endurance', volume: 'aerobic' };
+const mapWeakLink = (wl) => { const k = wl && wl.key; return k ? (WEAKLINK_LEVER[k] || null) : null; };
+
+// Season coach read (this-week target + why), best-effort — null when no season.
+function safeSeasonCoach() {
+  try { const sc = getSeasonCoach(); return sc && sc.plan ? sc : null; } catch { return null; }
+}
+
+// Today's recovery (DCY pillar 0..1) as a %, and a plain word for the coach voice.
+function recoveryPctForCoach() {
+  try { const r = recoveryCoef(new Date().toISOString().slice(0, 10)); return (r != null && Number.isFinite(r)) ? Math.round(Math.min(1, r) * 100) : null; }
+  catch { return null; }
+}
+function recWord(pct) { return pct == null ? null : pct >= 80 ? 'fresh' : pct >= 60 ? 'moderate' : 'low'; }
+const cap1 = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+// Athlete mass in kg for fuel math — profile bodyweight, else latest weigh-in,
+// with an lb→kg heuristic (runners are 45–110 kg; > 110 is almost certainly lb).
+function bodyKgForCoach() {
+  try {
+    const p = storage.get('profile') || {};
+    let w = Number(p.bodyweight ?? p.weight) || 0;
+    if (!w) {
+      const arr = (storage.get('weight') || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      w = Number(arr[0]?.weight ?? arr[0]?.lbs ?? arr[0]?.value) || 0;
+    }
+    if (!w) return 70;
+    return w > 110 ? Math.round(w * 0.453592) : Math.round(w);
+  } catch { return 70; }
+}
+
+const _HARD_INTENSITY = new Set(['tempo', 'threshold', 'intervals', 'hiit', 'race', 'speed', 'fartlek']);
+// Tomorrow's session (if the next planned session is ~1 day out) → { label, hard }.
+function tomorrowSessionCtx(upcomingPlan) {
+  const nxt = nextPlannedAfterToday(upcomingPlan);
+  if (!nxt || (nxt.daysOut != null && nxt.daysOut > 1)) return { label: null, hard: false };
+  const hard = _HARD_INTENSITY.has(String(nxt.intensityClass || nxt.type || '').toLowerCase());
+  return { label: planLabel(nxt), hard };
+}
 
 // ─── Surface registry — Phase 4r.narrative.5.fix.28 ────────────────────────
 // Surfaces are named after the REAL screens, per format. The same `tab` id
@@ -319,6 +374,8 @@ function planLabel(plan) {
 function classifyPlayState({ sessions, upcomingPlan, nowMs, hour, raceName = null }) {
   const todayPlan = upcomingPlan?.todayPlanned || null;
   const trainedToday = sessions.length > 0;
+  const tomorrow = tomorrowSessionCtx(upcomingPlan);   // { label, hard } — data for grounded lines
+  const rec = recoveryPctForCoach();                    // today's recovery % (0..100 | null)
 
   // Post-workout window first (75 min keeps the refuel call active).
   for (const a of sessions) {
@@ -332,18 +389,18 @@ function classifyPlayState({ sessions, upcomingPlan, nowMs, hour, raceName = nul
   if (hour >= 21) return { kind: 'evening_done', ctx: { trainedToday, todayPlan, nextPlanned: nextPlannedAfterToday(upcomingPlan) } };
 
   // Logged earlier today (>75 min ago, or no end-time but date matches).
-  if (trainedToday) return { kind: 'logged_earlier', ctx: { session: sessions[0], todayPlan, raceName } };
+  if (trainedToday) return { kind: 'logged_earlier', ctx: { session: sessions[0], todayPlan, raceName, tomorrow, rec } };
 
   // Planned today, not done. Bucket by clock so the line evolves.
   if (todayPlan && todayPlan.intensityClass && todayPlan.intensityClass !== 'rest' && !todayPlan.done) {
-    if (hour < 11) return { kind: 'planned_morning', ctx: { plan: todayPlan } };
-    if (hour < 16) return { kind: 'planned_midday',  ctx: { plan: todayPlan } };
-    return                  { kind: 'planned_evening', ctx: { plan: todayPlan } };
+    if (hour < 11) return { kind: 'planned_morning', ctx: { plan: todayPlan, rec } };
+    if (hour < 16) return { kind: 'planned_midday',  ctx: { plan: todayPlan, rec } };
+    return                  { kind: 'planned_evening', ctx: { plan: todayPlan, rec } };
   }
 
   // Rest day per plan.
   if (todayPlan?.intensityClass === 'rest') {
-    return { kind: 'rest_day_planned', ctx: { nextPlanned: nextPlannedAfterToday(upcomingPlan) } };
+    return { kind: 'rest_day_planned', ctx: { nextPlanned: nextPlannedAfterToday(upcomingPlan), tomorrow, rec } };
   }
 
   // Open day — no plan, nothing logged.
@@ -356,36 +413,57 @@ function composePlayLine({ kind, ctx }) {
   const tag = (s) => s; // hook for future per-state tag colors
   switch (kind) {
     case 'post_workout': {
-      // Race day → name the race (HYROX classifies as HIIT otherwise).
+      // Race day → name the race (HYROX classifies as HIIT otherwise). Specific
+      // refuel from the actual session (kcal out → grams in), not generic filler.
       const lbl = ctx.raceName || phraseLabel(activityLabel(ctx.session) || 'session');
-      const lead = ctx.raceName ? `${lbl} done` : `Strong ${lbl}`;
-      return { tag: 'Refuel', body: `${lead}. The refuel window is open — protein + carbs in the next 30 minutes.`, tone: 'positive' };
+      const r = refuelPhrase(ctx.session, bodyKgForCoach(), lbl);
+      return { tag: 'Refuel', body: r.text, tone: 'positive' };
     }
     case 'logged_earlier': {
       const lbl = ctx.raceName || phraseLabel(activityLabel(ctx.session) || 'session');
-      const body = ctx.raceName
-        ? `${lbl} is in the books. Recovery is the work now — sleep tonight is the multiplier.`
-        : `Today's ${lbl} is logged. Recovery is the work now — sleep tonight is the multiplier.`;
-      return { tag: 'Today done', body, tone: 'positive' };
+      // Ground the recovery call: tie to tomorrow's demand + today's recovery read.
+      const rw = recWord(ctx.rec);
+      const tmrw = ctx.tomorrow?.label
+        ? (ctx.tomorrow.hard ? ` ${cap1(ctx.tomorrow.label)} tomorrow needs you fresh` : ` Easy day tomorrow`)
+        : '';
+      const recBit = rw === 'low' ? ` Recovery's reading low (${ctx.rec}%) — protect tonight's sleep.`
+        : rw === 'fresh' ? ` Recovery's holding (${ctx.rec}%).`
+        : '';
+      const head = ctx.raceName ? `${lbl} is in the books.` : `Today's ${lbl} is logged.`;
+      return { tag: 'Today done', body: `${head}${tmrw ? `${tmrw} —` : ' Recovery is the work now —'} sleep is the multiplier.${recBit}`, tone: 'positive' };
     }
     case 'planned_morning': {
       const lbl = planLabel(ctx.plan);
-      return { tag: 'On deck', body: `Today: ${lbl}. Loosen up and eat well early; we'll check readiness as it gets closer.`, tone: 'neutral' };
+      const rw = recWord(ctx.rec);
+      const readTxt = rw === 'low' ? ` Recovery's low (${ctx.rec}%) — treat it as a green-light-only day; ease off if it's a hard session.`
+        : rw === 'fresh' ? ` Recovery's fresh (${ctx.rec}%) — good to go.`
+        : rw === 'moderate' ? ` Recovery's moderate (${ctx.rec}%).` : '';
+      return { tag: 'On deck', body: `Today: ${lbl}. Loosen up and eat well early.${readTxt}`, tone: 'neutral' };
     }
     case 'planned_midday': {
       const lbl = planLabel(ctx.plan);
-      return { tag: 'Coming up', body: `${lbl} ahead. Top off carbs about an hour out and settle the body.`, tone: 'neutral' };
+      const rw = recWord(ctx.rec);
+      const hardLow = rw === 'low' && _HARD_INTENSITY.has(ctx.plan?.intensityClass);
+      const flag = hardLow ? ` Recovery's low (${ctx.rec}%) — if the legs are flat, run it easy instead.`
+        : rw === 'fresh' ? ` Recovery's good (${ctx.rec}%) — send it.` : '';
+      return { tag: 'Coming up', body: `${lbl} ahead. Top off carbs about an hour out and settle the body.${flag}`, tone: hardLow ? 'gentle' : 'neutral' };
     }
     case 'planned_evening': {
       const lbl = planLabel(ctx.plan);
-      return { tag: 'Tonight', body: `${lbl} this evening — stay easy until then, sip water and electrolytes.`, tone: 'neutral' };
+      const rw = recWord(ctx.rec);
+      const hardLow = rw === 'low' && _HARD_INTENSITY.has(ctx.plan?.intensityClass);
+      const flag = hardLow ? ` Recovery's low (${ctx.rec}%) — consider dialing it to an easy run.` : '';
+      return { tag: 'Tonight', body: `${lbl} this evening — stay easy until then, sip water and electrolytes.${flag}`, tone: hardLow ? 'gentle' : 'neutral' };
     }
     case 'rest_day_planned': {
       const nxt = ctx.nextPlanned;
+      const rw = recWord(ctx.rec);
       const nxtLine = nxt
-        ? ` ${relativeDayWord(nxt.daysOut, nxt.dow)}'s ${planLabel(nxt)} will need you fresh.`
+        ? ` ${relativeDayWord(nxt.daysOut, nxt.dow)}'s ${planLabel(nxt)} will want you fresh.`
         : '';
-      return { tag: 'Rest day', body: `Rest day — let recovery do its job.${nxtLine}`, tone: 'positive' };
+      const recBit = rw === 'low' ? ` Recovery's still low (${ctx.rec}%) — this rest is well-timed.`
+        : rw === 'fresh' ? ` Recovery's already back (${ctx.rec}%).` : '';
+      return { tag: 'Rest day', body: `Rest day — let recovery do its job.${recBit}${nxtLine}`, tone: 'positive' };
     }
     case 'evening_done': {
       const nxt = ctx.nextPlanned;
@@ -412,7 +490,7 @@ function composePlayLine({ kind, ctx }) {
 // unchanged from morning). The day still has a morning→midday→evening
 // cadence; race week just colours each beat with the "keep loading carbs"
 // frame instead of generic fueling.
-function classifyFuelState({ us, sessions, raceHorizon, nowMs, hour }) {
+function classifyFuelState({ us, sessions, upcomingPlan, raceHorizon, nowMs, hour }) {
   const n = us.numbers || {};
 
   // ── Modifier: race week ──
@@ -447,7 +525,7 @@ function classifyFuelState({ us, sessions, raceHorizon, nowMs, hour }) {
     isInFastingWindow: isInFastingWindow(hour),
     eatingWindowStart: ifProfile?.typicalEatingWindowStart || null,
   };
-  const baseCtx = { intake, protein, kcalT, proteinT, intakePct, proteinPct, raceWeek, raceCtx, if: ifCtx };
+  const baseCtx = { intake, protein, kcalT, proteinT, intakePct, proteinPct, raceWeek, raceCtx, if: ifCtx, tomorrow: tomorrowSessionCtx(upcomingPlan) };
 
   if (hour < 11) {
     return { kind: intakePct < 0.15 ? 'morning_open' : 'morning_started', ctx: baseCtx };
@@ -495,8 +573,11 @@ function composeFuelLineRaceWeek({ kind, ctx }) {
 function composeFuelLine({ kind, ctx }) {
   if (ctx?.raceWeek) return composeFuelLineRaceWeek({ kind, ctx });
   switch (kind) {
-    case 'post_workout_refuel':
-      return { tag: 'Refuel', body: `Refuel window: ~30g carbs + 30g protein in the next 30 minutes.`, tone: 'positive' };
+    case 'post_workout_refuel': {
+      const lbl = phraseLabel(activityLabel(ctx.session) || 'session');
+      const r = refuelPhrase(ctx.session, bodyKgForCoach(), lbl);
+      return { tag: 'Refuel', body: r.text, tone: 'positive' };
+    }
     case 'morning_open': {
       // Phase 4r.if.coach.1 — IF users don't eat breakfast. The default
       // "Frontload protein at breakfast" line was wrong for them. When the
@@ -517,13 +598,15 @@ function composeFuelLine({ kind, ctx }) {
       return { tag: 'On track', body: `Solid start — keep the protein flow going.`, tone: 'positive' };
     case 'midday_behind_protein': {
       const gap = Math.max(0, Math.round(ctx.proteinT - ctx.protein));
-      return { tag: 'Protein', body: `${Math.round(ctx.protein)} of ${ctx.proteinT}g protein logged. Anchor lunch with ~35g — ${gap}g still to go.`, tone: 'gentle' };
+      const tmrw = ctx.tomorrow?.hard ? ` ${ctx.tomorrow.label} tomorrow leans on it.` : '';
+      return { tag: 'Protein', body: `${Math.round(ctx.protein)} of ${ctx.proteinT}g protein in — anchor lunch with ~35g to close the ${gap}g gap.${tmrw}`, tone: 'gentle' };
     }
     case 'midday_on_track':
       return { tag: 'On pace', body: `${Math.round(ctx.intake)} / ${ctx.kcalT} kcal · protein tracking. Keep the rhythm.`, tone: 'positive' };
     case 'evening_under_target': {
+      const adv = fuelGapAdvice({ intake: ctx.intake, protein: ctx.protein, kcalT: ctx.kcalT, proteinT: ctx.proteinT, tomorrowLabel: ctx.tomorrow?.label, tomorrowHard: ctx.tomorrow?.hard });
       const left = Math.max(0, Math.round(ctx.kcalT - ctx.intake));
-      return { tag: 'Tonight', body: `~${left} kcal left to land target — make dinner protein-dense.`, tone: 'gentle' };
+      return { tag: 'Tonight', body: adv?.text || `~${left} kcal left to land target — make dinner protein-dense.`, tone: 'gentle' };
     }
     case 'evening_on_target':
       return { tag: 'On target', body: `Near target — light dinner with protein lands it.`, tone: 'positive' };
@@ -540,6 +623,26 @@ function composeFuelLine({ kind, ctx }) {
 // Plan is the long-arc surface. Voice is "where are we in the arc + what
 // phase needs from you." Race horizon wins when present; otherwise goal-
 // progress framing.
+// The Plan surface frames toward the GOAL race the plan is built for — NOT the soonest race on the
+// calendar. `raceHorizon` (computeRaceHorizon) picks the next chronological race, so the legacy Plan
+// line said "Berlin (73d)" while the countdown + peak target Valencia (Emil). Resolve the A-race the
+// same way buildCoachContext does — buildGoalModel keyed by planPrefs.target — and hand composePlanLine
+// a horizon of the SAME shape ({ race:{name}, daysOut, phase }), so its taper/build framing is right.
+function goalRaceHorizon() {
+  try {
+    const races = storage.get('races') || [];
+    const prefs = storage.get('planPrefs') || {};
+    const aRaceDate = (typeof prefs.target === 'string' && prefs.target.startsWith('race:')) ? prefs.target.slice(5) : null;
+    const gm = buildGoalModel({ races, goals: getGoals() || {}, aRaceDate });
+    const ar = gm && gm.race && gm.race.aRace;
+    if (ar && ar.name && ar.daysOut != null) {
+      const phase = gm.race.phase === 'mini-taper' ? 'taper' : gm.race.phase;   // → composePlanLine's tokens
+      return { race: { name: ar.name }, daysOut: ar.daysOut, phase };
+    }
+  } catch { /* fall back to the race-horizon signal */ }
+  return null;
+}
+
 function composePlanLine({ us, raceHorizon }) {
   if (raceHorizon?.race && raceHorizon.daysOut != null && raceHorizon.daysOut >= 0) {
     const days = raceHorizon.daysOut;
@@ -550,10 +653,16 @@ function composePlanLine({ us, raceHorizon }) {
         return { tag: 'Race week', body: `${name} ${dayPart}. Final phase — carb load, sleep, sharpen, no new stimulus.`, tone: 'neutral' };
       case 'taper':
         return { tag: 'Taper', body: `${name} ${dayPart} — taper phase: dial volume back, keep intensity sharp.`, tone: 'neutral' };
-      case 'peak':
-        return { tag: 'Peak block', body: `${name} ${dayPart} — peak block: race-pace work and recovery discipline.`, tone: 'neutral' };
-      case 'build':
-        return { tag: 'Build phase', body: `${name} ${dayPart} — base building: weekly mileage and consistency are the levers.`, tone: 'neutral' };
+      case 'peak': {
+        const sc = safeSeasonCoach();
+        const spec = sc?.plan?.why || (sc?.plan?.targetWeeklyMiles ? `this week ~${sc.plan.targetWeeklyMiles} mi, long run ${sc.plan.longRunTargetMi} mi.` : 'race-pace work and recovery discipline.');
+        return { tag: 'Peak block', body: `${name} ${dayPart} — peak block. ${spec}`, tone: 'neutral' };
+      }
+      case 'build': {
+        const sc = safeSeasonCoach();
+        const spec = sc?.plan?.why || (sc?.plan?.targetWeeklyMiles ? `this week ~${sc.plan.targetWeeklyMiles} mi, long run ${sc.plan.longRunTargetMi} mi — hold the ramp.` : 'weekly mileage and consistency are the levers.');
+        return { tag: 'Build phase', body: `${name} ${dayPart}. ${spec}`, tone: 'neutral' };
+      }
       case 'recovery':
         return { tag: 'Post-race', body: `Recovering from ${name} — easy days, eat well, no pressure.`, tone: 'positive' };
       default:
@@ -613,7 +722,13 @@ function composeTrendLine({ us }) {
   const mono = cs.monotonyStrain?.status;
   const vel  = cs.recoveryVelocity?.status;
 
-  if (debt === 'severe')                  return { tag: 'Recovery trend', body: `Sleep debt has stacked across the week — banking sleep is the highest-yield change this stretch.`, tone: 'gentle' };
+  if (debt === 'severe') {
+    const sd = cs.sleepDebt || {};
+    const detail = sd.debt7d != null
+      ? ` — ~${Math.round(sd.debt7d)}h short this week (avg ${sd.avgHours7d != null ? sd.avgHours7d.toFixed(1) : '—'}h vs ${sd.targetHours ?? 8}h target${sd.nightsBelow7d != null ? `, ${sd.nightsBelow7d}/7 nights` : ''})`
+      : '';
+    return { tag: 'Recovery trend', body: `Sleep debt has stacked${detail}. Banking an extra hour nightly is the highest-yield change this stretch.`, tone: 'gentle' };
+  }
   if (hrv === 'depressed' || hrv === 'concerning') return { tag: 'HRV trend', body: `HRV running below baseline — load may be ahead of recovery. Easier days restore the signal.`, tone: 'gentle' };
   if (rhr === 'rising')                    return { tag: 'RHR drift', body: `RHR drifting up week over week — common early sign of accumulated fatigue or illness.`, tone: 'gentle' };
   if (vel === 'slowing')                   return { tag: 'Recovery slowing', body: `Recovery velocity after hard sessions is slowing — bouncing back is taking longer than your baseline.`, tone: 'gentle' };
@@ -665,6 +780,18 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     return () => clearInterval(id);
   }, []);
 
+  // Slice 2b — resolve the training profile's weak link (async: pulls activities + predictor +
+  // goal) once, mirroring LivingPlan's pattern. Feeds gPurpose's "exact gap to your race"
+  // framing. Defensive: any failure leaves it null and purpose falls back to generic framing.
+  const [weakLink, setWeakLink] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    resolveTrainingProfile()
+      .then((p) => { if (alive) setWeakLink(mapWeakLink(p && p.weakLink)); })
+      .catch(() => { /* profile unavailable → generic purpose framing */ });
+    return () => { alive = false; };
+  }, []);   // once on mount (matches LivingPlan); the weak link shifts over weeks, not per log
+
   const computed = useMemo(() => safeCompute('CoachComment:compute', () => {
     const data = {
       // Unified activity universe (stored activities + dailyLog FIT uploads),
@@ -705,10 +832,12 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
         const tempC = (sessions || []).map(a => Number(a.avgTemperature ?? a.tempC ?? a.weatherTempC)).find(Number.isFinite);
         // Session length (for the sweat target) + the next race (for race readiness).
         const sessionMins = ((sessions || []).reduce((m, a) => Math.max(m, Number(a.durationSecs) || 0), 0) / 60) || null;
-        const _todayMid = new Date(new Date().setHours(0, 0, 0, 0));
-        const _next = (storage.get('races') || [])
-          .filter(r => r && r.date && new Date(`${r.date}T12:00:00`) >= _todayMid)
-          .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
+        // Speak to the race you're TRAINING FOR (the goal A-race), not the soonest event — otherwise
+        // a near 5K/tune-up hijacks the readiness read (the "5K" bug). Uses the ONE canonical resolver
+        // (core/aRace.js), keyed by planPrefs.target, so this can't disagree with the plan/coach.
+        const _prefs = storage.get('planPrefs') || {};
+        const _aRaceDate = (typeof _prefs.target === 'string' && _prefs.target.startsWith('race:')) ? _prefs.target.slice(5) : null;
+        const _next = resolveARace(storage.get('races') || [], localDate(), _aRaceDate);
         let race = null;
         if (_next) {
           const km = Number(_next.distance_km ?? _next.distanceKm) || (Number(_next.distanceMi) ? Number(_next.distanceMi) * 1.60934 : null);
@@ -718,7 +847,9 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
             const m = String(g).match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
             return m ? (+(m[1] || 0)) * 3600 + (+m[2]) * 60 + (+m[3]) : null;
           };
-          race = { label: _next.name || 'race', distanceKm: km, goalSecs: _parseGoal(_next.goalSecs ?? _next.goalSeconds ?? _next.goalTime ?? _next.targetTime) };
+          // goalTimeSecs is the canonical goal field (raceRecipe/goalResolve/LivingPlan);
+          // the older goalSecs/goalTime aliases stay as fallbacks for legacy rows.
+          race = { label: _next.name || 'race', distanceKm: km, goalSecs: _parseGoal(_next.goalTimeSecs ?? _next.goalSecs ?? _next.goalSeconds ?? _next.goalTime ?? _next.targetTime) };
         }
         hubInsights = hubCoachInsights(facts, { tempC, sessionMins, race });
       }
@@ -741,9 +872,30 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     return { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights };
   }, null), [storageVersion, tick]);
 
+  // Episodic memory (Phase D) — after render, log the beats THIS surface actually showed so the
+  // coach doesn't repeat them tomorrow. The read semantic (coachMemory: prior days only) means
+  // today's write can't affect today's ranking, so there's no render loop. `shownRef` is set in the
+  // narrative branches below; a render that shows no narrative leaves it null → the effect no-ops.
+  const shownRef = useRef(null);
+  useEffect(() => {
+    const beats = shownRef.current;
+    if (beats && beats.length) {
+      const ids = beats.map((b) => b.id);
+      try { recordShown(ids, localDate()); } catch { /* best-effort */ }
+    }
+  });
+
   if (!computed) return null;
   const { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights } = computed;
   const cfg = SURFACE_CONFIG[surface] || SURFACE_CONFIG.edgeiq;
+  shownRef.current = null;   // reset per render; narrative branches below set it to their shown beat ids
+
+  // ── Coach Narrative engine (Phase B) — one reasoned narrative from the whole picture,
+  // used on Play + Daily. Built once here; each surface below tries it first and falls
+  // back to the legacy composer if it produces nothing (defensive migration). ──
+  const coachCtx = safeCompute('coachNarrative:ctx', () => buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hour, nowMs, weakLink }), null);
+  let usedNarrative = false;
+  const NARRATIVE_TONE_DOT = { corrective: '#f87171', gentle: '#fbbf24', affirming: '#4ade80', neutral: COACH_TEAL };
 
   // ── Resolve the single comment for this surface ──
   let tag = null;      // short context label (uppercase) — e.g. "SLEEP DEBT" / "FUEL"
@@ -768,24 +920,46 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
   // leverage + secondary signal (library).
   const STATE_TONE_DOT = { positive: '#4ade80', gentle: '#fbbf24', neutral: COACH_TEAL };
   if (cfg.mode === 'playState') {
-    // Phase 4r.coach.racename — race name for race day, so Play says
-    // "raced HYROX" not "your HIIT" (HYROX classifies as HIIT via activityKind).
-    const playRaceName = (raceHorizon && raceHorizon.daysOut === 0
-      && raceHorizon.race?.date === us?.asOf && raceHorizon.race?.name)
-      ? raceHorizon.race.name : null;
-    const s = classifyPlayState({ sessions, upcomingPlan, nowMs, hour, raceName: playRaceName });
-    const line = composePlayLine(s);
-    if (!line?.body) return null;
-    tag = line.tag;
-    body = line.body;
-    dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+    // Coach Narrative first — the reasoned, forward-looking Play voice (purpose → knock-on
+    // → mechanism). Falls back to the legacy state-line composer if it produces nothing.
+    const nv = safeCompute('coachNarrative:play', () => (coachCtx ? narrateSurface(coachCtx, 'play') : null), null);
+    if (nv?.text) {
+      tag = null; body = nv.text; dot = NARRATIVE_TONE_DOT[nv.tone] || COACH_TEAL; usedNarrative = true;
+      shownRef.current = (nv.beats || []);   // beat objects (id+kind) — feeds both novelty + engagement
+    } else {
+      // Phase 4r.coach.racename — race name for race day, so Play says
+      // "raced HYROX" not "your HIIT" (HYROX classifies as HIIT via activityKind).
+      const playRaceName = (raceHorizon && raceHorizon.daysOut === 0
+        && raceHorizon.race?.date === us?.asOf && raceHorizon.race?.name)
+        ? raceHorizon.race.name : null;
+      const s = classifyPlayState({ sessions, upcomingPlan, nowMs, hour, raceName: playRaceName });
+      const line = composePlayLine(s);
+      if (!line?.body) return null;
+      tag = line.tag;
+      body = line.body;
+      dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+    }
   } else if (cfg.mode === 'fuelState') {
-    const s = classifyFuelState({ us, sessions, raceHorizon, nowMs, hour });
-    const line = composeFuelLine(s);
-    if (!line?.body) return null;
-    tag = line.tag;
-    body = line.body;
-    dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+    // The immediate post-workout refuel window is time-critical (carbs + protein in the next
+    // ~30 min), so the legacy state line OWNS that case. Every other time, the Coach Narrative
+    // engine speaks — grounded fuel status (weaving today's kcal/protein) plus any mechanism /
+    // cut / RED-S beat — so Fuel matches the Play/Daily voice instead of a generic composer.
+    const s = classifyFuelState({ us, sessions, upcomingPlan, raceHorizon, nowMs, hour });
+    if (s.kind === 'post_workout_refuel') {
+      const line = composeFuelLine(s);
+      if (!line?.body) return null;
+      tag = line.tag; body = line.body; dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+    } else {
+      const nv = safeCompute('coachNarrative:fuel', () => (coachCtx ? narrateSurface(coachCtx, 'fuel') : null), null);
+      if (nv?.text) {
+        tag = null; body = nv.text; dot = NARRATIVE_TONE_DOT[nv.tone] || COACH_TEAL; usedNarrative = true;
+        shownRef.current = (nv.beats || []);   // beat objects (id+kind) — feeds both novelty + engagement
+      } else {
+        const line = composeFuelLine(s);
+        if (!line?.body) return null;
+        tag = line.tag; body = line.body; dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+      }
+    }
   } else if (cfg.mode === 'library') {
     const line = composeMobileLibrary({ narrative, cards });
     if (!line?.body) return null;
@@ -793,11 +967,19 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     body = line.body;
     dot = line.dot || STATE_TONE_DOT[line.tone] || COACH_TEAL;
   } else if (cfg.mode === 'planState') {
-    const line = composePlanLine({ us, raceHorizon });
-    if (!line?.body) return null;
-    tag = line.tag;
-    body = line.body;
-    dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+    // Coach Narrative first — the plan-vs-execution oversight voice (week drift off target,
+    // strength-frequency progress, purpose toward the race). This is the read that watches the
+    // plan against reality; the legacy race-horizon line is the fallback when nothing fires.
+    const nv = safeCompute('coachNarrative:plan', () => (coachCtx ? narrateSurface(coachCtx, 'plan') : null), null);
+    if (nv?.text) {
+      tag = null; body = nv.text; dot = NARRATIVE_TONE_DOT[nv.tone] || COACH_TEAL; usedNarrative = true;
+      shownRef.current = (nv.beats || []);   // beat objects (id+kind) — feeds both novelty + engagement
+    } else {
+      // Fallback: frame toward the GOAL race (Valencia), not the soonest race (Berlin).
+      const line = composePlanLine({ us, raceHorizon: goalRaceHorizon() || raceHorizon });
+      if (!line?.body) return null;
+      tag = line.tag; body = line.body; dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
+    }
   } else if (cfg.mode === 'trendState') {
     const line = composeTrendLine({ us });
     if (!line?.body) return null;
@@ -806,10 +988,18 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     dot = STATE_TONE_DOT[line.tone] || COACH_TEAL;
   } else if (cfg.mode === 'digest') {
     isDigest = true;
-    const digest = composeDigest({ us, sessions, hour });
-    if (!digest || !digest.text) return null;
-    body = digest.text;
-    dot = COACH_TEAL;
+    // Coach Narrative first — the reasoned diary paragraph that weaves in the day's
+    // metrics; falls back to the legacy warm-digest composer if it produces nothing.
+    const nv = safeCompute('coachNarrative:daily', () => (coachCtx ? narrateSurface(coachCtx, 'daily') : null), null);
+    if (nv?.text) {
+      body = nv.text; dot = NARRATIVE_TONE_DOT[nv.tone] || COACH_TEAL; usedNarrative = true;
+      shownRef.current = (nv.beats || []);   // beat objects (id+kind) — feeds both novelty + engagement
+    } else {
+      const digest = composeDigest({ us, sessions, hour });
+      if (!digest || !digest.text) return null;
+      body = digest.text;
+      dot = COACH_TEAL;
+    }
   } else if (cfg.mode === 'leverage') {
     const lp = narrative?.leveragePoint;
     const story = narrative?.story;
@@ -857,16 +1047,22 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
   // the brain; the Coach is its voice). Each surface gets the insight kind that
   // fits its job: Play/Fuel → today's heat + hydration; Plan/Trend → race
   // readiness; the Daily digest is a paragraph so it can carry the top two.
+  // Race readiness (the fitness/finish-projection clause) lives ONLY on the
+  // leverage surface (Start / EdgeIQ) — it was previously woven into Plan, Trend
+  // and the Daily digest too, so the same sentence tailed every screen and the
+  // Coach read identically everywhere. Its dedicated home is the Training Profile
+  // (RecipePath); the coach speaks it once, on leverage, and each other surface
+  // keeps its own distinct voice (heat/sweat on Play/Fuel, learned pattern on Plan).
   const HUB_KINDS_FOR = {
     playState:  ['heat', 'sweat'],
     fuelState:  ['sweat', 'heat'],
-    planState:  ['fitness', 'sensitivity'],
-    trendState: ['fitness'],
+    planState:  ['sensitivity'],
+    trendState: [],
     leverage:   ['fitness', 'sensitivity'],
-    digest:     ['heat', 'sweat', 'fitness', 'sensitivity'],
+    digest:     ['heat', 'sweat', 'sensitivity'],
   };
   const _hubOrder = HUB_KINDS_FOR[cfg.mode] || [];
-  if (_hubOrder.length && Array.isArray(hubInsights) && hubInsights.length) {
+  if (!usedNarrative && _hubOrder.length && Array.isArray(hubInsights) && hubInsights.length) {
     const picked = [];
     for (const k of _hubOrder) {
       const m = hubInsights.find(i => i.kind === k);
@@ -883,9 +1079,22 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
   // everywhere; another one here was visual noise). The sigil is the only
   // mark; the colored tag carries severity (red = severe, amber = watch).
   // No line-clamp — the Coach finishes its sentence.
+  // Engagement signal (Stage 4): a tap to open the coach comment is a genuine "expanded" interaction.
+  // Record it against the beats currently shown so preference learning (coachPersonalization) can tilt
+  // what the coach surfaces toward what the athlete actually engages with. Best-effort, never blocks open.
+  const handleOpen = onOpen
+    ? (e) => {
+        try {
+          const beats = shownRef.current || [];
+          const d = localDate();
+          for (const b of beats) { if (b && b.id) recordEngagement({ id: b.id, kind: b.kind }, 'expanded', d); }
+        } catch { /* best-effort */ }
+        return onOpen(e);
+      }
+    : undefined;
   return (
     <div
-      onClick={onOpen || undefined}
+      onClick={handleOpen}
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 9,
         // Phase 4r.narrative.5.fix.31 — zero horizontal padding so the sigil

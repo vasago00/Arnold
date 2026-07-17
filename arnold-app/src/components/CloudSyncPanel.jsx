@@ -261,6 +261,7 @@ export default function CloudSyncPanel() {
   const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [msg, setMsg] = useState(null);   // { text, kind:'ok'|'warn'|'err' } — Push/Pull feedback
 
   useEffect(() => {
     const off = onCloudSyncEvent((evt, payload) => {
@@ -325,15 +326,31 @@ export default function CloudSyncPanel() {
   }
 
   async function handlePush() {
-    setBusy('push');
-    try { await push(); } finally { setBusy(''); setStatus(getSyncStatus()); }
+    setBusy('push'); setMsg(null);
+    try {
+      const r = await push();
+      if (r?.ok) setMsg({ text: `Pushed ✓ ${r.bytes ? `(${(r.bytes / 1024).toFixed(1)} KB) ` : ''}at ${new Date().toLocaleTimeString()}`, kind: 'ok' });
+      else if (r?.skipped === 'no_passphrase') setMsg({ text: 'Nothing pushed — enter your passphrase first (Re-enter passphrase below).', kind: 'warn' });
+      else if (r?.skipped) setMsg({ text: `Push skipped: ${r.skipped}`, kind: 'warn' });
+      else if (r?.error) setMsg({ text: `Push failed: ${r.error}`, kind: 'err' });
+      else setMsg({ text: 'Push returned no result — check the console.', kind: 'warn' });
+    } catch (e) {
+      setMsg({ text: `Push failed: ${e?.message || e}`, kind: 'err' });
+    } finally { setBusy(''); setStatus(getSyncStatus()); }
   }
 
   async function handlePull() {
-    setBusy('pull');
+    setBusy('pull'); setMsg(null);
     // Same risk as unlock-pull: remote wins per-key where remote.t > local.t.
     try { snapshotBeforeOp('cloud-pull'); } catch (e) { console.warn('pre-op snapshot failed', e); }
-    try { await pull(); } finally { setBusy(''); setStatus(getSyncStatus()); }
+    try {
+      const r = await pull();
+      if (r?.skipped === 'no_passphrase') setMsg({ text: 'Nothing pulled — enter your passphrase first.', kind: 'warn' });
+      else if (r?.error) setMsg({ text: `Pull failed: ${r.error}`, kind: 'err' });
+      else setMsg({ text: `Pulled ✓ at ${new Date().toLocaleTimeString()}`, kind: 'ok' });
+    } catch (e) {
+      setMsg({ text: `Pull failed: ${e?.message || e}`, kind: 'err' });
+    } finally { setBusy(''); setStatus(getSyncStatus()); }
   }
 
   async function handleForcePull() {
@@ -490,8 +507,18 @@ export default function CloudSyncPanel() {
             other devices — if the emoji matches, you are on the same slot. */}
         <div>Paired slot: <code style={{ fontSize: 14 }}>{slotFingerprint(status.pairId)}</code> <span style={{ opacity: 0.6, fontSize: 11 }}>(matches other device?)</span></div>
         <div>Last pull: {fmtTime(status.lastPull)}</div>
+        <div>Last push OK: {fmtTime(status.lastPushOk)}</div>
         <div>Remote updated: {fmtTime(status.remoteUpdatedAt)}</div>
         <div>Tracked keys: {status.trackedKeys}</div>
+        {/* Unsynced count — a stranded local write (the recurring Cronometer
+            cross-device miss) is now VISIBLE instead of silent. */}
+        <div style={{ color: status.unsyncedCount > 0 ? '#fbbf24' : '#34d399', fontWeight: status.unsyncedCount > 0 ? 600 : 400 }}>
+          Unsynced changes: {status.unsyncedCount}
+          {status.unsyncedCount > 0 && ' — tap Push now to upload'}
+        </div>
+        {!status.hasPassphrase && (
+          <div style={{ color: '#fbbf24', fontWeight: 600 }}>Locked — enter your passphrase to push/pull.</div>
+        )}
       </div>
 
       <div style={{ marginBottom: 10 }}>
@@ -502,6 +529,11 @@ export default function CloudSyncPanel() {
         <ReEnterPassphraseButton onResolved={() => setStatus(getSyncStatus())} />
         <button style={btnSecondary} onClick={handleUnpair}>Unpair</button>
       </div>
+      {msg && (
+        <div style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.4, color: msg.kind === 'err' ? '#f87171' : msg.kind === 'warn' ? '#fbbf24' : '#34d399' }}>
+          {msg.text}
+        </div>
+      )}
 
       {/* Phase 0.5 (settings cleanup) — destructive/power control tucked into a
           collapsed Advanced (per Emil). Force pull overwrites local data with the

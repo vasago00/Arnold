@@ -34,9 +34,11 @@ exports[`MetricTile (shared primitive) > renders the value, label, and the semic
           </span>
         </div>
         <div
-          style="font-size: 10px; font-weight: 600; color: rgb(74, 222, 128); margin-top: 3px; height: 13px; display: flex; align-items: center; gap: 4px;"
+          style="font-size: 10px; font-weight: 600; color: rgb(74, 222, 128); margin-top: 3px; height: 13px; display: flex; align-items: center; gap: 4px; overflow: hidden;"
         >
-          <span>
+          <span
+            style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;"
+          >
             +2 vs 30d
           </span>
         </div>
@@ -123,9 +125,11 @@ exports[`MetricTile (shared primitive) > renders without a gauge fill at pct 0 (
           </span>
         </div>
         <div
-          style="font-size: 10px; font-weight: 600; color: rgba(255, 255, 255, 0.65); margin-top: 3px; height: 13px; display: flex; align-items: center; gap: 4px;"
+          style="font-size: 10px; font-weight: 600; color: rgba(255, 255, 255, 0.65); margin-top: 3px; height: 13px; display: flex; align-items: center; gap: 4px; overflow: hidden;"
         >
-          <span>
+          <span
+            style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;"
+          >
              
           </span>
         </div>

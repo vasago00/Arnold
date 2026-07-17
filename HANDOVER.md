@@ -10,6 +10,330 @@
 ---
 
 ## Last updated (newest)
+2026-07-16 (ROUND 92) — **Coach-narrative rollout + surface-specific voices + goal-race unification + slice 2c live signals + a Monte-Carlo property test for the coach engine. Long Cowork session, build-blind (Emil rebuilds on Windows), verified progressively by screenshots; `npm test` GREEN at last confirmed build; the new coach sim is node-verified (0 violations across ~18k contexts, negative-controlled).**
+
+> Resume point for the NEXT window (coach-narrative plan, in order): **(1)** build the **structured coach-memory store** so `ctx.memory.saidAgoDays` / `kindWeight` are real (the salience hooks exist; `buildCoachContext` still hands `memory:{}`) → stops repetition, enables preference learning (Phase D). **(2)** **LLM phraser** in the COMPOSE step, gated by an "output ⊆ facts" validator, A/B'd against the deterministic composer, policed by the new coach sim (Phase H). **(3)** clinical generators (Phase F). **(4)** the parked **race/goal unification audit** (map every "which race" reference app-wide). Architecture rationale for 1→2→(vector-DB later) is logged in `COACH_NARRATIVE_DESIGN.md` §18.
+
+**A) UI + Session-Agility fixes (Emil screenshots).** • **Double-image calendar tile**: web `DayTile` used ONE figure + a text tick on two-a-days while mobile showed both — hoisted `tileFigures()` (major/minor split) to module scope; both surfaces now render up to 2 side-by-side signatures. • **Cross-train swap fixes** (`ChangeSessionWindow`/`CalendarTab`/`LivingPlan`): inline **equipment toggles** when the profile's empty (bike/pool/… were silently gated off); **duration entry** for indoor/cross-train subs (drops the run's stale miles → stores `durationMin`; mileage now gated to run-family types everywhere so a stale cross-train record stops showing "5 mi"); **no easy-run offer** on an injury-aggravated session; `cycle`/`swim`/`ski`/`walk` added to `FAMILY_STYLE`+`FAMILY_PRIORITY` (bike now leads + colors right); LivingPlan label fallback capitalizes ("cycle"→"Cycle"). • **Planner THIS-WEEK ≠ calendar** on a run+mobility day: `toPlanDay` picked the FIRST non-strength session (mobility) → showed "Recovery"; now picks the **highest-priority** session (matches the calendar's dominant pick).
+
+**B) Coach voice — surface-specific, on ONE engine.** Mobile Play/Fuel + web Plan now route through `narrateSurface` (were legacy composers). Added grounded, metric-weaving beats: **`gFuelStatus`** (fuel/daily — today's kcal/protein vs target, time-of-day aware) and **`gPlanStatus`** (plan-only — week vs target, injury reshape, strength freq, goal impact). **Surface lanes enforced**: removed `plan` from the fuel/body beats (`cut-divergence`, `reds-lowEA`, `gProgress`, `gPurpose`) so the Planner speaks plan, Fuel speaks nutrition (the "planner shows the Fuel message" bug). Fuel wiring preserves the time-critical **post-workout refuel** as the legacy path. Rendered `<CoachComment surface="plan" />` at the top of `LivingPlan` (web + mobile).
+
+**C) Goal-race unification.** The coach named the SOONEST race (raceHorizon → "Berlin") while the plan builds toward the A-race ("Valencia"). `buildCoachContext` now resolves the goal race via **`buildGoalModel`** (the canonical A-race resolver) keyed by **`planPrefs.target`** (the explicit `race:<date>` the plan generator + LivingPlan use), falling back to the goal-model heuristic then raceHorizon. Node-verified across explicit-target / heuristic / tie-break.
+
+**D) Slice 2c — dormant generators wired to LIVE context.** `gEnergyAvailability` (was hard-coded `ea.flag:false` → **never fired**) now reads `fuelForToday` EA (Mountjoy floor 30 kcal/kg); `gReadiness` reads the same sleep+HRV readiness + `adaptSession` reason the workout tile uses (synchronous; back-off nudge only when a hard session isn't done yet); `gLearned` reads the hub's learned **heat** `%/°C` (`hubFacts`) × today's session temp. Each stays silent unless its signal is real.
+
+**E) Coach Monte-Carlo property test (Phase E).** NEW `core/sim/coachNarrativeSim.js` + `.test.js`: seeded generator → ~6k diverse+adversarial contexts × 8 surfaces, asserts **surface lanes** (no fuel/body beat on Plan; no plan beat on Fuel), **surface contract**, **compose integrity** (composed text === selected beats' claims joined — the oracle the future LLM phraser must satisfy), **no self-contradiction**, **determinism**, **robustness** (null/NaN slices never throw). 0 violations across 18k+ contexts, multi-seed; **negative-controlled** (re-adding cut-divergence→plan yields 269 `fuel-on-plan` hits). Builds on the existing `runSim`/`invariants` pattern.
+
+FILES this session — EDITED: `components/CalendarTab.jsx`, `ChangeSessionWindow.jsx`, `LivingPlan.jsx`, `CoachComment.jsx`, `core/coachContext.js`, `core/coachNarrative.js`, `core/todayStatus.js`; NEW: `core/sim/coachNarrativeSim.js`+`.test.js`; tests extended `core/coachContext.test.js`; docs `COACH_NARRATIVE_DESIGN.md` (§18 cognitive-architecture decision), this HANDOVER. All committed to device (mtime-guarded). Coach engine now node-verified: coachContext harnesses (fuel/plan/EA/readiness/heat) + weekResolve + the new sim all green.
+
+2026-07-15 (ROUND 91) — **Coach Narrative engine wired live (slice 2) + Session-Agility flagship built (equipment profile · swap-first ladder · what-if engine · drag-to-swap + impact modal) + plan cross-surface SYNC + plan-tab honesty. Long Cowork session, build-blind (Emil rebuilds on Windows); Emil build-verified progressively via screenshots; `npm test` GREEN (423 tests) at the last confirmed build.**
+
+> Resume point for the NEXT window: two things are PENDING and were explicitly requested, in this order:
+> **(1) Per-session swap + substitute** — the swap currently targets a WHOLE DAY (`swapDayPlans` exchanges day records), so on a run+lift double it moves both halves. Make swap/substitute target an INDIVIDUAL session; that also unlocks the "alternate workout not on the plan" options inside the impact modal (engine `evaluateSubstitute` already built + tested, just not surfaced).
+> **(2) Coach voice on mobile Play + Fuel is thin** ("Day's fueling: 2087/1980 kcal. Sleep is the next fuel."). Likely still the LEGACY one-liner composer, not the narrative engine (`coachNarrative.js`) that IS wired into web Play/Daily via `CoachComment.jsx`. Find where mobile Play/Fuel compose their line (MobileHome / Play / Fuel components) and route them through `narrateSurface(buildCoachContext(...), 'play'|'daily')` like CoachComment does.
+
+**A) Build OOM fix (start of session).** `vite build` OOM-panicked in Rolldown (Vite 8 Rust bundler, `oxc_allocator`) while transforming `@phosphor-icons/react`. Cause: BARREL imports (`import { X } from '@phosphor-icons/react'`) force the whole ~1,500-icon library through the bundler. Fix: per-icon DEEP imports via Phosphor's official `"./*"` subpath — `import { PersonSimpleRun } from '@phosphor-icons/react/PersonSimpleRun'` (→ `dist/csr/PersonSimpleRun.es.js`). Only 2 files imported the barrel (both mine this session): `LivingPlan.jsx`, `CalendarTab.jsx`. RULE: never bare-import `@phosphor-icons/react`; always the per-icon subpath.
+
+**B) Coach Narrative slice 2 — the missed-session LIVE RE-SOLVE now fires in-app.** The pure engine `core/coachNarrative.js` (built pre-session) emits ranked "beats"; slice 1 wired purpose/knock-on/mechanism/cut-divergence via `core/coachContext.js`. Slice 2 added:
+  • `computePlanSlice()` (pure, exported, node-tested) in `coachContext.js` — reconciles the planned Mon–Sun week vs what was LOGGED (run-granular: a strength-only day reads as a MISSED run, not "done"), producing `{weekMiTarget, weekMiProjected, missed[], remaining[], strengthTarget/Done, swappedToStrength}`. A live shell fetches the planner week + activity stores and normalises; the pure core is tested in `coachContext.test.js`.
+  • `gWeekDrift` (engine) now fires on Play/Daily/Calendar: states the volume gap, JUDGES by what was missed (easy run → gentle "legs bank the recovery"; long/quality → corrective "real hole in the Valencia build"), offers redistribute/protect/absorb, warns against cramming. HONESTY FIX: engine hard-coded "You logged strength but not the …" — now conditional on `swappedToStrength` (else "You didn't get the … in this week").
+  • `goal.weakLink` wired: `resolveTrainingProfile()` (async, mirrors LivingPlan's pattern) → `weakLink.key` (threshold|longest|volume) mapped to engine lever (threshold|endurance|aerobic) in `CoachComment.jsx`; upgrades `gPurpose` to "the exact gap between you and <race>" ONLY when the profile finds a real goal gap (no fabrication).
+  Files: `core/coachContext.js`, `core/coachContext.test.js` (new), `core/coachNarrative.js`, `components/CoachComment.jsx`.
+
+**C) SESSION AGILITY (flagship, per `SESSION_AGILITY_DESIGN.md`) — built the reasoning + the interaction.**
+  • **Equipment/modality profile** — `core/modalities.js` (new) + `core/modalities.test.js`: `MODALITIES` (pool/bike/treadmill/gym/elliptical/rower), `MODALITY_CAP` (trains/jointSafe/vo2), `getModalities/setModalities` (storage key `'modalities'`, an object so no array-schema validation), `capabilitiesFor(profile,{jointSafeOnly})`, `MODALITY_ASK`. Stored + edited via **Adjust plan → Equipment** card in `LivingPlan.jsx` (toggle chips). Ask-when-unknown surfaces in the plan ladder.
+  • **`sessionAdapt.js` v2** (`buildSessionOptions`) — SWAP-FIRST (always offered, even under injury = "rest the joint, reslot"; was suppressed exactly when needed), modality substitutes GATED by owned gear + joint-safe-only under injury, week TIME-DECAY flag (openDays runway), ask-when-unknown. Tests rewritten (`sessionAdapt.test.js`) incl. Emil's exact case (knee+intervals, Peloton+gym, no pool → swap·bike·gym).
+  • **What-if engine** — `core/weekResolve.js` (new, pure, node-tested `weekResolve.test.js`): `evaluateReschedule({normWeek,fromIdx,toIdx})` → volume delta (conserved), spacing conflicts (back-to-back hard, hard-before-long-run, lost rest day), only NEW conflicts, summary + tone; `evaluateSubstitute()` → run-miles drop but stimulus kept. Operates on a NORMALISED week (`{sessions:[{type,distanceMi}]}×7`) so it imports nothing storage-coupled.
+  • **Impact modal** — `components/SwapImpactModal.jsx` (new, portal): renders the what-if + Confirm/Cancel. Shared by drag + tap.
+  • **CalendarTab wiring** — `proposeSwapBetween(from,to)` is the ONE entry (drag drop, web drag, tap-to-pick all funnel through it → impact modal → `swapDayPlans` commit which EXCHANGES day records, not stacks). Added: (i) **native web drag-and-drop** on the grid cell wrapper (desktop had NO drag — was touch-only `MobileDayTile`); (ii) **tap-to-pick** ("⇄ Move to…" in the day drawer arms `swapPickFrom`; next tapped day = target — replaced a broken AUTO-PICK that grabbed the long run); (iii) past-day guard. `movePlannedSession` was DEAD code; the real drag commit is `tileDragEnd`→`moveDayPlan` (whole-day, cross-week fallback).
+
+**D) Cross-surface SYNC + plan-tab honesty (last threads, Emil screenshots).**
+  • **Same-device divergence FIXED**: plan-tab "THIS WEEK" (`LivingPlan.jsx`) read the GENERATED block (`block.weeks[0]`), while calendar + mobile ticker read the APPLIED planner week — so a calendar swap didn't show on the plan tab. Now reads the applied week (`getPlannerWeek(wk.weekKey)`, reconstructing tile shape incl. the run+lift double-flag via `toPlanDay`), falling back to generated when nothing applied.
+  • **Mobility glyph**: mobile ticker `MobilePlanTicker.jsx` drew a green CRESCENT ("moon") for mobility; now the tai-chi WARRIOR (same `PersonSimpleTaiChi` path the calendar + plan tiles use).
+  • **Cross-device (web→mobile)**: confirmed `planner` IS a synced KEY (`storage.js` KEYS, LWW) — propagates after a sync cycle + refresh; not a missing wire.
+  • **Plan-tab honesty**: "THIS WEEK · N mi" now shows **done / planned** run miles (via `summarizePlanWeek` — same completion source as calendar/ticker), "· N missed" flag; tiles get done ✓ / missed-dim / today-highlight; the **+ LIFT** strength badge now shows on quality days too (structure silhouette had hidden it).
+
+FILES TOUCHED this session (all committed to device, build-blind): NEW `core/modalities.js`+`.test.js`, `core/weekResolve.js`+`.test.js`, `core/coachContext.test.js`, `components/SwapImpactModal.jsx`; EDITED `core/coachContext.js`, `core/coachNarrative.js`, `core/sessionAdapt.js`+`.test.js`, `components/CoachComment.jsx`, `components/CalendarTab.jsx`, `components/LivingPlan.jsx`, `components/MobilePlanTicker.jsx`. Pre-existing design docs remain the source of truth: `COACH_NARRATIVE_DESIGN.md`, `PLAN_STACK_DESIGN.md`, `SESSION_AGILITY_DESIGN.md`. Backlog still open: #59 barcode camera, #60 photo→FatSecret, #61 send-to-watch, #62 equipment profile (DONE this round), #63 drag-to-swap (DONE this round). VERIFY-ON-BUILD checklist for next window: web drag a session between days → impact modal → confirm swaps (exchange); "⇄ Move to…" then tap a day; Adjust plan → Equipment toggles persist + gate the ladder; plan tab shows done/planned miles + ✓/missed + "+ LIFT" on Wed; mobile mobility = warrior glyph. Env notes: remote-devices bridge intermittently drops (re-load tools via ToolSearch); commit with mtime-guarded `device_commit_files` and RE-READ the device mtime after each commit (reusing a stale expected mtime → rejection); `@phosphor-icons/react` deep-import rule (A).
+
+2026-07-13 (ROUND 90) — **Coach-voice fix + Living-plan volume/recovery model + calendar tile labels. Cowork session; Emil build-verified several via screenshots. `npm test` GREEN after the one test update below.**
+Six threads, all committed to the device (via the Cowork remote-devices bridge), build-verified progressively by Emil:
+
+**(1) #54 coach-voice — "same line on every screen" fixed.** Root cause: `fitnessInsight` (`core/hub/coachInsights.js`) emitted a race-readiness clause with a spoken "(confidence NN%)", and `CoachComment.jsx` wove the `fitness` insight into FOUR surfaces (leverage/plan/trend/digest), so every screen tailed the same "…for the 5K — (confidence 61%)". Fixes: (a) dropped the spoken confidence from `fitnessInsight` (the FIT_MIN_CONF gate still silences low-confidence reads — we just don't SAY the %); (b) `HUB_KINDS_FOR` now weaves race-readiness ONLY on `leverage` (Start/EdgeIQ) — removed from planState/trendState/digest; (c) the race target now prefers the goal/A-race (`goalTimeSecs`, else priority-A, else soonest) instead of the soonest event, and reads the canonical `goalTimeSecs` (the old code read goalSecs/goalTime and missed it) — kills the "5K" for a marathoner. Files: `core/hub/coachInsights.js`, `components/CoachComment.jsx`.
+
+**(2) Recovery on EVERY off-day (mobility).** `planGenerator.generateWeeklyPlan` L143 filled mobility only on OPEN AVAILABLE days (`for (const s of avail)`), so a day the athlete marked unavailable (Emil's Thursday) stayed blank `rest`. Now fills ALL empty days (`for (let s=0;s<7;s++)`) — a day you can't train IS a recovery day (unified-Recovery model), so the plan reads as a complete week, no blank gaps. Updated `src/tests/hubPlanAvail.test.js` (old test asserted off-days stay null; new test asserts no TRAINING on unavailable days but Recovery is allowed).
+
+**(3) Two-a-days post on the calendar.** The generator marks a run+strength double as a `strength:true` FLAG on the run (not a 2nd session), so `daySessions()` returned one session and the calendar's planned secondary rail never saw the strength half. `core/planner.js daySessions()` now EXPANDS the strength flag into an explicit Strength session — idempotent (skips if a standalone strength session already exists → never stacks after a makeDay round-trip), non-mutating (returns copies), drops the flag on the run copy so strength shows once. Every reader (calendar, drawer, counts) now sees the double.
+
+**(4) Volume model — peak capped at the GOAL, race weeks tamed.** Two bugs Emil caught (weeks hitting 61/50 when "peak" said 48; race weeks at 64–72):
+  • `LivingPlan.jsx` ceiling was `max(userCeiling, goalPeak(48), 1.4×base, 30)` → `1.4×44=62` overrode the goal. Now: when a goal is set, ceiling = the goal peak (`vr.peakMi`), floored at current base, raised only by an explicit user ceiling — NOT by 1.4×base. No-goal plans keep the classic 1.4×base ramp. (Per `volumeModel.recommendedPeakMi`, a 3:29 marathon needs ~48 mpw — 62 was not a training requirement.)
+  • `planGenerator.generateSeasonBlock` now mini-tapers EVERY marathon week (A-race AND supported B-marathons Berlin/NYC): `effTarget = 0.6×base`, quality dropped, no separate long run → race weeks land ~50 (easy miles + the 26.2) instead of 64–72.
+
+**(5) B-marathon RECOVERY weeks (science-driven).** `racePhase` only gave the A-race a recovery phase, so Berlin/NYC sat between two full 52-mi build weeks (NYC especially: 52·race·52). Added a post-marathon recovery week in `generateSeasonBlock`: a marathon in the PREVIOUS week → this week eases to ~30 easy-only miles (no quality, short long run), then the build RESUMES (ramp is NOT reset — a dip in the saw-tooth, honoring Option-A). Sequence now: `before 52 · race 50 · recovery 30 · resume 52`. Rationale (given to Emil): 26.2 of eccentric load → CK/muscle-damage several days, glycogen 24–72h, ACWR spike if you rebuild immediately; 3 marathons in 10 wk makes the post-race down week the key protector.
+
+**(6) Tune-up (half) race weeks tightened.** Emil's Oct-5 week showed 65 mi: it holds the NYRR Staten Island Half (13.1) and the code kept the FULL 20-mi long run AND stacked the race (8+8+8+8+20+13.1). Now a race in a build week — marathon OR tune-up — never has a separate long run piled on: a tune-up drops the long run (race replaces it) + trims to one quality → Oct-5 lands ~45. `planGenerator.js`.
+
+**(7) Calendar tile labels (web).** `CalendarTab.jsx` DayTile top tag now spells workouts out in ALL CAPS via `FAMILY_LABEL_FULL` + `familiesLabel()` — TEMPO/MOBILITY/INTERVALS, and two-a-days as a compound primary-first ("RUN + LIFT", "MOBILITY + RUN"). Removed the now-redundant planned secondary `|LIF` side rail (the compound headline names it). Mobile unchanged — MobileDayTile already shows per-session glyphs for two-a-days (Emil's suggestion) + a short primary code.
+
+FILES TOUCHED (all committed to device, build-blind → Emil rebuilds): `core/hub/coachInsights.js`, `components/CoachComment.jsx`, `core/hub/planGenerator.js`, `core/planner.js`, `components/LivingPlan.jsx`, `components/CalendarTab.jsx`, `src/tests/hubPlanAvail.test.js`. Verified in-sandbox: node syntax + esbuild transforms clean; the full season assertion set in `hubPlanGenerator.test.js` and the updated `hubPlanAvail.test.js` pass against the real engine. VERIFY on build: coach voice distinct per surface + no "confidence %"; calendar Thursdays = Recovery; run+strength shows on the tile; build weeks ~48–52, marathon weeks ~50 with a ~30 recovery week after Berlin/NYC, Oct-5 half week ~45; tile tags ALL-CAPS + "RUN + LIFT", no side |LIF. KNOWN residual: non-race build weeks read ~48–52 vs the "48" label (per-session-minimum rounding overshoot) — offered to tighten if Emil wants exact.
+
+2026-07-05 (ROUND 89) — **UI/UX uplift: nav IA settled + 3.2b training-profile ("recipe-path") built. BUILD-BLIND — Emil verifies on Windows.**
+Design track (mock-first workflow via the visualize widget; "I mock, we agree, I build"). Decisions locked with Emil:
+(A) **Nav IA** — retire Core → More on mobile (mirrors the Labs→More demotion). `MobileHome.jsx`: Core removed from bottom
+NAV_ITEMS + SWIPE_ORDER (now start·edgeiq·play·fuel·calendar), `TAB_TO_NAV_ID` clinical→'more', Core added to MoreMenu,
+`handleMoreMenuTap` routes 'core'→onOpenTab('clinical'). **Needs a Windows build+verify** (Core in More, 5 tabs on the bar).
+(B) **Calendar = the living plan** (agreed, NOT yet built): the calendar cells already ARE the plan; add trajectory/recipe as
+tap-to-expand inside the coach banner (+ web Plan tab for season strategy), session purpose + execution score into the drawer.
+Nothing new added to mobile height. This is 3.2c/3.2d.
+(C) **Training profile — rejected the 8-system scorecard AND progress bars** ("shopping list, not original"). Landed on the
+**recipe→finish PATH** (hybrid of the constellation + the race recipe): ingredients of your proven build are nodes wired into
+one FINISH node; the WEAK LINK is the red dashed edge; the finish shows current trajectory vs the result the proven build
+delivered. Position/light carry meaning — no bars.
+Built this session (3.2b):
+• `core/trainingProfile.js` (pure) — `buildTrainingProfile({activities,races,today,aRaceDate,predictFinishSecs})` composes
+  `raceRecipe.buildRaceRecipe` + an INJECTED finish projector into `{ingredients, weakLink, finish{now,proven,gainSecs,
+  aheadOfProven,goalSecs}, headline}`. **Conservative counterfactual**: target = the proven race's RECORDED result (not a
+  fabricated better-than-ever number); "worth" = time to reclaim back to it; omitted entirely when no result on record.
+  `resolveTrainingProfile()` async wrapper wires real `predictFinishSecs` + storage (mirrors resolveRaceRecipe → stays pure).
+• `core/trainingProfile.test.js` — weak-link ID, conservative counterfactual, ahead-of-proven, no-fabrication, graceful-empty,
+  + parseRaceFinishSecs/fmtFinish units. **Sandbox VM was down → NOT yet run; Emil runs `npm test` on Windows.**
+• `components/RecipePath.jsx` — `<TrainingProfileCard/>`: compact strip + tap-to-expand full SVG path (mirrors MobileEdgeIQ's
+  inline-expand; no new routing). Re-derives on storage change. Renders nothing until there's a finish/ingredients.
+• Mounted in `MobileEdgeIQ` (after CoachComment, before Health Systems).
+FIX (same round, after Emil's first build showed a lone FINISH node + "Building toward your race"): the recipe was empty
+because `raceRecipe` detected a past marathon ONLY via `distanceMi ≥ 24` — Emil's races carry km / name-only, so no reference
+build was ever found. Added `isMarathonRace()` (mi OR km OR /marathon/ name, excl. half) used for both past-reference and
+next-A-race; `trainingProfile` now falls back to CURRENT-build ingredients (target-less, status 'current') when no proven
+marathon exists so the path always has substance; `RecipePath` finish color is neutral teal (not amber "behind") when there's
+no proven baseline, and labels omit "→ target" in the fallback. Tests added: isMarathonRace + name-only reference + current-
+build fallback. Still `npm test`-pending on Windows (sandbox VM down).
+FIX 2 (Emil's 2nd build showed the current-build fallback + "log a past marathon" — his marathons are in ACTIVITY history,
+not the race store): `raceRecipe` now detects the reference marathon from BOTH sources via `findReferenceMarathon()` — a
+~26.2mi run (band 25.5–27.5mi, excl. ultras) counts, and the activity's own `durationSecs` supplies the proven finish for the
+counterfactual (no manual entry). Race-source refs with no recorded result borrow the finish from a marathon activity ±3 days.
+Tests added (activity-sourced reference + finish time). `npm test`-pending on Windows.
+
+★ CROSS-TRAINING / HYBRID-ATHLETE awareness (Emil, 2026-07-05 — v1 BUILT). "A good runner does not need only to run — strength,
+biking, swimming build endurance too; there's a fine line. Amateur athletes with jobs/families need these as OPPORTUNITIES."
+EVIDENCE (researched + cited, see chat): intensity-matched aerobic XT maintains the engine near 1:1 short-term (~50% of run
+volume replaceable by cycling, or exclusive deep-water running, with NO VO2max/5K loss for 4–8 wk — Foster & Tanaka Sports Med;
+DWR reviews), BUT specificity means it does NOT build marathon-specific fitness and transfers imperfectly (worse the more
+trained). Strength → running economy +2–8% & durability (Blagrove 2018; 2023 SportsMed meta), a SEPARATE lever, not aerobic
+volume. Concurrent interference is real mainly for explosive power, minor for endurance (separate sessions ~3–6h).
+BUILT (v1) in `raceRecipe.windowMetrics`: aerobic XT (bike/swim/row/elliptical/pool-run, via regex; NOT strength/walking) is
+converted to run-equivalent miles at the athlete's median easy pace × `CROSS_TRAIN_CREDIT = 0.75` and folded into aerobic
+volume (avgWeeklyMi/peakWeeklyMi). Run-specific fields (longestMi/longRuns/weeksWithQuality) stay RUN-ONLY. windowMetrics now
+also returns `runMi` + `xtEquivMi` (transparency); `trainingProfile` adds an "incl. N mi cross-train" note on the volume
+ingredient; `RecipePath` renders it. `CROSS_TRAIN_CREDIT` is a single knob meant to become hub-learnable from Emil's own
+XT→run-performance response. Test added (0.75 credit; run-specific untouched). `npm test`-pending on Windows.
+STILL PENDING: (a) strength→durability crediting (needs a durability dimension — 3.2c/profile); (b) effort/HR-weighting of the
+XT credit + hub personalization of the 0.75; (c) knee/injury as a plan CONSTRAINT + plan-side XT SUBSTITUTION offers ("swap
+easy run → bike to offload the joint") — all 3.2c.
+
+★ SESSION ADAPTATION ENGINE (Emil, 2026-07-05 — "when I can't do the 20-mile long run, offer options without compromising the
+goal; immediate reaction + adaptability is where the coach adds value"). Principle: **protect the session's INTENT, not the
+prescription.** BUILT (pure, tested): `core/sessionAdapt.js` — (1) `SESSION_INTENT` map (each type → purpose + trained dims +
+loadBearing flag; this is ALSO the session-intent vocabulary 3.2d/3.2c need); (2) `buildSessionOptions(session, constraint,
+ctx)` → ranked substitution ladder, least-compromise first, each option {title, how, keeps, keepsLevel, tradeoff, compromise},
+plus a skipWarning framing SKIP as the only real setback. Ladders grounded in methodology: long run → reschedule / split
+(12+8) / shorten+MP (Canova) / run+XT-extend; injury → pool-run (impact-free ~1:1 aerobic) / bike / shorten (NO reschedule —
+moving doesn't fix a joint); quality → fewer-reps-hold-pace / bike-intervals; easy → flex/XT. Test locks all ladders + ordering
++ injury reorder + skip framing. `npm test`-pending. NOT yet surfaced in UI (needs the plan/session card — 3.2c/3.2d). Mock of
+the "long run at risk → 3 options" card shown to Emil (approved direction).
+
+3.2c LIVING PLAN — BUILT (build-blind). `components/LivingPlan.jsx` replaces the static `SeasonPlanGenerator` "✦ Generate plan"
+panel in `CalendarTab` (import + mount swapped at ~L30/L844). The plan is now LIVING: auto-derives on mount (no Generate button)
+via the SAME engine (generateSeasonBlock/pasteSeasonBlock — unchanged), leads with the marathon-coach verdict/phase/targets/why
+(getSeasonCoach) + the WEAK LINK it's prioritizing (resolveTrainingProfile), previews the periodized ramp, applies in one tap;
+the old config (target/days/counts/focus/regenerate + paces) is DEMOTED behind a collapsed "Adjust". SeasonPlanGenerator.jsx
+kept in the tree (now unused) as a fallback. `npm test`-pending on Windows (no new tests — presentational; engine already
+tested). VERIFY on build: Calendar shows "Your plan" (living) not "Generate plan"; coach verdict + weak-link line render; Apply
+pastes to the grid; Adjust still works.
+3.2c v2 — COACHED WEEK VIEW + REST DAYS (build-blind). Emil's feedback on v1: "static, only total mileage, no strength, doesn't
+feel like my coach made it" + "a coach recommends days off." Fix: `LivingPlan` now renders a **THIS WEEK** section from
+`block.weeks[0].days` (the engine already generates a full days[] — runs/quality/strength/rest — we just weren't showing it).
+Each day shows label + pace + per-session PURPOSE (via `intentFor` from sessionAdapt SESSION_INTENT); **strength is visible**;
+**rest is first-class** ("Recovery — where the work becomes fitness"), and if a week has 0 rest days the coach nudges to protect
+one (framed as not compromising the block). SESSION_COLOR added. Approved mock: arnold_living_plan_coached_v2.
+3.2c v3 — EXECUTIVE LAYOUT (build-blind). Emil rejected v2's vertical list + full-width mileage bars ("straight long lines",
+"vertical waste, empty horizontal", "needs tight/clear/executive", "shouldn't scroll past the calendar"). Approved mock:
+arnold_living_plan_executive_horizontal. Rebuilt `LivingPlan` render: (1) header + phase chip + countdown on ONE line; (2) an
+executive FACT ROW (this-week / long-run / peak / weak-link) horizontal, numbers-forward; (3) coach why one line; (4) THIS WEEK
+as a **7-across grid** (distance = hero number, pace secondary, +S strength badge, rest muted-dashed) — uses the horizontal
+space; (5) the 23-week ramp collapsed to ONE tight **phase ribbon** (per-week segments colored by phase, peak highlighted) — no
+more long bars. Adjust block unchanged. Added SHORT_NAME + Stat color prop. VERIFY render on build.
+DE-DUPE + GAP FIX (build-blind, Emil: "Marathon Coach on Start and Your plan on Calendar overlap; awkward gap under the drawer").
+Decided roles: **Start = the glance** (Marathon Coach: verdict/feasibility/this-week/long-run/why), **Calendar = the execution**
+(sessions + arc + apply). `LivingPlan` fact row now shows ONLY plan-specific numbers (peak + weak link); removed the duplicated
+verdict/this-week/long-run + the coach "why" (Start owns those). GAP: the mobile day-drawer wrapper had `paddingBottom:112`
+(bottom-nav clearance) BEFORE the plan → ~112px dead space; moved the clearance to trail the plan (CalendarTab). 
+DISPLAY FIXES (build-blind, Emil screenshot): (1) the arc's "huge yellow dot" was an SVG `<circle>` stretched into a blob by
+`preserveAspectRatio="none"` → replaced with a thin non-scaling vertical amber tick at the peak; (2) web day-tiles were huge
+with content cramped top-left → content now CENTERED + shorter padding; (3) mobile showed 7 cramped columns → `LivingPlan` now
+takes `isMobile` (passed from CalendarTab) and renders a tight one-row-per-day LIST on mobile, the 7-across grid only on web;
+(4) the "Overwrite days" checkbox rendered enormous on mobile → constrained to 14×14 + accentColor. `npm test` unaffected (visual).
+DISPLAY FIXES 2 (Emil follow-up screenshots): (a) web day-tiles still read as big "buttons" → stripped the box chrome
+(border/background/rounded/overflow) down to a light centered column with just a top color accent; smaller fonts (mi 18→15);
+dropped the redundant "+ Str" line (day shows ·2×). (b) ROOT CAUSE of "all buttons huge on mobile": `mobile.css` forces
+`input:not(.arnold-compact-input)` → 44px min-height/16px font and `button:not(.arnold-compact-btn)` → 42px min-height, both
+`!important`, overriding inline styles. Fix = add the opt-out classes: checkbox → `arnold-compact-input`, Apply/Remove/Regenerate
+→ `arnold-compact-btn`. (c) plan defaulted to "next race" → a tune-up 5 days out gave a trivial 1-week block; default now
+prefers the A-race (goal), so the full periodized build shows by default. All visual/UX; tests unaffected.
+NOTE for future components: any inline-styled input/button on a mobile screen MUST carry `.arnold-compact-input` /
+`.arnold-compact-btn` or the global 44/42px `!important` floor will inflate it.
+
+WEEK-TILE REDESIGN (build-blind, Emil-approved via mocks; see DESIGN_LESSONS "Week-tile design"): `LivingPlan` "This week"
+rebuilt. Tile = 3 rows (day+STR badge / icon+type+mileage / Lightning+pace), faint session-color wash, big mileage hero.
+Phosphor icons wired (PersonSimpleRun/PersonSimpleTaiChi/Trophy/Bed/Lightning) — NO dumbbell (STR text). WEB = full 7-day week
+with rest/mobility as RECESSIVE dashed/dimmed tiles (purpose line). MOBILE = ONLY workout tiles (3-across) + rest/mobility
+summarized in the header line. Also created `DESIGN_LESSONS.md` (design memory, now law in CLAUDE.md resume protocol) capturing
+all hard-won rules incl. mock-first, mobile compact-class trap, use-the-canvas, no shopping-list bars, forward-looking modeling.
+`npm test` unaffected (visual). VERIFY on build: web full week + recessive rest tiles; mobile workouts-only + header chips; icons render.
+
+TEST FIX (2026-07): 3 trainingProfile tests failed → exposed a REAL bug: `goalSecs` was read via `parseRaceFinishSecs` (result
+fields only), so it never found `goalTimeSecs` (where the goal is stored) → the whole forward-looking model silently disengaged
+(goalStr null) on the real app too. Fixed: `goalSecs = num(nextARace.goalTimeSecs) ?? parseRaceFinishSecs(...)`. Tests green again.
+NEW BACKLOG (Emil, Sprint 3) — **quality-session STRUCTURE** (task #35): intervals/tempo need warm-up + main set (straight reps /
+pyramid / inverted pyramid / fartlek / cruise intervals, varying by phase) + cool-down, with paces + recoveries. Show a compact
+tag on the tile ("5×1km", "pyramid", "fartlek") + full breakdown in the session drill-down (3.2d). Easy/long stay one line.
+Needs a workout-structure generator + sim/unit tests. Logged in DESIGN_LESSONS. This is the natural next Sprint-3 depth.
+QUALITY-SESSION STRUCTURE v1 — BUILT (task #35, build-blind). `core/workoutStructure.js` (pure, tested):
+`buildQualityStructure({type,phase,paces,seed})` → {tag, shape, warmup, mainSet, cooldown, shorthand, profile}. Shapes: tempo →
+cruise (3×2mi / 2×3mi / 4mi continuous), taper → 3×1mi sharpener; intervals → pyramid (1-2-3-2-1) / 6×800m / 8×1′ fartlek; seed
+(day/week index) rotates so weeks differ; paces from the plan's VDOT paces. `workoutStructure.test.js` (6 cases). Chosen DISPLAY
+= **EFFORT SILHOUETTE** (Emil picked Option A over bar-strip/beads): `WorkoutSilhouette` in LivingPlan draws one flowing filled
+curve from `profile` segments. Quality tiles now show the tag ("3×2mi ▸") and are TAPPABLE → open a compact drill-down (header +
+silhouette + shorthand) below the week grid (`openSession` state). Easy/long/rest unchanged. `npm test`-pending on Windows.
+VERIFY: quality tiles show tags, tap opens the silhouette; non-quality tiles unaffected. NEXT (de-linearize v2): a marathon-pace
+session type + per-phase quality MIX so quality-2 weeks also differ; then 3.2d (full session drill-down + adaptation ladder).
+
+LIVINGPLAN FIXES (2026-07, Emil build feedback, build-blind): (1) plan defaulted to Berlin (soonest marathon) not Valencia →
+`defaultTarget` now prefers an A-race, else the soonest marathon WITH a `goalTimeSecs` set (the one you're training for), else
+soonest marathon; header countdown now shows the TARGET race (`targetRace`), not `nextMarathon`. (2) removed the confusing
+yellow ARC peak tick (the "peak N mi" label already states it). (3) added a MINI effort silhouette to quality tiles' top-right
+(`WorkoutSilhouette height=15`); `WorkoutSilhouette` gained a `height` prop (mini mode: thinner stroke, no margin). (4) rest icon
+Bed → weight="duotone" (prettier). All visual/logic; tests unaffected.
+KNOWN — pre/post-workout nutrition NOT derivable from the Cronometer **Daily** CSV: `preTrainingCarbs`/`postTrainingProtein`
+(tileMetrics ~1686/1741) sum nutritionLog entries within a 2hr-pre / 60-min-post window around a session's startTime — they need
+TIMED meal entries. The Daily CSV → `parseCronometerCSV` → `upsertFullDayEntry` writes ONE lump per day (meal='full-day',
+time='00:00'), so there's no meal timing to window. Fix path: the LIVE Cronometer sync (per-meal w/ times) OR a new Servings/
+per-serving CSV parser (if the export carries meal Group/time). Not a bug — a data-granularity limit.
+LIVINGPLAN FIXES 2 (2026-07, build-blind): (a) mini tile silhouette enlarged (web 84×22, mobile 50×16) — was too tight; (b) BLUE
+CALENDAR RINGS were the plan PREVIEW (onPreview) firing on the mount auto-generate → now `generate(target,{preview:false})` on
+mount, preview only on explicit (re)generate; (c) session drill-down now opens for EVERY workout tile (all tappable, cursor
+pointer) below the week grid — quality → silhouette + shorthand, easy/long → purpose + target pace, strength → ~45 min. Rest/
+mobility not tappable. All visual; tests unaffected.
+LIVINGPLAN FIXES 3 (2026-07): tile bottom row reworked — mileage moved to BOTTOM-RIGHT (bigger, 22px), aligned with the effort/
+pace/tag on the bottom-LEFT (`marginTop:auto` pushes the row down); row 2 is now just icon+name. Frees vertical space, better fit.
+CRONOMETER pre/post confirmed with Emil's `dailysummary(1).csv` = Cronometer **Daily Summary** (one row/day, totals only, no meal
+times) → cannot feed pre/post-workout metrics. Task #36: build a parser for the Cronometer **Servings** export (per-food rows w/
+Group + Time) to write TIMED nutritionLog entries. Awaiting a Servings sample with a Time/Group column. (Servings export is
+web-only: cronometer.com → Profile → gear → Export → "Export Servings"/"food & recipe entries" — has timestamps.)
+
+3.2d — SESSION DETAIL + ADAPTATION + EXECUTION (task #26, build-blind). In the LivingPlan drill-down (tap any workout tile):
+(1) purpose + target already shown; (2) **adaptation ladder** — a "Can't do it today?" toggle surfaces `buildSessionOptions`
+(sessionAdapt engine) as ranked swaps that protect the session's intent, colored by how much each keeps + the skip-warning;
+(3) **execution score** — new `core/sessionScore.js` (pure, tested) `scoreSession({planned,actual})` → {score, verdict
+(nailed/solid/partial/off), parts}: distance-hit + pace-hit (quality/long) or stay-controlled (easy) or completion (strength).
+For a PAST day, the drill-down finds the logged activity on that date and shows "Executed · <verdict> N/100". Tests:
+sessionScore.test.js (6 cases). `npm test`-pending.
+
+INJURY-AWARE ADAPTATION (task #37, Emil 2026-07 — build-blind). An injury is SELECTIVE: it aggravates some run session types but
+not others (knee tolerates easy running, aggravates tempo/intervals). `core/injury.js` (pure, tested): INJURY_LIBRARY (knee/
+achilles/shin/itb/hip/foot → aggravators: intensity/impact/volume) + `sessionAggravatesInjury(type, area)` + `injuryNote`.
+`sessionAdapt.buildSessionOptions` now injury-TYPE-aware: only an AGGRAVATED session gets the offload ladder (pool/bike/reduce,
+no reschedule); a TOLERATED session under injury behaves normally + returns `injuryNote`/`aggravated`. (Old `injury:true` = generic
+= aggravates all, backward-compatible.) LivingPlan: **niggle selector** in Adjust (stored key `'injury'`, cloud-synced),
+aggravated tiles flagged **⚠ amber** on the day label, drill-down shows the protect/tolerate note + swaps. STRENGTH is NOT
+adapted — Emil's trainer owns exercise selection. Tests: injury.test.js + sessionAdapt.test.js updated. `npm test`-pending.
+This supports the Monday rollout: flag the knee → tempo/intervals get flagged + offer swaps, easy running stays as planned.
+
+LIVINGPLAN FIXES 4 (2026-07, Emil build feedback): (1) plan reverted to BERLIN despite choosing Valencia → the `target` choice
+now PERSISTS (`planPrefs.target`, loaded on mount) so it survives remounts, and generate() saves it. (2) "asked for 3 strength,
+saw 2" → config changes (runDays/strengthDays/focus/avail) now AUTO-REGENERATE via a useEffect (skips initial mount), so changing
+the count applies immediately without hunting for Regenerate. (3) REST + MOBILITY unified into one **Recovery** day (taichi icon,
+"rest or 15-min mobility — your call") — OffTile/OffChip no longer split them; plus a universal "🧘 ~10 min mobility on most days"
+note under the week. (4) INJURY_LIBRARY extended with **upper body** (shoulder/neck/arm — aggravates nothing running-wise, recorded
+so the trainer adapts strength) + calf + lower-back. Tests: injury.test upper-body case added. `npm test`-pending.
+
+PEAK-STILL-42 FIX (2026-07, Emil: "why is peak still 42 with Valencia?"). Root cause: the goal-driven volume only fires when the
+A-race has `goalTimeSecs`, and Valencia had none → `ceiling = 1.4 × weeklyRunDistanceTarget(30) = 42`. Fix: (1) `generate()`
+reads the target race + goal FRESH from `storage.get('races')` and derives a goal from `goals.targetRacePace` as a fallback;
+(2) added a **"Goal time" input** in Adjust (shown for race targets) → `commitGoal` writes `goalTimeSecs` onto the target race via
+`saveRaces` (dual-writes storage('races') + localStorage('arnold:races')) then regenerates. So the RACE is the single source and
+setting the goal there lights up BOTH the volume peak AND the forward-looking training profile. A ⚠ prompts when no goal is set.
+ACTION for Emil: open Adjust → enter Goal time 3:30 for Valencia → peak should become ~48 and the profile's goal populates.
+GOAL-SOURCE RECONCILE (2026-07): Emil's 3:29 marathon goal was in **Performance goals** (`goals.marathon.targetSecs`, GoalsHub),
+NOT on the race's `goalTimeSecs` — two separate stores, so the plan (reading race.goalTimeSecs) never saw it → peak 42. Fix:
+(1) `generate()` goal read now falls back to `goals.marathon.targetSecs` → peak ~48 immediately; (2) the Adjust Goal-time field
+PRE-FILLS from `goals.marathon.targetSecs` when the race has none, so 3:29 shows there; committing writes it onto the race
+(single source going forward). (3) Goal input AUTO-FORMATS: parseGoal accepts bare digits ("330"→3:30); commitGoal reformats the
+display. Emil prefers the Calendar goal field over the Plan-tab Performance-goals list (candidate to deprecate the marathon
+Performance goal later, once the race is the source everywhere).
+PLAN START DATE (2026-07): **Start = a rolling DATE dropdown** in Adjust — `startDateOptions()` lists today → +14 days (any day,
+not just Mondays), computed from `new Date()` each render so it rolls forward; a stale saved `planPrefs.startDate` resets to
+today on load. generate() passes `today: startDate` → the block starts that week (engine is still Monday-week-anchored, so a
+mid-week start's week-1 tile spans that Mon–Sun — acceptable). Header shows "Week 1 · starts <date>" when startDate > today.
+Auto-regenerates on change. `npm test` unaffected.
+DAY PREFERENCES (task #38, Emil: "set my run/strength days from the start + keep flexibility + resolve conflicts"). Engine:
+`generateWeeklyPlan` honors `strengthDows` (pin exact strength days — double onto a run, else pure) and already honored
+`longRunDow`; both threaded through `generateSeasonBlock` base. LivingPlan Adjust: **Long run day** (Auto + Mon–Sun chips) +
+**Strength days** (Mon–Sun toggles); persisted in planPrefs; auto-regenerate; unavailable days disabled; chips carry
+`arnold-compact-btn`. PHILOSOPHY: the athlete's choice WINS — a ⚠ flags when a pinned strength day lands on a hard/long run
+("coach would space them, kept per your choice"), never a silent override. Full hand-edit-any-day flexibility unchanged
+(calendar drawer + fill-empty protection). Tests added (strengthDows + longRunDow honored). `npm test`-pending.
+NEXT (Sprint 3 order): 3.3 live plan-level re-solve, or de-linearize v2 (MP session type + per-phase quality mix), or placement (#32).
+Also #36 servings parser when Emil sends the export.
+
+STILL OPEN A — **placement (relocation)**: the plan still sits below the day drawer. Full IA (task #32) not done: web → move to
+the **Plan tab**; mobile → a compact plan summary at the TOP of Calendar that expands. Needs Arnold.jsx tab wiring + mobile top-slot.
+
+★ TRAINING PROFILE — REORIENTED FORWARD-LOOKING (2026-07, Emil: "why rely on a marathon from 8 months ago to predict a race 3
+months out? confused by the logic"). Valid critique — the recipe-as-centerpiece was backwards. REBUILT `trainingProfile` to be
+CURRENT-vs-GOAL: (1) `volumeModel.goalRequirements(goalTimeSecs, distMi)` → {peakMi, longRunMi (18–22), thresholdWeeks (8–12)},
+evidence-anchored; (2) ingredients now compare the CURRENT build (windowMetrics) to what the GOAL requires; (3) weakLink = the
+biggest gap TO THE GOAL; (4) finish = current-fitness projection vs the GOAL time (gapToGoal), NOT vs a past race; (5) the past
+marathon is optional CONTEXT ("you've run 4:07 before — proof the goal's in range"), never the driver. `RecipePath` updated:
+FINISH node shows now → goal, headline is forward-looking, proven shown as a context line. The finish projection still comes
+from the injected current-fitness predictor. Tests rewritten (forward-looking) + goalRequirements tests added. `npm test`-pending.
+This also means the profile NO LONGER depends on importing old marathons — it works from current data + the goal time alone.
+
+TRAINING-PROFILE REFERENCE (2026-07, now secondary): Emil's profile stayed on the "log a past marathon" fallback because his past marathons
+weren't in the app's activity store (Race Timeline only has 2026 races; Garmin activity window doesn't reach 2025). He shared an
+Activities.csv with 2018–2025 marathons (all ~26.2–26.8 mi, in the detection band; NYC 2025-11-02 = 4:07:49 is the most recent).
+`parseActivitiesCSV` maps Distance→distanceMi, Time→durationSecs, so importing it (EdgeIQ weekly CSV sync → detects 'activities'
+→ mergeActivities) makes `findReferenceMarathon` pick NYC 2025 as the reference (its duration = the proven finish). Added a
+**sparse-reference guard** in `trainingProfile`: if the reference marathon's 16-wk window has < 15 mi/wk (race imported but not
+the surrounding training), skip the vs-recipe ingredients (show current build) but STILL show the proven-finish comparison +
+"reclaim" headline — so a marathons-only import gives proven 4:07 vs projected 4:12 without inventing "you're ahead" gaps. Test
+added. For the FULL recipe (volume/long-run/threshold of the reference build), Emil needs his full run history imported, not just
+the marathons. Deferred nicety: a "set my reference marathon" picker.
+GOAL-DRIVEN VOLUME — BUILT (build-blind). Root cause found: `LivingPlan` set `ceilingMiles = 1.4 × weeklyRunDistanceTarget
+(30) = 42`, so the ramp capped at 42 regardless of goal (the coach's separate "50-mi ceiling" is a different default). Fix:
+new `core/volumeModel.js` — `recommendedPeakMi(goalTimeSecs, distanceMi)` maps goal marathon time → peak (anchor 3:30→48,
+~+1.5mi/10s faster, clamp 30–70, marathon-only) + `volumeReadout()` (peak + note + behind flag). `LivingPlan.generate()` now
+reads the A-race `goalTimeSecs` (from the target race, else priority-A, else next marathon) and sets
+`ceilingMiles = max(user ceiling, recommendedPeak, 1.4×base, 30)` so the ramp climbs to the goal peak; a "◎ Peak N mi — what a
+H:MM marathon needs" line renders. Tests added (volumeModel.test.js). `npm test`-pending. Goal DATA home = `race.goalTimeSecs`
+(set in GoalsHub) — that's a fine home; the goals-SCREEN UX cleanup Emil flagged is separate/cosmetic, deferred.
+DE-LINEARIZE — v1 BUILT (build-blind). `generateSeasonBlock` now: (1) **cut-back weeks** — in a sustained build (nWeeks ≥ 8),
+every 4th build week steps DOWN ~20% (effTarget/effLong) to consolidate, while the THREADED weeklyMiles stays on the underlying
+ramp so the build keeps climbing → the arc becomes a saw-tooth, not a straight line. Phase stays 'build' (downstream phase
+logic untouched; verdict 'cut', `cutback:true` flag, own "why"). Short blocks (<8 wk) unchanged. (2) **rotating quality** —
+`generateWeeklyPlan` gains `qualityLead`; the block alternates intervals-led / tempo-led across build weeks (visible only when
+focus places 1 quality/wk; with 2 quality both types already present — so this is minor until we add session-mix variety / a
+marathon-pace session type). Tests added (cut-back saw-tooth + ramp-still-climbs + short-block-unchanged + qualityLead rotation)
+and existing season-block tests preserved (horizon-4 stays all-build ramping). `npm test`-pending.
+STILL OPEN (de-linearize v2, later): a distinct marathon-pace/progression session type + varying the quality MIX per phase
+(so quality-2 weeks also differ), planned AM/PM doubles as explicit two-a-days, hybrid strength periodization by phase. v1 ramps from `weeklyRunDistanceTarget` toward
+ceiling (=1.4×), and in his data peaks 42 despite a "50-mi ceiling" in the coach why — the ramp caps below a goal-appropriate
+peak. FIX NEEDED: derive the recommended peak from the GOAL finish time (sub-3:30 → ~45–55 mi, evidence-based like XT) and lift
+the ceiling/ramp to it; flag current-vs-required. Requires: (1) locate where the 3:30 goal time is stored (goals? A-race goal
+field?), (2) review `seasonPlan.js` ramp so peak actually reaches the goal ceiling. Deferred to a focused step.
+
+NEXT: goal-driven volume (above) → **3.2d** per-session purpose+target on the calendar day card (surfaces SESSION_INTENT) →
+surface `buildSessionOptions` on the card (the "can't do the 20 today" ladder). Also pending: strength→durability credit,
+XT-credit effort-weighting + hub personalization, knee/injury as a live plan constraint + readiness-driven rest recommendations.
+
 2026-07-03 (ROUND 88) — **Sprint 3 opened (Coach with a plan). 3.0 coach-unification finished + 3.1a goal model in; 317 green.**
 Strategy reaffirmed (Emil): personal-first, clean seams, productize/add-users once it's a sustainable base. Sprint 3 north
 star = Coach-as-planner (goal model) → live plan-level re-solve (ROADMAP_NEXT §B). Sequence: 3.0 finish one-coach-voice →
@@ -43,10 +367,18 @@ always well-formed). Deferred (minor): training-goal deadline *editor fields* (m
 responses. To confirm a data point landed, watch **`n`** (not the rate): a post-run weigh-in with fluid bumps sweat `n`+1.
 PREREQ: the weigh-in must be captured as post-run (PostRunWeigh / timestamped) to feed sweat, else it's excluded as
 non-fasted (or, if untimed, wrongly counted as a morning weight).
-**NEXT: 3.2 — Coach as planner** (coach generates/owns the plan from the goal model, on `planGenerator`/`seasonPlan`), then
-3.3 live re-solve, 3.4 sim-extends-to-plans. Backlog added: ROADMAP §5 longitudinal/seasonal "this happened last year"
-retrospective. **Uncommitted:** everything since ee850a9 — trend fix, 3.0, 3.1a–d, GoalConflicts, sim heavy-runner, docs,
-`__arnoldDiag` learning block (verify build + `npm test` ~324, then commit). ──
+**3.2 REDESIGNED (2026-07-05)** after Emil's RunZones review + "static generator panel, doesn't adapt" gripe. The current
+plan generator is being REPLACED by a LIVING PLAN LOOP: **race-recipe → fitness profile → derived plan → per-session
+purpose+execution**. Uniqueness vs RunZones (elite-template-scaled, running-only, prescriptive): Arnold LEARNS you,
+multi-domain (fuel/body/recovery/training), collaborative (user-decided conflicts), judges progress vs YOUR proven
+trajectory. **3.2a DONE** — `core/raceRecipe.js` `buildRaceRecipe` (proven-build-vs-current + TRAJECTORY alignment: "you're
+where your proven build was at this weeks-out" — fixes Emil's "I look behind but last year I nailed it") + named gaps +
+`resolveRaceRecipe` wrapper + `raceRecipe.test.js`. **NEXT: 3.2b** fitness profile (8 systems, `healthSystems.js`) as the
+living driver → **3.2c** plan DERIVED from goal+recipe+profile (retire the static panel) → **3.2d** per-session
+purpose+target+execution-score+debrief → **3.3** live re-solve → **3.4** sim-extends-to-plans. Backlog: ROADMAP §5
+longitudinal retrospective (now largely 3.2a). **Uncommitted:** everything since ee850a9 (3.0, 3.1a–d, GoalConflicts, sim
+harness+heavy-runner, fuel trend fix, gradle heap fix, __arnoldDiag learning, 3.2a raceRecipe, docs) — verify build +
+`npm test` (~328), then commit. ──
 
 2026-07-02 (ROUND 87) — **Sprint 2 CODE COMPLETE + foundation hardening: carry-queue audit clean, Monte-Carlo sim harness added.**
 Strategy set (Emil): stay a PERSONAL tool, build with clean seams, productize/add users only once it's a sustainable base.
@@ -2654,7 +2986,210 @@ Confirm the rail renders correctly after a build (still **not build-verified** �
 
 ## Active task
 _None in progress._ Next step is to pick a backlog item below.
-Suggested starting point: **Cut/IF follow-ups** — best-scoped, builds on last session, mostly source edits.
+
+**Recently shipped (2026-07-12) — #54 coaching-voice (phase 1: daily fuel):**
+New pure `core/coachRefuel.js` (+ tests): `refuelForSession` (session → carbs/protein/kcal, scaled by
+distance·intensity·body mass; glycogen-replenishment grounded), `refuelPhrase` (names the session +
+specifics + why), `fuelGapAdvice` (real remaining kcal/protein gap tied to tomorrow's session). Wired
+into `CoachComment.jsx`: Play `post_workout` + Fuel `post_workout_refuel` now say e.g. "That long run
+(~1,350 kcal out) — get ~80g carbs + 25g protein in the next 30 min to refill the glycogen that long
+drained" instead of the flat "protein + carbs in 30 minutes"; Fuel `evening_under_target` +
+`midday_behind_protein` now use the real gap + tie to tomorrow's hard session. `bodyKgForCoach()`
+(profile/weigh-in, lb→kg heuristic) + `tomorrowSessionCtx()` helpers added.
+Phase 2 (Play readiness): `recoveryPctForCoach()` (DCY recovery pillar %) + `recWord()` threaded into
+Play `logged_earlier` / `planned_morning` / `rest_day_planned` — they now cite today's recovery % and
+tie the recovery call to tomorrow's session ("Long run logged. Intervals tomorrow needs you fresh —
+sleep is the multiplier. Recovery's reading low (58%) — protect tonight's sleep.").
+Phase 3 (Trend): `composeTrendLine` sleep-debt case now cites the real numbers from
+`coachSignals.sleepDebt` (debt7d hours, avg vs target, nights-below) instead of "stacked across the week".
+Assessment: the mobile surfaces Emil named (Play/Fuel) + the EdgeIQ line (already data-rich) are done.
+Remaining #54: web Plan build-phase line could cite the season-coach limiter; low priority (web-only).
+
+**Recently shipped (2026-07-11, latest):**
+- **#53 Training Profile = the attached (ring + caption + supporting).** Emil clarified he wanted
+  the node-RING version (from the ring_plus_support mock), NOT the boxed-card speedometer I built
+  for #52. `RecipePath.jsx` expanded now: `GapCaption` ("Projected from your recent quality runs —
+  43 min over goal"), `NodeRingGraphic` (3 ring-node pillars + now→target·status, energy edges →
+  a glowing FINISH ring with 4:12 / ↓3:29 goal, weak link red dashed), `SupportingLine` (REAL
+  signals: Recovery via `recoveryCoef` %, Consistency = last-6-weeks ≥3-training-day count, Weight
+  vs `goals.body.weight.targetLbs`; each omitted if uncomputable), `WhyRow`. Subtle radial-glow
+  panel. Build-blind.
+
+**NEW BACKLOG from Emil's 2026-07-11 feedback (all captured as tasks):**
+- **#54 Coaching-voice overhaul** — coach comments are useless (Daily Play/Fuel: "Run done, now
+  eat"). Need specific, actionable feedback grounded in the day's data, across CoachComment/CoachLine.
+- **#55 Planner weekly agility + goal-impact** — adjust the coming week one at a time; show if/how a
+  change impacts the goal; adapt daily workouts (distance/effort/duration) at any horizon (day →
+  month); "can't run 20 → do 2-3 short runs" split options. Builds on sessionAdapt.
+- **#56 Training Profile: project OTHER upcoming big races** (NY, Berlin) beyond the A-race.
+- **#57 Daily/Play: post-workout weight recorded + used indicator** (exhaustion + water expense);
+  wire post reading to sweat/hydration (relates to backlog ★1).
+- **#58 Staleness indicators** — yellow ⚠ on any daily metric not updated in 24h; ⚠ + last-updated
+  date if longer; WITH TESTS.
+
+**NEW BACKLOG (Emil, 2026-07-13) — Fuel food-logging capture:**
+- **#59 Barcode scanner can't reach the mobile camera (BUG — blocking).** On the Fuel → Log Food →
+  Barcode flow, the scanner fails to connect to the device camera; Emil has no way to grant/author
+  camera access on mobile. Almost certainly a Capacitor Android permission gap: (a) `android.permission.CAMERA`
+  (+ the barcode plugin's manifest entries) declared in `AndroidManifest.xml`; (b) a RUNTIME permission
+  request before opening the scanner (Capacitor doesn't auto-prompt) with a graceful denied/blocked path
+  that deep-links to app settings; (c) if the scanner uses web `getUserMedia`, the WebView needs camera
+  permission granted too (`onPermissionRequest` in the Android bridge / `webkitusermedia`). Find the
+  barcode entry in `NutritionInput.jsx` (Barcode mode) + whatever scanner lib it calls; verify the
+  plugin is installed + synced (`npx cap sync android`). Emil's device shows no permission prompt at all,
+  which points at (a)/(b) missing. Must end-to-end test on a real Android build (camera can't be simulated).
+- **#60 Photo → FatSecret match → validate-and-log (NEW FEATURE).** Take a photo of a meal → recognize the
+  foods → match each to the FatSecret database → propose portions → user simply VALIDATES / edits, then
+  logs the entries. Pipeline: (1) capture (reuse the #59 camera path once fixed, or the existing Photo mode
+  in NutritionInput which was disabled pending a real backend); (2) vision recognition → list of foods +
+  rough portions (candidate: a multimodal LLM vision call, or a food-recognition API — evaluate FatSecret's
+  own image-recognition if in our Premier scope, else a general vision model → text → FatSecret text
+  search); (3) for each recognized item, `fsSearch`/`fsGetFood` (fatsecret-client.js already wraps these)
+  to resolve servings/macros; (4) a review card: editable rows (food · serving · qty · macros) with
+  confidence, add/remove/adjust, then "Log all" → writes timed `nutritionLog` entries. NOTE: timed per-meal
+  entries would ALSO unblock the pre/post-workout fuel metrics that the Cronometer Daily CSV can't feed
+  (see the KNOWN pre/post note above) — so this feature doubles as the meal-timing data source. Ties to the
+  parked "Log Food panel — Photo (AI vision) + Voice" backlog item in SPRINT_PLAN. Scope + mock first.
+
+**NEW BACKLOG (Emil, 2026-07-13) — push structured workout to the watch:**
+- **#61 Send the workout/run directly to the device/watch (NEW FEATURE).** Push the generated quality
+  session (warm-up + main set with paces/recoveries + cool-down, from `workoutStructure.js`) to the
+  athlete's watch as a STRUCTURED workout, so they run it guided (step targets + auto-lap + alerts) instead
+  of reading the tile and improvising. Primary path = **Garmin** (we already have `garmin-client.js` /
+  `garmin-activities-client.js` for pull): Garmin's structured-workout model is steps with target type
+  (pace/HR zone) + duration (distance/time) + repeat groups — map `workoutStructure` (reps, repEff→zone,
+  recovery distance/time + `rPace`) onto it, create via the Connect workout API, and schedule it on the
+  session's date. Watch-outs: Garmin Connect workout push is not in the public pull API we use — needs the
+  workout-service endpoint / OAuth scope (verify feasibility first); consider Garmin Training API / a
+  companion-app or `.FIT` workout export + calendar as fallbacks; also evaluate a generic `.FIT`/TCX export
+  so non-Garmin watches (COROS/Apple) can import. This is the payoff of #35 workout-structure: the session
+  isn't just described, it's *runnable*. Depends on the structure model (done) + a verified push channel.
+  Scope + a feasibility spike on the Garmin workout endpoint first.
+
+**NEW BACKLOG (Emil, 2026-07-13) — session agility (see `SESSION_AGILITY_DESIGN.md`):**
+- **#62 Equipment / modality profile + ask-when-unknown (NEW, gates agility).** A user setting for what they
+  can train on (pool · bike/Peloton · treadmill · gym/weights · elliptical · rower). EVERY cross-train
+  substitution in `sessionAdapt` must be gated by it — never offer "hit the pool" to someone with no pool
+  (Emil has a Peloton + gym, no pool). When empty, the coach ASKS once ("what do you have access to?") and
+  remembers (coachMemory). Modalities carry injury-safety tags (knee-safe: bike/pool/elliptical/rower/upper-
+  body/mobility) so injury filtering is automatic. `core/modalities.js` + Profile setting. Small; unblocks the rest.
+- **#63 Drag-to-swap + impact pop-up (NEW UX) + `sessionAdapt` v2 (swap-first).** Two halves. (a) ENGINE:
+  fix `buildSessionOptions` so SWAP leads and is ALWAYS available — even under injury (rest the joint today,
+  reslot the session), currently SUPPRESSED by `if (!aggravated)`; gate modality subs by #62; add week
+  TIME-DECAY (early week = many swap targets/low impact → late week = few/high impact, flagged). (b) UX: the
+  calendar already has tile drag-drop — make a drop a SWAP (with a validity check: don't stack two hard days
+  / hard-before-long-run), and on drop show an IMPACT POP-UP = the coach-narrative what-if (`weekResolve` on
+  the proposed state) telling the athlete what the swap means for the WEEK (volume/spacing/ACWR), the PLAN,
+  and the GOAL, then Confirm/Cancel (informs, never blocks). This is the micro↔macro agility Emil wants, and
+  the impact modal IS the narrative engine on a hypothetical. Demonstrated (his knee/intervals case) — see
+  SESSION_AGILITY_DESIGN §6. Under the flagship live-re-solve umbrella (#55 / ROADMAP §B item 4).
+
+**Recently shipped (2026-07-11, later):**
+- **#52 Training Profile "FINISH PROJECTOR"** (`RecipePath.jsx` expanded view rewrite). Killed the
+  node/ring "squid". New expanded graphic per Emil's concept render: a glowing GAP HEADLINE
+  ("43 MIN GAP to 3:29" + "projected 4:12 · from recent quality runs"), the three pillars as
+  READINESS CARDS (volume blue / longest teal / threshold red weak-link, each with current→target
+  + a lit progress bar + status word), ENERGY STREAMS flowing card→gauge, and a FINISH PROJECTOR
+  gauge (amber→red arc, projected time + goal). Coach "why" with a glowing sigil dot. On a subtle
+  radial-glow dark panel (`#0c0f16`), NOT the full particle HUD. Collapsed Strip unchanged.
+  Components: `GapHeadline`, `ProjectorGraphic`, `WhyRow` (removed `FullPath`/`CoachLayer`/`ingColor`/
+  `statusColor`/`shortName`). Also earlier this session: goalSecsFallback now reads the RIGHT path
+  `goals.performance.marathon.targetSecs` (getGoals() is a flat legacy projection with no .marathon —
+  that's why the goal still wasn't connecting). Build-blind — verify on Windows. See DESIGN_LESSONS
+  2026-07-11 (art-directed hero → match the render, don't flatten).
+
+**Recently shipped (2026-07-11):**
+- **#50 Week-strip day signage.** `planWeekSummary` now classifies each day (done/missed/offplan/
+  today/upcoming/rest) from logged activities (activities + workouts stores); `MobilePlanTicker`
+  renders letter-row signage (green `M ✓` done, blue `S +` off-plan, dim missed, teal bold today)
+  + silhouette treatments (solid fill done, faint grey ghost missed, blue dashed ghost off-plan).
+  Tests in planWeekSummary.test.js.
+  - **Recovery days (rest OR mobility):** per the unified-Recovery agreement, `RECOVERY_TYPES`
+    (rest/mobility/walk/recovery) are FLEXIBLE — never "missed" (resting is a valid choice); only a
+    real run/strength on one reads as off-plan. `executedDatesForWeek` counts runs (isRun) + strength
+    workouts only, so doing mobility on a recovery day stays neutral. Strip renders the whole family
+    as ONE gentle GREEN crescent (not a grey dead-rest moon).
+- **#51 Training Profile "22:01" fixed** (see POSTMORTEMS 2026-07-11): raceRecipe `nextARace`
+  prefers the MARATHON over the near default-'A' tune-up; trainingProfile reads
+  `goals.marathon.targetSecs` as `goalSecsFallback` so the goal connects; FINISH label regrouped
+  with the number (no longer floating at the top); ring stroke/glow colored by status (adds life
+  once the goal drives the ingredient statuses). Tests in trainingProfile.test.js.
+  - **De-monochrome:** RecipePath now uses per-ingredient identity tints (`INGREDIENT_TINT`:
+    volume blue / longest teal / threshold purple) via `ingColor(g)` when there's no goal yet
+    (status 'current'/'building'); semantic status colors (green/amber/red) take over once a goal
+    is set. Fixes the "wall of teal" Emil flagged even in the no-goal state.
+
+**Recently shipped (2026-07-10, batch 2):**
+- **#46 Delete planner-only races on Calendar.** A race that lived only as a planner day
+  (type:'race', e.g. from "build plan to race") had NO delete affordance — `racesByDate` is
+  store-only and the drawer skipped race sessions. DayDrawer race line now renders for a store
+  race OR a planner race day (distance optional), always with the ✕; delete passes `(id, date)`
+  so `deleteRaceEverywhere` can clear the planner day even with no store id.
+- **#47 Race Predictor tile overflow.** MetricTile trend row now truncates (ellipsis, `minWidth:0`,
+  siblings `flexShrink:0`, row `overflow:hidden`) so a verbose trend can't spill into the gauge.
+- **#48 Training Profile finish circle restored.** `finish.now` was null because the projection
+  required `raceDistanceKm(nextARace)`, which is null for a race with no explicit distance and a
+  name that doesn't contain "marathon" (e.g. "Berlin"). Now derives `projKm` from `distMi` (which
+  already falls back to 26.2) so the projection runs and the ring returns. trainingProfile.js.
+- **#49 Start week strip restyled as a PEER TILE** (SURFACE.card + hairline + teal top accent,
+  mask crescent, lighter baseline) — fixes the "obscure dark band among light tiles" look. Kept on
+  Start under the Today tile (Claude's call: glance vs Calendar's full plan = different roles).
+
+**Recently shipped (2026-07-10, latest):**
+- **#43 Week strip moved UNDER the Pre/Post tile** on Start (was between hero + tile).
+- **#44 Deleted-race resurrection FIXED.** Root cause: `GoalsHub.loadGoalsV2()` folds planner
+  days of `type:'race'` (the calendar's race day / strip red-flag) AND goals-blob races back into
+  the canonical `races` store on every Plan-tab open — so deleting from the store alone let it
+  come back (hero + season phase read `storage['races']`). New `memory.deleteRaceEverywhere(id,
+  dateHint)` clears all three: canonical store (+localStorage mirror), goals-blob races, and the
+  planner race day (via pure, tested `clearPlannerRaceDay`). Wired into both CalendarTab delete
+  sites + GoalsHub.deleteRace. Test: `core/memory.test.js`.
+- **#45 Knee injury adaptation VERIFIED** (no code change): injury.js is correct (knee aggravates
+  intensity only), and LivingPlan wires it — aggravated days show ⚠ + "Protect your knee → swap
+  options" (pool run / shorten & keep easy = run slow); easy/long stay normal. Gap noted: not
+  surfaced on the Start Today tile/strip (possible follow-up if Emil wants it there).
+
+**Recently shipped (2026-07-10, later):** Start/EdgeIQ IA rework from Emil's two-screenshot review.
+- **#40 Plan WEEK STRIP on Start.** `components/MobilePlanTicker.jsx` — a precise week strip
+  between the HeroRail and the PlannedWorkoutTile. Each day drawn in the plan's own workout
+  language: RUNS as effort silhouettes (easy mound / long plateau / tempo cruise / intervals
+  spikes — same construction as LivingPlan's WorkoutSilhouette), strength = double chevron (S3),
+  rest = crescent (R1); shared baseline, quiet "THIS WEEK" + phase header, today = soft teal
+  highlight. NO race/next block (race already lives top-right on Start). Tap → Calendar. Replaces
+  the tall MobilePlanStrip (now a forwarding re-export). Went through many mock rounds — see
+  DESIGN_LESSONS 2026-07-10 for the rejected directions so we don't revisit them.
+- **#41 Marathon Coach retired from Start**, folded into the EdgeIQ Training Profile. SeasonCoachCard
+  no longer mounted anywhere (file kept, unused).
+- **#42 Training Profile graphic fixed + coach folded in** (`components/RecipePath.jsx` rewrite):
+  nodes evenly stacked + centered, connectors FAN into distinct points on the ring's left arc
+  (205°→155°), ring centered/proportionate. Strip now shows the verdict pill; expanded view adds a
+  CoachLayer (this-week target mi, long-run target, days-to-race, feasibility pill, why). Uses
+  `getSeasonCoach()`; degrades gracefully to current-only when no season/goal.
+Build-blind — verify on Windows. Mobile-only changes (MobileHome + the two components + RecipePath).
+
+**Recently shipped (2026-07-10):** Task #32 — **mobile plan summary strip.** New
+`core/planWeekSummary.js` (pure `buildPlanWeekSummary` + storage wrapper `summarizePlanWeek` +
+`nextKeyLabel`; reads the APPLIED planner week so it stays in sync with the calendar, no
+re-gen) + `components/MobilePlanStrip.jsx`, mounted on mobile home right under the Marathon
+Coach card. Shows the week's SHAPE (7 day-glyphs, today ringed), a phase/countdown badge (reuses
+getSeasonCoach; falls back to planned mi·sessions), and the next KEY session; taps through to the
+full plan on Calendar (`onOpenTab('races')`). Empty week → compact "set one up" CTA. Build-blind
+— verify on Windows (`npm test`; new `planWeekSummary.test.js`).
+
+**Web-move decision (Emil, 2026-07-10):** do NOT relocate the living plan to the web Plan tab as
+a straight move — Emil likes it on Calendar. Moving it only makes sense as a genuine **Plan-tab
+revamp with the living plan as the centerpiece** (a larger, separate piece of work). Logged as a
+new backlog item; web Calendar mount unchanged.
+
+**Recently shipped (2026-07-09):** LivingPlan Adjust panel reworked from a left-oriented /
+stretched layout into **four quadrant compartments** (Goal / Schedule / Day preferences /
+Health) in a `repeat(auto-fit, minmax(300px,1fr))` grid — controls at natural size, Regenerate
++ paces in a footer. Fixes Emil's "don't stretch, compartmentalize by quadrants" feedback (see
+DESIGN_LESSONS 2026-07-09). Also: injury clears via Health → **None (healthy)** (now spelled
+out inline). Build good on Windows, **377 tests pass.**
+
+Suggested next: **#36** (Cronometer Servings parser, awaiting sample export), or scope the
+**Plan-tab revamp** (living plan as centerpiece) if Emil wants to pursue that.
 
 ---
 

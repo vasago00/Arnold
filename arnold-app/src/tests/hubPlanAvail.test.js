@@ -3,9 +3,17 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { generateWeeklyPlan } from '../core/hub/planGenerator.js';
 
-test('sessions land ONLY on available days', () => {
+test('TRAINING lands ONLY on available days; off-days are Recovery (not rest gaps)', () => {
   const { days } = generateWeeklyPlan({ availableDays: [4, 5, 6], runDays: 5, strengthDays: 3, focus: 'hybrid', weeklyMileageTarget: 30 });
-  for (let i = 0; i < 4; i++) assert.equal(days[i], null, `Mon-Thu should be rest (idx ${i})`);
+  const TRAINING = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'hiit', 'strength']);
+  // Unavailable days (Mon-Thu) carry NO training session — but they are now filled with
+  // Recovery/mobility (the unified-Recovery model: a day you can't train IS a recovery
+  // day), so the plan reads as a complete week instead of leaving blank rest gaps.
+  for (let i = 0; i < 4; i++) {
+    const d = days[i];
+    assert.ok(!(d && (TRAINING.has(d.type) || d.strength)), `no training on unavailable day (idx ${i})`);
+    assert.ok(d == null || d.type === 'mobility', `unavailable day is Recovery or rest, not a workout (idx ${i})`);
+  }
   assert.ok(days[4] && days[5] && days[6], 'Fri/Sat/Sun have sessions');
 });
 

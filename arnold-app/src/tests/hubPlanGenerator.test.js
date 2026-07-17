@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { generateWeeklyPlan, pacesFromHubFacts, generateSeasonBlock, pasteSeasonBlock, clearSeasonBlock } from '../core/hub/planGenerator.js';
 
-const runDaysOf = days => days.filter(d => d && d.type !== 'strength').length;
+const runDaysOf = days => days.filter(d => d && d.type !== 'strength' && d.type !== 'mobility').length;
 const strengthOf = days => days.filter(d => d && (d.type === 'strength' || d.strength)).length;
 const isHard = d => d && (d.type === 'intervals' || d.type === 'tempo' || d.type === 'long_run');
 
@@ -13,7 +13,12 @@ test("Emil's config (5 run / 3 strength / hybrid) → right counts + a rest day"
   assert.equal(strengthOf(days), 3);
   assert.equal(days.filter(d => d && d.type === 'long_run').length, 1);
   assert.equal(summary.quality, 2);
-  assert.ok(days.some(d => d === null), 'should include at least one rest day');
+  assert.ok(days.some(d => d === null || d?.type === 'mobility'), 'should include at least one recovery day (rest or mobility)');
+});
+
+test('open days become mobility (recovery) so mobility runs through the whole plan', () => {
+  const { days } = generateWeeklyPlan({ runDays: 4, strengthDays: 1, focus: 'hybrid', weeklyMileageTarget: 25 });
+  assert.ok(days.some(d => d && d.type === 'mobility'), 'a light week schedules mobility on the open days');
 });
 
 test('hard days never stack back-to-back', () => {
@@ -138,4 +143,42 @@ test('season block: target a race → A-RACE mode (only the goal tapers; other m
 test('season block: default (horizon, no A-race) still tapers EVERY marathon', () => {
   const { weeks } = generateSeasonBlock({ ...SEASON_BASE, races: RACES, today: '2026-09-21', horizon: 3 });
   assert.equal(weeks[0].phase, 'race-week', 'Berlin still race-week in continuous mode');
+});
+
+// ── De-linearize (3.2c): cut-back weeks + rotating quality ──
+test('de-linearize: a sustained build gets cut-back weeks (saw-tooth) while the ramp keeps climbing', () => {
+  const { weeks } = generateSeasonBlock({ ...SEASON_BASE, races: RACES, today: '2026-07-06', targetRaceDate: '2026-12-06' });
+  const cutbacks = weeks.filter(w => w.cutback);
+  assert.ok(cutbacks.length >= 1, 'a long build has at least one cut-back week');
+  for (const wc of cutbacks) {
+    assert.equal(wc.phase, 'build', 'cut-back keeps phase=build (downstream phase logic unchanged)');
+    const idx = weeks.indexOf(wc);
+    assert.ok(idx > 0 && wc.targetWeeklyMiles < weeks[idx - 1].targetWeeklyMiles, 'cut-back week steps DOWN vs the prior week');
+  }
+  const builds = weeks.filter(w => w.phase === 'build' && !w.cutback);
+  assert.ok(builds[builds.length - 1].targetWeeklyMiles >= builds[0].targetWeeklyMiles, 'the underlying ramp still climbs across the build');
+});
+
+test('de-linearize: short blocks (<8 wk) get NO cut-back (pure ramp preserved)', () => {
+  const { weeks } = generateSeasonBlock({ ...SEASON_BASE, races: RACES, today: '2026-07-06', horizon: 4 });
+  assert.ok(weeks.every(w => !w.cutback), 'no cut-back weeks in a 4-week block');
+});
+
+test('day prefs: honors pinned strength days (strengthDows)', () => {
+  const { days } = generateWeeklyPlan({ availableDays: [0,1,2,3,4,5,6], runDays: 5, strengthDays: 2, focus: 'hybrid', weeklyMileageTarget: 35, strengthDows: [1, 3] });
+  assert.ok(days[1] && (days[1].type === 'strength' || days[1].strength), 'Tue has strength');
+  assert.ok(days[3] && (days[3].type === 'strength' || days[3].strength), 'Thu has strength');
+});
+
+test('day prefs: honors the pinned long-run day (longRunDow)', () => {
+  const { days } = generateWeeklyPlan({ availableDays: [0,1,2,3,4,5,6], runDays: 5, strengthDays: 2, focus: 'hybrid', weeklyMileageTarget: 35, longRunDow: 2 });
+  assert.equal(days[2]?.type, 'long_run', 'Wed is the long run');
+});
+
+test('de-linearize: qualityLead rotates the leading hard session', () => {
+  // focus base → 1 quality day, so the LEAD type is the only quality type placed.
+  const d1 = generateWeeklyPlan({ runDays: 5, strengthDays: 0, focus: 'base', weeklyMileageTarget: 35, qualityLead: 'intervals' }).days;
+  const d2 = generateWeeklyPlan({ runDays: 5, strengthDays: 0, focus: 'base', weeklyMileageTarget: 35, qualityLead: 'tempo' }).days;
+  assert.ok(d1.some(d => d && d.type === 'intervals') && !d1.some(d => d && d.type === 'tempo'), 'intervals-led week');
+  assert.ok(d2.some(d => d && d.type === 'tempo') && !d2.some(d => d && d.type === 'intervals'), 'tempo-led week');
 });

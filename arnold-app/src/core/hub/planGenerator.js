@@ -102,27 +102,54 @@ export function generateWeeklyPlan(opts = {}) {
   const runSlots = avail.filter(d => d !== longDay);
   const placedHard = new Set(longDay != null ? [longDay] : []);
   const adjacent = s => placedHard.has(s - 1) || placedHard.has(s + 1);
+  // Rotating quality emphasis (de-linearize): qualityLead sets the leading hard
+  // session; the second quality flips to the other type so consecutive weeks
+  // aren't identical. Default (no lead) preserves the original intervals→tempo.
+  const qLead = opts.qualityLead === 'tempo' ? 'tempo' : 'intervals';
+  const qType = (n) => (n === 0 ? qLead : (qLead === 'tempo' ? 'intervals' : 'tempo'));
   const qPref = [1, 3, 2, 4, 0, 5, 6];
   let qi = 0;
-  for (const s of qPref) { if (qi >= quality) break; if (runSlots.includes(s) && !days[s] && !adjacent(s)) { days[s] = mkRun(qi === 0 ? 'intervals' : 'tempo', qualityMi); placedHard.add(s); qi++; } }
-  for (const s of qPref) { if (qi >= quality) break; if (runSlots.includes(s) && !days[s]) { days[s] = mkRun(qi === 0 ? 'intervals' : 'tempo', qualityMi); placedHard.add(s); qi++; } }
+  for (const s of qPref) { if (qi >= quality) break; if (runSlots.includes(s) && !days[s] && !adjacent(s)) { days[s] = mkRun(qType(qi), qualityMi); placedHard.add(s); qi++; } }
+  for (const s of qPref) { if (qi >= quality) break; if (runSlots.includes(s) && !days[s]) { days[s] = mkRun(qType(qi), qualityMi); placedHard.add(s); qi++; } }
 
   // ── Easy runs → remaining available run days. ──
   let ei = 0;
   for (const s of runSlots) { if (ei >= easyCount) break; if (!days[s]) { days[s] = mkRun('easy_run', easyMi); ei++; } }
 
-  // ── Strength → easy-day doubles, then pure on empty available days, then (only when
-  // your schedule is too tight to avoid it) doubled onto any available run day. ──
+  // ── Strength placement. If the athlete pinned specific strength days
+  // (opts.strengthDows), honor those exactly (double onto a run, else a pure
+  // strength day) — their choice wins; we just flag if it lands on a hard day.
+  // Otherwise auto-place: easy-day doubles → pure on empty days → (tight schedule)
+  // doubled onto any run day. ──
   const isHardOrLong = d => d && (d.type === 'intervals' || d.type === 'tempo' || d.type === 'long_run');
   let stc = 0, strengthOnHard = false;
-  for (const s of avail) { if (stc >= strengthWanted) break; if (days[s] && days[s].type === 'easy_run' && !days[s].strength) { days[s].strength = true; stc++; } }
-  for (const s of avail) { if (stc >= strengthWanted) break; if (!days[s]) { days[s] = { type: 'strength', label: 'Strength', strength: true, distanceMi: null, paceTarget: null }; stc++; } }
-  for (const s of avail) { if (stc >= strengthWanted) break; if (days[s] && days[s].type !== 'strength' && !days[s].strength) { days[s].strength = true; stc++; if (isHardOrLong(days[s])) strengthOnHard = true; } }
+  const pinned = Array.isArray(opts.strengthDows) ? opts.strengthDows.filter(d => avail.includes(d)) : null;
+  if (pinned && pinned.length) {
+    for (const s of pinned) {
+      if (days[s] && days[s].type === 'strength') { stc++; continue; }
+      if (days[s]) { days[s].strength = true; stc++; if (isHardOrLong(days[s])) strengthOnHard = true; }
+      else { days[s] = { type: 'strength', label: 'Strength', strength: true, distanceMi: null, paceTarget: null }; stc++; }
+    }
+  } else {
+    for (const s of avail) { if (stc >= strengthWanted) break; if (days[s] && days[s].type === 'easy_run' && !days[s].strength) { days[s].strength = true; stc++; } }
+    for (const s of avail) { if (stc >= strengthWanted) break; if (!days[s]) { days[s] = { type: 'strength', label: 'Strength', strength: true, distanceMi: null, paceTarget: null }; stc++; } }
+    for (const s of avail) { if (stc >= strengthWanted) break; if (days[s] && days[s].type !== 'strength' && !days[s].strength) { days[s].strength = true; stc++; if (isHardOrLong(days[s])) strengthOnHard = true; } }
+  }
+
+  // ── Recovery/mobility on EVERY remaining empty day (not just available ones), so
+  // the plan reads as a COMPLETE week — training days + Recovery days — with no blank
+  // "rest" gaps. A "mobility" day is a Recovery day (rest OR 15-min mobility — the
+  // athlete's choice, per the unified-Recovery decision), so it applies on days the
+  // athlete can't train too: a day you don't train IS a recovery day, not nothing.
+  // (Was `for (const s of avail)`, which left unavailable off-days — e.g. a Thursday
+  // you don't run — as blank rest on the calendar instead of a Recovery session.)
+  // Doesn't touch run/quality/strength counts. ──
+  for (let s = 0; s < 7; s++) { if (!days[s]) days[s] = { type: 'mobility', label: 'Mobility', distanceMi: null, paceTarget: null, strength: false }; }
 
   // ── Labels (note doubles + pace/distance). ──
   for (let i = 0; i < 7; i++) {
     const d = days[i];
-    if (!d || d.type === 'strength') continue;
+    if (!d || d.type === 'strength' || d.type === 'mobility') continue;
     const dist = d.distanceMi ? `${d.distanceMi}mi` : '';
     const pace = d.paceTarget ? ` @ ${d.paceTarget}/mi` : '';
     const base = `${PLAN_LABEL[d.type]}${dist ? ' ' + dist : ''}`;
@@ -224,7 +251,7 @@ export function generateSeasonBlock(opts = {}) {
   const races = opts.races || [];
   const today = opts.today || new Date().toISOString().slice(0, 10);
   const startMonday = mondayKeyOf(today);
-  const base = { availableDays: opts.availableDays, runDays: opts.runDays, strengthDays: opts.strengthDays, focus: opts.focus, paces: opts.paces };
+  const base = { availableDays: opts.availableDays, runDays: opts.runDays, strengthDays: opts.strengthDays, focus: opts.focus, paces: opts.paces, longRunDow: opts.longRunDow, strengthDows: opts.strengthDows };
   let weeklyMiles = Number(opts.weeklyMiles) > 0 ? Number(opts.weeklyMiles) : 30;
   let longMi = Number(opts.longestRecentMi) > 0 ? Number(opts.longestRecentMi) : 8;
   const nWeeks = resolveHorizonWeeks({ horizon: opts.horizon, targetRaceDate: opts.targetRaceDate }, races, today, startMonday);
@@ -234,6 +261,8 @@ export function generateSeasonBlock(opts = {}) {
   const aRaceDate = opts.aRaceDate || opts.targetRaceDate || null;
 
   const weeks = [];
+  let buildIdx = 0;                                    // counts build weeks (cut-back cadence + quality rotation)
+  const QUALITY_ROTATION = ['intervals', 'tempo'];    // alternate the leading hard session week to week
   for (let i = 0; i < nWeeks; i++) {
     const monday = addDaysKey(startMonday, i * 7);
     const sp = resolveSeasonPlan({ races, today: monday, weeklyMiles, longestRecentMi: longMi, acwr: opts.acwr, ceilingMiles: opts.ceilingMiles, aRaceDate });
@@ -245,30 +274,79 @@ export function generateSeasonBlock(opts = {}) {
     const wkSupport = wkRaces.find(r => isMarathon(r) && r !== wkARace) || null;
     const phase = wkARace ? 'race-week' : sp.phase;
 
-    const gen = generateWeeklyPlan({ ...base, weeklyMileageTarget: sp.targetWeeklyMiles });
+    // ── De-linearize (Sprint 3.2c): cut-back weeks + rotating quality. In a
+    // sustained build, every 4th build week steps DOWN ~20% to consolidate — the
+    // saw-tooth a real coach uses — while the THREADED weeklyMiles stays on the
+    // underlying ramp so the build keeps progressing. Short blocks (<8 wk) get no
+    // cut-back (and the phase stays 'build' so downstream phase logic is unchanged).
+    let effTarget = sp.targetWeeklyMiles;
+    let effLong = sp.longRunTargetMi;
+    let cutback = false;
+    let qualityLead;
+    if (phase === 'build') {
+      buildIdx++;
+      qualityLead = QUALITY_ROTATION[(buildIdx - 1) % QUALITY_ROTATION.length];
+      if (nWeeks >= 8 && buildIdx % 4 === 0) {
+        effTarget = Math.round(sp.targetWeeklyMiles * 0.8);
+        effLong = Math.round((sp.longRunTargetMi || 0) * 0.8);
+        cutback = true;
+      }
+    }
+
+    // Race-week volume trim — applies to the A-race AND supported B-marathons (Berlin/
+    // NYC), not just the goal race. When a marathon lands in this week, mini-taper the
+    // SURROUNDING training (~40% cut) so the week's total = easy miles + the 26.2 race
+    // sits near the ceiling, instead of stacking a full 26.2 on top of a full build week
+    // (which pushed race weeks to 64–72mi). The race is the week's long effort → no
+    // separate long run. NOTE: this must run BEFORE generateWeeklyPlan so the easy runs
+    // are SIZED down; the phase-specific block below then places the race + trims quality.
+    const wkMarathon = (wkARace && isMarathon(wkARace)) ? wkARace : (wkSupport || null);
+    if (wkMarathon) { effTarget = Math.round(weeklyMiles * 0.6); effLong = 0; }
+
+    // Post-marathon RECOVERY week — for the supported B-marathons too (Berlin/NYC), not
+    // just the A-race (whose post-race recovery racePhase already owns). A marathon in the
+    // PREVIOUS week eases THIS week to an easy recovery block (no quality, short long run)
+    // so the legs absorb 26.2 mi of eccentric load before the build resumes. Crucially the
+    // ramp is NOT reset — `weeklyMiles` keeps threading up the build line (see below) — so
+    // this is a DIP in the saw-tooth, not a restart (honors Option-A "keep climbing toward
+    // the A-race"). Without it, Berlin/NYC sat between two full build weeks (52·race·52).
+    const weekAgoKey = addDaysKey(monday, -7);
+    const priorMarathon = races.find(r => isMarathon(r) && r.date && r.date < monday && r.date >= weekAgoKey);
+    const postRace = !!priorMarathon && !wkMarathon && phase === 'build';
+    if (postRace) { effTarget = Math.round(weeklyMiles * 0.6); effLong = Math.min(effLong, 10); }
+
+    const gen = generateWeeklyPlan({ ...base, weeklyMileageTarget: effTarget, qualityLead });
     const days = gen.days;
 
     if (phase === 'build') {
       const inWk = wkSupport || (wkRaces.length && !wkARace ? wkRaces[0] : null);
       if (inWk) {
         placeRace(days, inWk);
-        if (isMarathon(inWk)) dropLongRun(days);          // the marathon IS the long effort
-        else setLongRunDistance(days, sp.longRunTargetMi);
+        // A race IS the week's hard/long effort — never stack a full long run on top of it.
+        // Marathon: also strip quality + trim volume (handled above). Tune-up (half/10K/etc.):
+        // drop the separate long run (the race replaces it) and keep just one other quality,
+        // so the week isn't a 20-miler + two quality sessions + a race (that was the 65-mi week
+        // when NYRR Staten's half landed on a full build week).
+        if (isMarathon(inWk)) { downgradeQualityToEasy(days); dropLongRun(days); }
+        else { dropLongRun(days); trimToOneQuality(days); }
+      } else if (postRace) {
+        downgradeQualityToEasy(days);            // post-marathon recovery: easy running only
+        setLongRunDistance(days, effLong);        // long capped short (≤10) by effLong above
       } else {
-        setLongRunDistance(days, sp.longRunTargetMi);
+        setLongRunDistance(days, effLong);
       }
     } else if (phase === 'mini-taper') {
       dropLongRun(days); trimToOneQuality(days);
     } else if (phase === 'recovery') {
-      downgradeQualityToEasy(days); setLongRunDistance(days, sp.longRunTargetMi);
+      downgradeQualityToEasy(days); setLongRunDistance(days, effLong);
     } else if (phase === 'race-week') {
       downgradeQualityToEasy(days); dropLongRun(days); if (wkARace) placeRace(days, wkARace);
     }
     relabelSeason(days);
 
-    weeks.push({ weekKey: monday, phase, verdict: sp.verdict, targetWeeklyMiles: sp.targetWeeklyMiles, longRunTargetMi: sp.longRunTargetMi, why: sp.why, tuneUp: sp.tuneUp || null, raceName: (wkARace || wkSupport || wkRaces[0])?.name || null, isARace: !!wkARace, days });
+    weeks.push({ weekKey: monday, phase, verdict: postRace ? 'recover' : (cutback ? 'cut' : sp.verdict), targetWeeklyMiles: effTarget, longRunTargetMi: effLong, why: postRace ? `Recovery week after ${priorMarathon.name} — easy aerobic only, no quality; let the legs absorb the marathon before the build resumes.` : (cutback ? `Cut-back week — ~20% down to absorb the last block; adaptation happens on the easier weeks.` : sp.why), tuneUp: sp.tuneUp || null, raceName: (wkARace || wkSupport || wkRaces[0])?.name || null, isARace: !!wkARace, cutback, recoveryAfterRace: postRace, days });
 
-    weeklyMiles = sp.targetWeeklyMiles;                       // thread the ramp
+    weeklyMiles = sp.targetWeeklyMiles;                       // thread the UNREDUCED ramp so the build keeps climbing
     longMi = Math.max(longMi, sp.longRunTargetMi || longMi);
   }
   return { weeks, summary: { nWeeks, startMonday, horizon: opts.horizon ?? 8 } };

@@ -126,7 +126,8 @@ describe('buildGoalModel — conflicts (3.1b, user-decided)', () => {
   it('flags an aggressive cut against a high training volume', () => {
     const m = buildGoalModel({
       today: TODAY, goals: { ...baseGoals, targetWeight: 175, weeklyRunDistanceTarget: 40 },
-      races: [], currentWeightLbs: 190, targetWeightDate: shift(42),   // 15 lb / 6 wk = 2.5 lb/wk
+      races: [], currentWeightLbs: 190, targetWeightDate: shift(42),
+      observedRateLbPerWk: 2.5,   // ACTUAL weight-trend loss — a genuinely steep cut (>2 → high)
     });
     const c = m.conflicts.find(x => x.id === 'cut-vs-training');
     expect(c).toBeTruthy();

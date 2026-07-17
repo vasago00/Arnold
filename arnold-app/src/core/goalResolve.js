@@ -12,6 +12,7 @@
 // + user resolution land in 3.1b (the `conflicts` array is present but empty here).
 
 import { racePhase, marathonFeasibility } from './seasonPlan.js';
+import { resolveARace } from './aRace.js';   // the ONE canonical A-race resolver (shared with raceRecipe)
 
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; };
 const EA_FLOOR_KCAL_PER_KG = 30;   // RED-S guardrail (Mountjoy IOC 2018) — a cited population constant, not user-specific
@@ -44,16 +45,20 @@ export function buildGoalModel(i = {}) {
   const races = Array.isArray(i.races) ? i.races : [];
 
   // ── RACE dimension ──
-  // A-race resolution (explicit designation): an explicit aRaceDate wins; else the
-  // soonest FUTURE race the user marked priority 'A' (the race editor already sets
-  // A/B/C); else fall back to the next marathon. The whole periodization (taper via
-  // racePhase) anchors on this one race, so only the A-race tapers — tune-ups run
-  // through (matches 2.1's A-race model).
+  // A-race resolution. `priority` is UNRELIABLE — the race editor defaults every race to
+  // 'A', so "soonest priority-A" lets a near 5K tune-up hijack the whole goal model (the
+  // "cutting with NYRR 5K" bug). Resolve robustly, mirroring raceRecipe.nextARace: an
+  // explicit aRaceDate wins → else a MARATHON you've set a goal time on (you only set a goal
+  // on the race you're training for) → else any race with a goal → else the soonest marathon
+  // → else an explicit-A race. The whole periodization anchors here, so only the A-race
+  // tapers; tune-ups run through.
   const futureRaces = races
     .filter(r => r?.date && r.date >= today)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const aRaceByPriority = futureRaces.find(r => String(r.priority || '').toUpperCase() === 'A') || null;
-  const effectiveARaceDate = i.aRaceDate || aRaceByPriority?.date || null;
+  // A-race via the ONE canonical resolver (core/aRace.js) — shared with raceRecipe so they can't
+  // disagree on which race the plan is built toward (the Berlin-vs-Valencia bug).
+  const aRacePick = resolveARace(races, today, i.aRaceDate);
+  const effectiveARaceDate = i.aRaceDate || aRacePick?.date || null;
   const rp = racePhase({ races, today, aRaceDate: effectiveARaceDate });
   const aRaceRaw = effectiveARaceDate
     ? (races.find(r => r.date === effectiveARaceDate) || null)
@@ -94,9 +99,16 @@ export function buildGoalModel(i = {}) {
   const direction = lbsDelta == null ? 'unknown' : lbsDelta > 0.5 ? 'cut' : lbsDelta < -0.5 ? 'bulk' : 'maintain';
   const by = i.targetWeightDate || goals.targetWeightDate || null;
   const weeksRemaining = by ? Math.max(0.1, (daysBetween(today, by) || 0) / 7) : null;
+  // rateLbPerWk = the rate REQUIRED to hit the target weight by the deadline (a feasibility
+  // signal). It is NOT the actual cut rate, and it EXPLODES once the deadline is past —
+  // weeksRemaining floors at 0.1, so "15.9 lb to lose ÷ 0.1 wk" = a phantom 159 lb/wk.
+  // observedRateLbPerWk = the ACTUAL weight-trend loss rate (+ = losing), fed from cutMode's
+  // 14d slope (the SAME number the Cut Mode card shows). The cut conflicts below use the
+  // OBSERVED rate so the Plan tab is internally consistent and never shows a garbage rate.
   const rateLbPerWk = (lbsDelta != null && weeksRemaining) ? Math.round((lbsDelta / weeksRemaining) * 100) / 100 : null;
+  const observedRateLbPerWk = num(i.observedRateLbPerWk);
   const body = {
-    weight: { target: tgtW, current: curW, by, daysOut: by ? daysBetween(today, by) : null, weeksRemaining, rateLbPerWk, direction, horizon: by ? 'deadline' : 'ongoing' },
+    weight: { target: tgtW, current: curW, by, daysOut: by ? daysBetween(today, by) : null, weeksRemaining, rateLbPerWk, observedRateLbPerWk, direction, horizon: by ? 'deadline' : 'ongoing' },
     bodyFat: { target: num(goals.targetBodyFat), current: num(i.currentBodyFatPct), horizon: 'ongoing' },
   };
 
@@ -138,7 +150,9 @@ export function detectConflicts({ race, body, training, nutrition } = {}, resolu
   const daysOut = aRace?.daysOut ?? null;
   const weeksOut = daysOut != null ? Math.max(0.1, daysOut / 7) : null;
   const dir = body?.weight?.direction;
-  const rate = num(body?.weight?.rateLbPerWk);
+  // Use the ACTUAL observed loss rate for cut steepness + deferred-loss — NOT the required-to-
+  // deadline rate (garbage once the target date passes). Same number as the Cut Mode card.
+  const cutRate = num(body?.weight?.observedRateLbPerWk);
   const milesTarget = num(training?.weeklyMiles?.target) || 0;
 
   // 1. Cut vs race — a calorie deficit competes with race performance + recovery
@@ -146,7 +160,7 @@ export function detectConflicts({ race, body, training, nutrition } = {}, resolu
   //    performance; a deficit blunts glycogen resynthesis + power.
   if (dir === 'cut' && aRace && daysOut != null && daysOut <= 28) {
     const inTaper = race.phase === 'mini-taper' || race.phase === 'race-week';
-    const deferLb = (rate != null && weeksOut != null) ? Math.round(rate * weeksOut * 10) / 10 : null;
+    const deferLb = (cutRate != null && cutRate > 0 && weeksOut != null) ? Math.round(cutRate * weeksOut * 10) / 10 : null;
     push({
       id: 'cut-vs-race', between: ['body', 'race'], severity: inTaper ? 'high' : 'medium',
       summary: `You're cutting with ${aRace.name} ${daysOut}d out — a calorie deficit competes with race performance and recovery.`,
@@ -161,10 +175,10 @@ export function detectConflicts({ race, body, training, nutrition } = {}, resolu
 
   // 2. Aggressive cut vs training volume — a steep deficit undercuts adaptation at
   //    high volume and raises injury/illness risk.
-  if (dir === 'cut' && rate != null && rate > 1.5 && milesTarget >= 30) {
+  if (dir === 'cut' && cutRate != null && cutRate > 1.5 && milesTarget >= 30) {
     push({
-      id: 'cut-vs-training', between: ['body', 'training'], severity: rate > 2 ? 'high' : 'medium',
-      summary: `A ${rate} lb/wk cut is steep for a ${milesTarget}-mi training week — under-fuelling undercuts adaptation.`,
+      id: 'cut-vs-training', between: ['body', 'training'], severity: cutRate > 2 ? 'high' : 'medium',
+      summary: `A ${cutRate.toFixed(1)} lb/wk cut is steep for a ${milesTarget}-mi training week — under-fuelling undercuts adaptation.`,
       options: [
         { key: 'training', label: 'Protect training', action: 'Slow the cut to ≤1 lb/wk.',
           cost: 'Your target-weight date slips out by a few weeks.' },
@@ -198,8 +212,8 @@ export function detectConflicts({ race, body, training, nutrition } = {}, resolu
  */
 export async function resolveGoalModel(opts = {}) {
   const today = opts.today || new Date().toISOString().slice(0, 10);
-  const [{ getGoals }, { getCurrentBodyComp }, { getEffectiveTargets }] = await Promise.all([
-    import('./goals.js'), import('./energyBalance.js'), import('./goalModel.js'),
+  const [{ getGoals }, { getCurrentBodyComp }, { getEffectiveTargets }, { classifyCutMode }] = await Promise.all([
+    import('./goals.js'), import('./energyBalance.js'), import('./goalModel.js'), import('./cutMode.js'),
   ]);
   const goals = (() => { try { return getGoals() || {}; } catch { return {}; } })();
   const comp = (() => { try { return getCurrentBodyComp(); } catch { return null; } })();
@@ -209,6 +223,16 @@ export async function resolveGoalModel(opts = {}) {
   const effectiveCalories = (() => {
     try { return getEffectiveTargets({ date: today })?.dailyCalories?.effective ?? null; } catch { return null; }
   })();
+  // Observed weight-trend loss rate (+ = losing) — the SAME 14d slope the Cut Mode card shows,
+  // so the goal-conflict rate and the Cut Mode readout agree (one source of truth), and the
+  // conflicts never inherit the required-to-deadline rate that blows up past the target date.
+  const observedRateLbPerWk = (() => {
+    try {
+      const cm = classifyCutMode();
+      const slope = cm?.weight?.slope14d ?? cm?.weight?.slope7d ?? null;
+      return slope != null ? Math.round(-slope * 100) / 100 : null;   // negate: slope is - when losing
+    } catch { return null; }
+  })();
 
   return buildGoalModel({
     today, goals, races,
@@ -216,6 +240,7 @@ export async function resolveGoalModel(opts = {}) {
     currentWeightLbs: comp?.weightLbs ?? null,
     currentBodyFatPct: comp?.bodyFatPct ?? null,
     effectiveCalories,
+    observedRateLbPerWk,
     weeklyMiles: num(opts.weeklyMiles) || 0,
     longestRecentMi: num(opts.longestRecentMi) || 0,
     predictedMarathonSecs: num(opts.predictedMarathonSecs),

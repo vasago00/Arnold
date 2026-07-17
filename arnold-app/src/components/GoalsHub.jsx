@@ -44,6 +44,7 @@ import {
   clearOverride,
 } from "../core/goalModel.js";
 import { getGoals, setGoals } from "../core/goals.js";
+import { deleteRaceEverywhere } from "../core/memory.js";
 import { GoalConflicts } from "./GoalConflicts.jsx";   // Sprint 3.1c — surfaces goal-model conflicts + trade-offs
 import { predictRaceFinish } from "../core/derive/tileMetrics.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
@@ -1482,6 +1483,10 @@ export function GoalsHub({ showToast }) {
     showToast?.('Race saved');
   };
   const deleteRace = (id) => {
+    // Clear the planner race day too (else loadGoalsV2 resurrects it from the
+    // Calendar on the next open). Grab the date BEFORE we drop it from state.
+    const race = goalsV2.races.find(r => r.id === id);
+    deleteRaceEverywhere(id, race?.date);
     const next = { ...goalsV2, races: goalsV2.races.filter(r => r.id !== id) };
     setGoalsV2(next); saveGoalsV2(next);
     showToast?.('Race removed');

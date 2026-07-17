@@ -10,6 +10,7 @@
 // New code should import { storage } from './storage.js' directly.
 
 import { storage } from './storage.js';
+import { daySessions, makeDay } from './planner.js';
 
 // ─── Workouts ──────────────────────────────────────────────────────────────────
 export async function getWorkouts() {
@@ -44,6 +45,66 @@ export async function saveRaces(races) {
   // share ONE consistent race list.
   try { localStorage.setItem('arnold:races', JSON.stringify(races || [])); } catch {}
   return races;
+}
+
+// Authoritative race deletion. Removing a race from the canonical store alone is
+// NOT enough — GoalsHub.loadGoalsV2 resurrects it from two drift sources on the
+// next Plan-tab open: (a) races still nested in the goals blob, and (b) planner
+// days marked type:'race' (the race also lives on the Calendar as a planner day —
+// the red flag on the week strip). This clears ALL THREE so a deleted race stays
+// deleted everywhere (hero, season phase, strip, Plan list).
+//   id       — the race id to remove
+//   dateHint — the race's date (pass it: once the store is cleared we can't look
+//              it up to find the planner day to remove)
+export async function deleteRaceEverywhere(id, dateHint = null) {
+  const races = storage.get('races') || [];
+  const target = races.find(r => r.id === id) || null;
+  const date = target?.date || dateHint || null;
+
+  // 1. canonical races store (+ localStorage mirror)
+  const next = races.filter(r => r.id !== id);
+  await saveRaces(next);
+
+  // 2. legacy races nested in the goals blob (historical drift → mergeRaces resurrects)
+  try {
+    const goals = storage.get('goals') || {};
+    if (Array.isArray(goals.races) && goals.races.length) {
+      const trimmed = goals.races.filter(r => r.id !== id && !(date && r.date === date));
+      if (trimmed.length !== goals.races.length) storage.set('goals', { ...goals, races: trimmed });
+    }
+  } catch { /* ignore */ }
+
+  // 3. planner day(s) marked type:'race' on that date (plannerRaceDays resurrects)
+  try {
+    if (date) {
+      const { planner, changed } = clearPlannerRaceDay(storage.get('planner') || {}, date);
+      if (changed) storage.set('planner', planner, { skipValidation: true });
+    }
+  } catch { /* ignore */ }
+
+  return next;
+}
+
+// Pure: remove any type:'race' session from planner days that fall on `date`.
+// Returns { planner, changed }. Exported for testing (the date math is the
+// fiddly bit — Monday-anchored week + day offset → ISO date).
+export function clearPlannerRaceDay(planner, date) {
+  if (!planner || !date) return { planner, changed: false };
+  let changed = false;
+  const out = {};
+  for (const [k, wk] of Object.entries(planner)) {
+    if (!wk || !wk.weekStart || !Array.isArray(wk.days)) { out[k] = wk; continue; }
+    const days = wk.days.map((day, i) => {
+      const d = new Date(wk.weekStart + 'T12:00:00'); d.setDate(d.getDate() + i);
+      const iso = d.toISOString().slice(0, 10);
+      if (iso !== date || !day) return day;
+      const kept = daySessions(day).filter(s => s.type !== 'race');
+      if (kept.length !== daySessions(day).length) { changed = true; return makeDay(kept); }
+      return day;
+    });
+    out[k] = { ...wk, days };
+  }
+  return { planner: out, changed };
 }
 
 // ─── Garmin (legacy aggregate, kept for Training tab compatibility) ──────────
