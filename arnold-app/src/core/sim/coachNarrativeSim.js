@@ -125,10 +125,17 @@ function genContext(rng, { adversarial = false } = {}) {
     : Math.max(0, weekMiTarget - missedMi);
 
   const eaVal = rng.int(15, 55);
-  const kToday = rng.int(0, 3200);
+  // THE EMPTY FOOD LOG IS A REAL, COMMON STATE — and it was effectively unreachable here. Drawing
+  // intake from rng.int(0, N) makes "exactly nothing logged" a 1-in-N coincidence (~0.5%), so the
+  // no-data branches of every fuel beat were being graded on ~zero cases. That is precisely the
+  // state Emil screenshotted at 00:53 (0 of 1,880 kcal · 0 of 153g), i.e. the one bug the sim was
+  // structurally incapable of finding. Model it as its own outcome: on ~15% of days the athlete
+  // simply hasn't logged yet, and BOTH numbers are 0 together the way they are in real life.
+  const emptyLog = rng.chance(0.15);
+  const kToday = emptyLog ? 0 : rng.int(0, 3200);
   const kTarget = rng.int(1500, 3200);
   const pTarget = rng.int(100, 180);
-  const pToday = rng.int(0, 180);
+  const pToday = emptyLog ? 0 : rng.int(0, 180);
 
   const ctx = {
     clock: { hour: bad ? NaN : rng.int(0, 23) },

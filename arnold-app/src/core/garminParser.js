@@ -161,9 +161,7 @@ function parseIntSafe(v) {
   return isNaN(n) ? null : n;
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
+import { round2 } from './stats.js';
 
 /**
  * Detect if distance is miles or km.

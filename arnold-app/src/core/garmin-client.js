@@ -229,7 +229,7 @@ function minSec(s) {
   if (typeof s !== 'number' || s < 0) return null;
   return Math.round(s / 60);
 }
-function round2(n) { return Math.round(n * 100) / 100; }
+import { round2 } from './stats.js';
 
 // Convert a GMT timestamp (ISO string or epoch ms) to local-time HH:MM string.
 // Returns null when input is falsy / unparseable.

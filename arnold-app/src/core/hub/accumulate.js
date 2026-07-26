@@ -1,23 +1,21 @@
 // Hub core — AMBIENT signal accumulation. Backfill (backfill.js) replays RACE/long
 // checkpoints into the fitness + response ledgers. This complements it by sweeping
 // EVERY run for the training-only signals that don't need a race:
-//   • heatStrain — hot runs with elevated HR → trainingHeat → response.factors.heatStrain
+//   • heatStrain — hot runs with elevated HR → response.factors.heatStrain
+//   • humidity   — humid runs with elevated HR → response.factors.humidity
+//   • elevation  — hilly runs with elevated HR → response.factors.elevation
 //   • (sweat + body accumulate from weigh-ins via their own live-ingest path, since
 //      historical before/after weights generally aren't in activity history.)
-// Pure, dependency-injected; unit-tested in tests/hubAccumulate.test.mjs.
+// Pure, dependency-injected; unit-tested in tests/hubAccumulate.test.js.
 
 import { isRun } from '../activityClass.js';
-import { ingestTrainingHeat } from './trainingHeat.js';
+import { learnDriftSensitivities } from './hrDriftModel.js';
+import { makeEstimate } from './estimate.js';
 import { recordWeighIn } from './bodyModel.js';
 import { observeSweat } from './sweatModel.js';
 
-const tempOf = a => {
-  const t = Number(a.avgTemperature ?? a.tempC ?? a.weatherTempC);
-  return Number.isFinite(t) ? t : null;
-};
-
 // The athlete's usual same-discipline avg HR (median across non-race runs) — the
-// baseline a hot run's HR is judged against.
+// baseline a hot/humid/hilly run's HR is judged against.
 export function usualRunHR(activities = []) {
   const hrs = (activities || [])
     .filter(a => a && isRun(a) && Number(a.avgHR) > 0 && !(a.isRace === true || a.type === 'race'))
@@ -26,26 +24,44 @@ export function usualRunHR(activities = []) {
   return hrs[Math.floor(hrs.length / 2)];
 }
 
-// Sweep all runs → accumulate heatStrain into state.response. Returns a NEW state.
+// Sweep all runs → learn the environmental HR-drift sensitivities (heatStrain,
+// humidity, elevation) by MULTIVARIATE REGRESSION of each run's HR-drift-vs-usual on
+// temperature, humidity and grade TOGETHER (hrDriftModel). Fitting the three jointly
+// is what separates correlated heat & humidity when the data supports it (dry-hot AND
+// humid-hot days) and honestly collapses their confidence when it doesn't — a truth a
+// proportional split can't tell. Each identified sensitivity is written as an Estimate
+// carrying the regression's value + confidence, so hubFacts/sensitivityOf/LearnedHero
+// consume them completely unchanged. Returns a NEW state.
 export function accumulateTrainingSignals(state, activities = [], opts = {}) {
   const usualHR = opts.usualHR ?? usualRunHR(activities);
-  if (!usualHR) return { state, heatLearned: 0, usualHR: null };
+  if (!usualHR) return { state, heatLearned: 0, humidityLearned: 0, elevationLearned: 0, usualHR: null };
 
-  const runs = (activities || [])
-    .filter(a => a && a.date && isRun(a) && Number(a.avgHR) > 0 && tempOf(a) != null)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const runs = (activities || []).filter(a => a && a.date && isRun(a) && Number(a.avgHR) > 0);
+  const learned = learnDriftSensitivities(runs, usualHR, opts);
 
-  let response = state.response;
-  let heatLearned = 0, prevDate = null;
-  for (const a of runs) {
-    const ageWeeks = prevDate
-      ? Math.max(0, (new Date(`${a.date}T12:00:00`) - new Date(`${prevDate}T12:00:00`)) / (7 * 86400000))
-      : 0;
-    const r = ingestTrainingHeat(response, { tempC: tempOf(a), avgHR: Number(a.avgHR) }, { usualHR }, { ...opts, ageWeeks });
-    response = r.model;
-    if (r.learned) { heatLearned += 1; prevDate = a.date; }
-  }
-  return { state: { ...state, response }, heatLearned, usualHR };
+  // Regression sensitivity → Estimate whose confidence() reproduces the regression's:
+  // confidence = precision/(precision+1) ⇒ precision = c/(1−c). Value carries straight
+  // through. A factor the regression couldn't identify (dropped column / non-positive
+  // effect) yields null and simply isn't written — no fabricated number.
+  const asEstimate = (s) => {
+    if (!s || !(s.value > 0)) return null;
+    const c = Math.max(0, Math.min(0.98, s.confidence || 0));
+    return makeEstimate(s.value, c < 1 ? c / (1 - c) : 1e6);
+  };
+
+  const factors = { ...(state.response && state.response.factors) };
+  const heat = asEstimate(learned.factors.heatStrain);
+  const hum  = asEstimate(learned.factors.humidity);
+  const elev = asEstimate(learned.factors.elevation);
+  if (heat) factors.heatStrain = heat;
+  if (hum)  factors.humidity   = hum;
+  if (elev) factors.elevation  = elev;
+
+  return {
+    state: { ...state, response: { ...state.response, factors } },
+    heatLearned: heat ? 1 : 0, humidityLearned: hum ? 1 : 0, elevationLearned: elev ? 1 : 0,
+    usualHR, driftR2: learned.r2, driftN: learned.n,
+  };
 }
 
 const hourOf = t => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? (+m[1] + (+m[2]) / 60) : null; };

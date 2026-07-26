@@ -35,6 +35,7 @@ import { RaceFocusCard } from "./RaceFocusCard.jsx";
 import { summarizeRecentSignatures } from "../core/derive/recoverySignature.js";
 import { todayPlanned } from "../core/planner.js";
 import { MiniBar } from "./MiniBar.jsx";
+import { resolveEasyZone } from "../core/derive/easyZoneResolve.js";   // the app's ONE easy-pace/ceiling answer
 import { NutritionInput as NutritionInputPanel } from "./NutritionInput.jsx";
 import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile.jsx";
 import { createEntry as createNutEntry, saveEntry as saveNutEntry, getEntriesForDate as getNutEntries, deleteEntry as deleteNutEntry, dailyTotals as nutDailyTotals } from "../core/nutrition.js";
@@ -42,6 +43,7 @@ import { isRun as isRunAct, isStrength as isStrengthAct, isStrengthVolume as isS
 import { cyclingMetricsFor } from "../core/derive/cyclingMetrics.js";
 import { getTopCoachingPrompts } from "../core/coachingPrompts.js";
 import { getEffectiveTargets as getDerivedTargets } from "../core/goalModel.js";
+import { describeEatBack } from "../core/calorieTargetMath.js";
 import { paceTrend } from "../core/trainingIntelligence.js";
 import { computeRTSS, computeHrTSS, computeAcuteChronicRatio, computeTonnage, computeDensity, matchTemplate, computeRolling7d, computeRolling30d, getEffectiveMaxHR } from "../core/trainingStress.js";
 import { allActivities } from "../core/dcyMath.js";
@@ -751,39 +753,39 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
       caloriesHero: () => calories      ? { icon:'flame',           color:'#fb923c', label:'Calories',      value: String(calories),          tint:'rgba(251,146,60,0.06)' } : null,
       loadHero:   () => tss            ? { icon:'activity',        color:'#a78bfa', label:'Load',          value: String(Math.round(tss)),   tint:'rgba(167,139,250,0.06)' } : null,
       // Row 2 (context) tiles — same component, smaller display.
-      r2_duration:   () => (fd.duration && fd.duration !== '—') ? { icon:'clock-hour-4', color:'#94a3b8', value: fd.duration,                       label:'duration' } : null,
-      r2_avgHR:      () => avgHR        ? { icon:'heartbeat',          color: _paintM('avgHR_pctMax', avgHRPctMax, '#f87171'), value: safeDisp(fd.avgHR,'avgHR'),       label:'avg HR' } : null,
-      r2_maxHR:      () => maxHR        ? { icon:'heart-rate-monitor', color: '#94a3b8', value: safeDisp(fd.maxHR,'maxHR'),       label:'max HR' } : null,
-      r2_calories:   () => calories     ? { icon:'flame',              color:'#fb923c', value: String(calories),                  label:'calories' } : null,
-      r2_aeroTE:     () => aeroTE       ? { icon:'target-arrow',       color:'#4ade80', value: aeroTE.toFixed(1),                 label:'aero TE' } : null,
-      r2_anaerTE:    () => anaerTE      ? { icon:'activity',           color: _paintM('anaerobicTE', anaerTE, '#fb7185'), value: anaerTE.toFixed(1),                label:'anaer TE' } : null,
+      r2_duration:   () => (fd.duration && fd.duration !== '—') ? { icon:'clock-hour-4', color:'#94a3b8', value: fd.duration,                       label:'Duration' } : null,
+      r2_avgHR:      () => avgHR        ? { icon:'heartbeat',          color: _paintM('avgHR_pctMax', avgHRPctMax, '#f87171'), value: safeDisp(fd.avgHR,'avgHR'),       label:'Avg HR' } : null,
+      r2_maxHR:      () => maxHR        ? { icon:'heart-rate-monitor', color: '#94a3b8', value: safeDisp(fd.maxHR,'maxHR'),       label:'Max HR' } : null,
+      r2_calories:   () => calories     ? { icon:'flame',              color:'#fb923c', value: String(calories),                  label:'Calories' } : null,
+      r2_aeroTE:     () => aeroTE       ? { icon:'target-arrow',       color:'#4ade80', value: aeroTE.toFixed(1),                 label:'Aero TE' } : null,
+      r2_anaerTE:    () => anaerTE      ? { icon:'activity',           color: _paintM('anaerobicTE', anaerTE, '#fb7185'), value: anaerTE.toFixed(1),                label:'Anaer TE' } : null,
       r2_tss:        () => tss          ? { icon:'activity',           color:'#a78bfa', value: String(Math.round(tss)),            label:'TSS' } : null,
-      r2_load:       () => tss          ? { icon:'activity',           color:'#a78bfa', value: String(Math.round(tss)),            label:'load' } : null,
-      r2_decoupling: () => decoupling != null ? { icon:'wave-sine',    color: _paintM('decoupling', decoupling, '#fbbf24'), value: `${decoupling.toFixed(1)}%`,        label:'decoupling' } : null,
+      r2_load:       () => tss          ? { icon:'activity',           color:'#a78bfa', value: String(Math.round(tss)),            label:'Load' } : null,
+      r2_decoupling: () => decoupling != null ? { icon:'wave-sine',    color: _paintM('decoupling', decoupling, '#fbbf24'), value: `${decoupling.toFixed(1)}%`,        label:'Decoupling' } : null,
       r2_z1pct:      () => { const v=Number.isFinite(+z.z1)?+z.z1:null; return v==null?null:{ icon:'target-arrow', color:'#22d3ee', value:_fmtPct(v), label:'Z1 time' }; },
       r2_z2pct:      () => { if (z2==null) return null; const p=z2Paint(); return { icon:'target-arrow', color:p.c, value:_fmtPct(z2), label:'Z2 time' }; },
       r2_z34pct:     () => z34 != null  ? { icon:'target-arrow',       color:'#fbbf24', value:_fmtPct(z34),                        label:'Z3–4 time' } : null,
       r2_z45pct:     () => z45 != null  ? { icon:'activity',           color: _paintM('z45Pct', z45, '#fb7185'), value:_fmtPct(z45), label:'Z4–5 time' } : null,
-      r2_cardiacDrift: () => drift != null ? { icon:'activity',        color: _paintM('cardiacDrift', drift, '#fb7185'), value:`${drift>=0?'+':''}${drift.toFixed(1)}%`, label:'drift' } : null,
-      r2_vertOsc:    () => vert         ? { icon:'wave-sine',          color:'#fbbf24', value: vert.toFixed(1),                    label:'vert osc · cm' } : null,
+      r2_cardiacDrift: () => drift != null ? { icon:'activity',        color: _paintM('cardiacDrift', drift, '#fb7185'), value:`${drift>=0?'+':''}${drift.toFixed(1)}%`, label:'Drift' } : null,
+      r2_vertOsc:    () => vert         ? { icon:'wave-sine',          color:'#fbbf24', value: vert.toFixed(1),                    label:'Vert osc · cm' } : null,
       r2_hrRecovery: () => hrRecovery   ? { icon:'heartbeat',          color: _paintM('hrRecovery1m', hrRecovery, '#22d3ee'), value: `−${Math.round(hrRecovery)}`,       label:'HR recov 1m' } : null,
-      r2_avgPace:    () => fd.avgPacePerMi ? { icon:'stopwatch',       color:'#4ade80', value: fd.avgPacePerMi,                    label:'avg pace' } : null,
-      r2_avgPower:   () => fd.avgPowerW ? { icon:'bolt',               color:'#fbbf24', value: `${fd.avgPowerW} W`,                label:'avg power' } : null,
+      r2_avgPace:    () => fd.avgPacePerMi ? { icon:'stopwatch',       color:'#4ade80', value: fd.avgPacePerMi,                    label:'Avg pace' } : null,
+      r2_avgPower:   () => fd.avgPowerW ? { icon:'bolt',               color:'#fbbf24', value: `${fd.avgPowerW} W`,                label:'Avg power' } : null,
       r2_normPower:  () => fd.normalizedPower ? { icon:'bolt',         color:'#fb923c', value: `${fd.normalizedPower} W`,          label:'NP' } : null,
-      r2_avgSpeed:   () => (fd.distanceMi && fd.durationSecs) ? { icon:'gauge', color:'#22d3ee', value: `${(fd.distanceMi / (fd.durationSecs/3600)).toFixed(1)} mph`, label:'avg speed' } : null,
+      r2_avgSpeed:   () => (fd.distanceMi && fd.durationSecs) ? { icon:'gauge', color:'#22d3ee', value: `${(fd.distanceMi / (fd.durationSecs/3600)).toFixed(1)} mph`, label:'Avg speed' } : null,
       r2_if:         () => (tss && fd.durationSecs) ? { icon:'gauge', color:'#a78bfa', value: Math.sqrt(tss / (fd.durationSecs/3600 * 100)).toFixed(2), label:'IF' } : null,
-      r2_elevation:  () => fd.totalAscentFt ? { icon:'mountain',       color:'#94a3b8', value: `${fd.totalAscentFt} ft`,           label:'elevation' } : null,
+      r2_elevation:  () => fd.totalAscentFt ? { icon:'mountain',       color:'#94a3b8', value: `${fd.totalAscentFt} ft`,           label:'Elevation' } : null,
       // Running-form / economy metrics (already in our FIT output) + cycling pacing.
-      r2_groundContact:  () => fd.avgGroundContactTime ? { icon:'shoe',   color:'#a78bfa', value: `${Math.round(fd.avgGroundContactTime)} ms`, label:'ground contact' } : null,
-      r2_verticalRatio:  () => fd.avgVerticalRatio     ? { icon:'wave-sine', color:'#fbbf24', value: `${(+fd.avgVerticalRatio).toFixed(1)}%`,    label:'vert ratio' } : null,
-      r2_variabilityIndex: () => (fd.normalizedPower && fd.avgPowerW) ? { icon:'gauge', color:'#22d3ee', value: (fd.normalizedPower / fd.avgPowerW).toFixed(2), label:'variability' } : null,
+      r2_groundContact:  () => fd.avgGroundContactTime ? { icon:'shoe',   color:'#a78bfa', value: `${Math.round(fd.avgGroundContactTime)} ms`, label:'Ground contact' } : null,
+      r2_verticalRatio:  () => fd.avgVerticalRatio     ? { icon:'wave-sine', color:'#fbbf24', value: `${(+fd.avgVerticalRatio).toFixed(1)}%`,    label:'Vert ratio' } : null,
+      r2_variabilityIndex: () => (fd.normalizedPower && fd.avgPowerW) ? { icon:'gauge', color:'#22d3ee', value: (fd.normalizedPower / fd.avgPowerW).toFixed(2), label:'Variability' } : null,
       // Durability (long efforts) + estimated 1RM (strength).
       r2_durability: () => { if (!_durLong || _durVal == null) return null; const t = _durVal < 5 ? 'durable' : _durVal < 8 ? 'holding' : 'fading'; const c = _durVal < 5 ? '#4ade80' : _durVal < 8 ? '#fbbf24' : '#f87171'; return { icon:'activity', color:c, value:t, label:`durability ${_durVal.toFixed(1)}%` }; },
       e1rmHero:   () => _e1rm ? { icon:'barbell', color:'#a78bfa', label:`Est 1RM${_e1rmLift?` · ${_e1rmLift}`:''}`, value:`${_e1rm} lb`, tint:'rgba(167,139,250,0.06)' } : null,
       r2_e1rm:    () => _e1rm ? { icon:'barbell', color:'#a78bfa', value:`${_e1rm} lb`, label:`est 1RM${_e1rmLift?` · ${_e1rmLift}`:''}` } : null,
       // Per-session VO2max estimate + respiration rate (Garmin).
       r2_vo2max:      () => fd.estimatedVo2Max ? { icon:'activity',  color:'#22d3ee', value:`${fd.estimatedVo2Max}`,      label:'VO₂max' } : null,
-      r2_respiration: () => fd.avgRespirationRate ? { icon:'wave-sine', color:'#60a5fa', value:`${fd.avgRespirationRate}`, label:'breaths/min' } : null,
+      r2_respiration: () => fd.avgRespirationRate ? { icon:'wave-sine', color:'#60a5fa', value:`${fd.avgRespirationRate}`, label:'Breaths/min' } : null,
     };
 
     const PROFILES = {
@@ -1260,10 +1262,8 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
   // Pace helpers
   const paceToSecs=p=>{if(!p)return 0;const[m,s]=p.split(':').map(Number);return(isNaN(m)||isNaN(s))?0:m*60+s;};
   const secsToPace=s=>`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
-  const pacePctFn=(actualPace,goalPace)=>{
-    const a=paceToSecs(actualPace),g=paceToSecs(goalPace||'9:30');
-    return a>0?Math.min(g/a,1):0;
-  };
+  // (pacePctFn removed 2026-07 — it hard-defaulted to a 9:30 "goal" and graded every run, easy days included,
+  // as faster-is-better. The Vs Goal row now picks a session-appropriate reference and direction inline.)
 
   // Weekly miles for "Vs Goal"
   const weeklyMiles=(()=>{
@@ -1772,12 +1772,17 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
               const calT = eff?.dailyCalories?.effective || 0;
               const proT = eff?.dailyProtein?.effective  || 0;
               const eatBack = eff?.dailyCalories?.explain?.components?.eatBack || 0;
+              // Fix #5 — the earned figure carries its burned→earned relationship.
+              const eb = describeEatBack(eff?.dailyCalories?.explain?.components || {});
               return {
                 calLeft: Math.max(0, Math.round(calT - (totals.calories || 0))),
                 proLeft: Math.max(0, Math.round(proT - (totals.protein  || 0))),
                 calT, proT,
                 earned: eatBack > 0 ? Math.round(eatBack) : 0,
                 isTrainingDay: eatBack > 0,
+                earnedBurned: eb.burned,
+                earnedPct: eb.pct,
+                earnedExplain: eb.text,
               };
             } catch { return null; }
           })();
@@ -1834,16 +1839,19 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                     {[
                       { v: fuel.calLeft.toLocaleString(),
                         lbl: 'Cal Left',
-                        sub: `of ${fuel.calT.toLocaleString()}` },
+                        sub: `Of ${fuel.calT.toLocaleString()}` },
                       { v: `${fuel.proLeft}g`,
                         lbl: 'Protein Left',
-                        sub: `of ${fuel.proT}g` },
+                        sub: `Of ${fuel.proT}g` },
                       { v: fuel.isTrainingDay ? `+${fuel.earned}` : '—',
                         lbl: 'Earned',
-                        sub: fuel.isTrainingDay ? 'from session' : 'rest day',
+                        sub: fuel.isTrainingDay
+                          ? (fuel.earnedBurned > 0 && fuel.earnedPct != null ? `${fuel.earnedPct}% of ${fuel.earnedBurned} burned` : 'From session')
+                          : 'Rest day',
+                        title: fuel.earnedExplain || undefined,
                         color: fuel.isTrainingDay ? '#4ade80' : 'var(--text-primary)' },
                     ].map(c => (
-                      <div key={c.lbl} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', textAlign:'center', gap:2, minWidth:0 }}>
+                      <div key={c.lbl} title={c.title} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', textAlign:'center', gap:2, minWidth:0, cursor: c.title ? 'help' : 'default' }}>
                         <span style={{ fontSize:15, fontWeight:700, color: c.color || 'var(--text-primary)', lineHeight:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'100%' }}>{c.v}</span>
                         <span style={{ fontSize:9, color:'var(--text-secondary)', fontWeight:600, letterSpacing:'0.04em', textTransform:'uppercase' }}>{c.lbl}</span>
                         <span style={{ fontSize:8.5, color:'var(--text-muted)', lineHeight:1.2 }}>{c.sub}</span>
@@ -2282,15 +2290,15 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                     >
                       {splitView?'⊟ Merge':'⊞ Split'}
                     </button>
-                    <span style={{fontSize:10,color:'var(--text-muted)'}}>cumulative</span>
+                    <span style={{fontSize:10,color:'var(--text-muted)'}}>Cumulative</span>
                   </div>
                 </div>
                 <div style={{display:'flex',gap:5}}>
                   {[
-                    {label:'total distance',val:fitTotals.distanceMi?`${fitTotals.distanceMi.toFixed(2)} mi`:'—'},
-                    {label:'total time',val:fitTotals.durationSecs?fmtDurTotal(fitTotals.durationSecs):'—'},
-                    {label:'total calories',val:fitTotals.calories?`${Math.round(fitTotals.calories)}`:'—'},
-                    {label:'sessions',val:fitDataList.length},
+                    {label:'Total distance',val:fitTotals.distanceMi?`${fitTotals.distanceMi.toFixed(2)} mi`:'—'},
+                    {label:'Total time',val:fitTotals.durationSecs?fmtDurTotal(fitTotals.durationSecs):'—'},
+                    {label:'Total calories',val:fitTotals.calories?`${Math.round(fitTotals.calories)}`:'—'},
+                    {label:'Sessions',val:fitDataList.length},
                   ].map(m=>(
                     <div key={m.label} style={miniTile}>
                       <div style={miniVal}>{m.val}</div>
@@ -2561,12 +2569,38 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                         return <>
                           <div style={divider}/>
                           <div style={subHdr}>Vs Goal</div>
-                          {fd.avgPacePerMi && (
-                            <MiniBar label="Pace vs target"
+                          {/* PACE — graded against the reference that BELONGS to this session, not against race
+                              pace regardless (Emil, 2026-07: an easy run at 10:06 read 79% amber vs "Goal: 8:00
+                              /mi" when his easy ceiling is ~10:20 — the run was compliant and the card called it
+                              a miss). Reference ladder, best first:
+                                1. the pace the PLANNER prescribed for this session (paceTarget) — the plan
+                                   already derives easy/long from VDOT + observed easy, so reusing it means the
+                                   Play card and the plan cannot disagree;
+                                2. easy/long day with no prescription → the athlete's easy ceiling (resolveEasyZone,
+                                   the app's single source of truth for easy);
+                                3. quality/race day → the race-pace target.
+                              DIRECTION matters as much as the number: on an easy day, SLOWER than the reference
+                              is COMPLIANT and only running fast breaks it; on a quality day faster is better.
+                              Grading both with goal/actual is what produced the backwards read. No honest
+                              reference → show the pace and grade nothing rather than invent a target. */}
+                          {fd.avgPacePerMi && (()=>{
+                            const easyDay = planType==='easy_run' || planType==='long_run';
+                            const plannedPace = _plannedToday?.paceTarget || null;
+                            const easyRef = plannedPace || (()=>{
+                              try { const ez=resolveEasyZone(); return ez?.easyPace?.slow>0 ? secsToPace(ez.easyPace.slow) : null; } catch { return null; }
+                            })();
+                            const ref = easyDay ? easyRef : (plannedPace || profile?.targetRacePace || null);
+                            if (!ref) return <MiniBar label={easyDay?'Easy pace':'Pace'} displayValue={`${fd.avgPacePerMi} /mi`}/>;
+                            const a=paceToSecs(fd.avgPacePerMi), g=paceToSecs(ref);
+                            const pct = !(a>0&&g>0) ? 0
+                              : easyDay ? Math.min(a/g,1)     // at or slower than the easy ceiling = compliant
+                                        : Math.min(g/a,1);    // quality/race: faster = closer to target
+                            return <MiniBar
+                              label={easyDay?'Easy pace — stayed easy?':'Pace vs target'}
                               displayValue={`${fd.avgPacePerMi} /mi`}
-                              goalLabel={`Goal: ${profile?.targetRacePace||'9:30'} /mi`}
-                              pct={pacePctFn(fd.avgPacePerMi,profile?.targetRacePace)}/>
-                          )}
+                              goalLabel={`${easyDay?'Easy ceiling':'Goal'}: ${ref} /mi${plannedPace?' (planned)':''}`}
+                              pct={pct}/>;
+                          })()}
                           <MiniBar label="Weekly miles"
                             displayValue={`${weeklyMiles.toFixed(1)} / ${profile?.weeklyRunDistanceTarget||30} mi`}
                             goalLabel={`Goal: ${profile?.weeklyRunDistanceTarget||30} mi/week`}
@@ -2736,38 +2770,38 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                   const tiles = [];
                   if (!heroSkip.has('duration') && fd.duration && fd.duration !== '—') {
                     tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
-                      value: fd.duration, label:'duration' });
+                      value: fd.duration, label:'Duration' });
                   }
                   if (_maxHRNum) {
                     tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
-                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'Max HR' });
                   }
                   if (fd.totalAscentFt) {
                     tiles.push({ icon:'mountain', color:'#94a3b8',
-                      value: `${fd.totalAscentFt} ft`, label:'elevation' });
+                      value: `${fd.totalAscentFt} ft`, label:'Elevation' });
                   }
                   if (!heroSkip.has('calories') && fd.calories) {
                     tiles.push({ icon:'flame', color:'#fb923c',
-                      value: String(fd.calories), label:'calories' });
+                      value: String(fd.calories), label:'Calories' });
                   }
                   if (fd.avgPowerW) {
                     tiles.push({ icon:'bolt', color:'#fbbf24',
-                      value: `${fd.avgPowerW} W`, label:'avg power' });
+                      value: `${fd.avgPowerW} W`, label:'Avg power' });
                   }
                   if (fd.maxPowerW) {
                     tiles.push({ icon:'bolt', color:'#fbbf24',
-                      value: `${fd.maxPowerW} W`, label:'max power' });
+                      value: `${fd.maxPowerW} W`, label:'Max power' });
                   }
                   if (!heroSkip.has('aeroTE') && te) {
                     tiles.push({ icon:'target-arrow', color:'#4ade80',
-                      value: te.toFixed(1), label:'aero TE' });
+                      value: te.toFixed(1), label:'Aero TE' });
                   }
                   if (fd.isHIIT && !heroSkip.has('anaerTE') && anaerTE) {
                     tiles.push({ icon:'target-arrow', color:'#fbbf24',
-                      value: anaerTE.toFixed(1), label:'anaer TE' });
+                      value: anaerTE.toFixed(1), label:'Anaer TE' });
                   } else if (!fd.isHIIT && fd.maxCadence) {
                     tiles.push({ icon:'shoe', color:'#a78bfa',
-                      value: String(fd.maxCadence), label:'max cad' });
+                      value: String(fd.maxCadence), label:'Max cad' });
                   }
                   if (tiles.length === 0) return null;
                   // Render in rows of 4 max. Each row uses flex: 1 children so
@@ -2826,15 +2860,15 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                     }
                     const tiles = [];
                     if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
-                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'Max HR' });
                     if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
-                      value: String(fd.calories), label:'calories' });
+                      value: String(fd.calories), label:'Calories' });
                     if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
-                      value: te.toFixed(1), label:'aero TE' });
+                      value: te.toFixed(1), label:'Aero TE' });
                     if (tssVal) tiles.push({ icon:'activity', color:'#a78bfa',
                       value: Math.round(tssVal).toString(), label: tssDerived ? 'TSS*' : 'TSS' });
                     if (fd.bodyBatteryDrain) tiles.push({ icon:'gauge', color:'#94a3b8',
-                      value: `-${fd.bodyBatteryDrain}`, label:'body batt' });
+                      value: `-${fd.bodyBatteryDrain}`, label:'Body batt' });
                     if (tiles.length === 0) return null;
                     const rows = [];
                     for (let i = 0; i < tiles.length; i += 4) rows.push(tiles.slice(i, i + 4));
@@ -2976,17 +3010,17 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                     const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
                     const tiles = [];
                     if (fd.duration && fd.duration !== '—') tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
-                      value: fd.duration, label:'duration' });
+                      value: fd.duration, label:'Duration' });
                     if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
-                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'Max HR' });
                     if (fd.totalAscentFt) tiles.push({ icon:'mountain', color:'#94a3b8',
-                      value: `${fd.totalAscentFt} ft`, label:'elevation' });
+                      value: `${fd.totalAscentFt} ft`, label:'Elevation' });
                     if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
-                      value: String(fd.calories), label:'calories' });
+                      value: String(fd.calories), label:'Calories' });
                     if (fd.maxPowerW) tiles.push({ icon:'bolt', color:'#fbbf24',
-                      value: `${fd.maxPowerW} W`, label:'max power' });
+                      value: `${fd.maxPowerW} W`, label:'Max power' });
                     if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
-                      value: te.toFixed(1), label:'aero TE' });
+                      value: te.toFixed(1), label:'Aero TE' });
                     if (tiles.length === 0) return null;
                     const rows = [];
                     for (let i = 0; i < tiles.length; i += 4) rows.push(tiles.slice(i, i + 4));
@@ -3048,13 +3082,13 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                     const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
                     const tiles = [];
                     if (fd.duration && fd.duration !== '—') tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
-                      value: fd.duration, label:'duration' });
+                      value: fd.duration, label:'Duration' });
                     if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
-                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'Max HR' });
                     if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
-                      value: String(fd.calories), label:'calories' });
+                      value: String(fd.calories), label:'Calories' });
                     if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
-                      value: te.toFixed(1), label:'aero TE' });
+                      value: te.toFixed(1), label:'Aero TE' });
                     if (tiles.length === 0) return null;
                     return (
                       <div style={{display:'flex',gap:6}}>
@@ -3107,13 +3141,13 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
                     const te = fd.aerobicTrainingEffect ?? fd.aerobicTE;
                     const tiles = [];
                     if (fd.duration && fd.duration !== '—') tiles.push({ icon:'clock-hour-4', color:'#94a3b8',
-                      value: fd.duration, label:'duration' });
+                      value: fd.duration, label:'Duration' });
                     if (_maxHRNum) tiles.push({ icon:'heart-rate-monitor', color:'#f87171',
-                      value: safeDisp(fd.maxHR,'maxHR'), label:'max HR' });
+                      value: safeDisp(fd.maxHR,'maxHR'), label:'Max HR' });
                     if (fd.calories) tiles.push({ icon:'flame', color:'#fb923c',
-                      value: String(fd.calories), label:'calories' });
+                      value: String(fd.calories), label:'Calories' });
                     if (te) tiles.push({ icon:'target-arrow', color:'#4ade80',
-                      value: te.toFixed(1), label:'aero TE' });
+                      value: te.toFixed(1), label:'Aero TE' });
                     if (tiles.length === 0) return null;
                     return (
                       <div style={{display:'flex',gap:6}}>
@@ -3235,15 +3269,15 @@ export function LogDay({data,persist,showToast,mobileView,setTab}){
               <div style={{display:'flex',gap:6,flex:1,alignItems:'center'}}>
                 <div style={miniTile}>
                   <div style={{...miniVal,color:'#60a5fa'}}>{todayMovement.steps.toLocaleString()}</div>
-                  <div style={miniLbl}>steps</div>
+                  <div style={miniLbl}>Steps</div>
                 </div>
                 <div style={miniTile}>
                   <div style={{...miniVal,color:'#fbbf24'}}>{todayMovement.active>0?Math.round(todayMovement.active):'—'}</div>
-                  <div style={miniLbl}>active kcal</div>
+                  <div style={miniLbl}>Active kcal</div>
                 </div>
                 <div style={miniTile}>
                   <div style={{...miniVal,color:'#4ade80'}}>{todayMovement.total>0?Math.round(todayMovement.total):'—'}</div>
-                  <div style={miniLbl}>total kcal</div>
+                  <div style={miniLbl}>Total kcal</div>
                 </div>
               </div>
             ) : (

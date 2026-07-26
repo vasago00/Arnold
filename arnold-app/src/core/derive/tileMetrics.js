@@ -30,51 +30,23 @@ import { storage } from '../storage.js';
 // derive/ (verified), so no import cycle.
 import { predictFromFitness } from '../hub/raceFitness.js';
 import { racedDistancesKm } from '../hub/backfill.js';
+import { projectFinishBand } from './fitnessEstimate.js';   // P1: training-responsive estimate + confidence band
+// Fitness-state architecture (FITNESS_MODEL_ARCHITECTURE.md, Phases 1–3): the PRIMARY finish-time path.
+// Observation layer → Bayesian fitness state (VDOT + σ) → transparent projection + band.
+import { estimateFitnessState } from './fitnessState.js';
+import { projectRace } from './fitnessProjection.js';
+import { effortToVdot } from './fitnessObservation.js';
 // Phase 4r.dataspine.4 — Migrated from legacy resolveCalorieTarget to
 // the canonical Layer 3 reader getEffectiveTargets (see DATAMODEL.md).
 // resolveCalorieTarget is now deprecated/deleted.
 import { getEffectiveTargets } from '../goalModel.js';
 
-// Phase 4m.2.7 — VDOT race-time predictor (Jack Daniels' lookup table).
-// Used by the Race Predictor metric as a fallback when Garmin doesn't
-// emit its own predicted-time block but does emit vO2MaxValue (most
-// modern watches do — Forerunner 2xx/9xx, Fenix, Epix, Venu).
-//
-// Each row is [VDOT, t5k_secs, t10k_secs, tHM_secs, tM_secs]. Values are
-// pulled directly from Daniels' published tables (Daniels' Running
-// Formula, 4th ed.). Linear interpolation between adjacent rows handles
-// non-integer VDOT values cleanly within ±2s of higher-order fits.
-const _VDOT_TABLE = [
-  [30, 1840, 3826,  8464, 17357],   // 30:40 / 63:46 / 2:21:04 / 4:49:17
-  [35, 1552, 3209,  7041, 14431],   // 25:52 / 53:29 / 1:57:21 / 4:00:31
-  [40, 1335, 2774,  6080, 12416],   // 22:15 / 46:14 / 1:41:20 / 3:26:56
-  [45, 1165, 2429,  5334, 10891],   // 19:25 / 40:29 / 1:28:54 / 3:01:31
-  [50, 1034, 2154,  4740,  9668],   // 17:14 / 35:54 / 1:19:00 / 2:41:08
-  [55,  929, 1937,  4260,  8684],   // 15:29 / 32:17 / 1:11:00 / 2:24:44
-  [60,  843, 1758,  3863,  7892],   // 14:03 / 29:18 / 1:04:23 / 2:11:32
-  [65,  771, 1608,  3528,  7225],   // 12:51 / 26:48 /   58:48  / 2:00:25
-  [70,  710, 1483,  3240,  6659],   // 11:50 / 24:43 /   54:00  / 1:50:59
-];
-const _VDOT_FIELD_IDX = { t5k: 1, t10k: 2, tHM: 3, tM: 4 };
-
-export function predictFromVDOT(vdot, field) {
-  if (vdot == null || !Number.isFinite(vdot)) return null;
-  const idx = _VDOT_FIELD_IDX[field];
-  if (!idx) return null;
-  if (vdot <= _VDOT_TABLE[0][0]) return _VDOT_TABLE[0][idx];
-  if (vdot >= _VDOT_TABLE[_VDOT_TABLE.length - 1][0]) return _VDOT_TABLE[_VDOT_TABLE.length - 1][idx];
-  for (let i = 0; i < _VDOT_TABLE.length - 1; i++) {
-    const v0 = _VDOT_TABLE[i][0];
-    const v1 = _VDOT_TABLE[i + 1][0];
-    if (vdot >= v0 && vdot <= v1) {
-      const t0 = _VDOT_TABLE[i][idx];
-      const t1 = _VDOT_TABLE[i + 1][idx];
-      const ratio = (vdot - v0) / (v1 - v0);
-      return Math.round(t0 + (t1 - t0) * ratio);
-    }
-  }
-  return null;
-}
+// NOTE (audit Fix #4, 2026-07): the VDOT lookup table + predictFromVDOT +
+// calibratedVDOTPredict were REMOVED as dead code. Nothing consumed them —
+// every race-time surface now routes through predictFinishSecs (the fused
+// fitness-state model), so a second, disagreeing VDOT-derived estimate was
+// pure liability. Riegel (below) is retained: it still anchors seasonCoach and
+// the no-anchor fallback trend.
 
 // Phase 4m.2.9 — Riegel's race-time predictor.
 // Peer-reviewed formula (Pete Riegel, American Scientist, 1981):
@@ -271,45 +243,107 @@ export function racePredictionOpts(activities) {
     try { const f = fatigueExponent(acts, { anchorKm: lo, targetKm: hi }); return f && Number.isFinite(f.k) ? Math.min(1.30, Math.max(1.0, f.k)) : 1.06; }
     catch { return 1.06; }
   };
-  return { kFor, racedKms: racedDistancesKm(acts) };
+  // THE unifier: a distance→finish function bound to the PRIMARY predictor (the fitness-state model). Any
+  // surface that shows race-equivalent times (the EdgeIQ "Race fitness" 5K/10K/HM/M row via hubFacts) uses this
+  // instead of its own hub Riegel fold — so every surface reads the SAME anchored fitness, and the row is
+  // internally consistent (one VDOT across all distances) instead of a fatigue-exponent fan. Returns null when
+  // there's no anchored number (no fabrication); callers fall back to their legacy path only then.
+  const finishSecsFor = (km) => { try { const p = predictFinishSecs(km, acts); return p && p.seconds > 0 ? p.seconds : null; } catch { return null; } };
+  return { kFor, racedKms: racedDistancesKm(acts), finishSecsFor };
+}
+
+// Wrap a point estimate in a confidence band using a 0..1 confidence (band widens as confidence falls).
+// Keeps the band CONSISTENT with whatever number is actually shown (training-blend, hub, or anchor).
+function _bandAround(seconds, confidence) {
+  const c = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.4;
+  const half = Math.max(0.025, Math.min(0.09, 0.025 + (1 - c) * 0.065));
+  return { low: Math.round(seconds * (1 - half)), high: Math.round(seconds * (1 + half)), halfBandPct: +(half * 100).toFixed(1) };
 }
 
 export function predictFinishSecs(distanceKm, activities) {
   if (!distanceKm || distanceKm <= 0) return null;
+  const acts = activities || [];
+  const today = new Date();
+  const hrMax = acts.reduce((m, a) => { const h = Number(a && a.maxHR); return Number.isFinite(h) && h > m ? h : m; }, 0) || undefined;
 
-  // HUB-AUTHORITATIVE: if the hub has seeded fitness, project through it — the SAME
-  // predictFromFitness the HubPanel/hubDebug use, so one race number everywhere.
-  // Distance-aware exponent comes from the athlete's own fatigueExponent fit. Falls
-  // back to the best-anchor model below when the hub isn't seeded (cold start).
+  // ── PRIMARY: the fused fitness-state model (FITNESS_MODEL_ARCHITECTURE.md). Every effort updates one
+  // latent fitness state (races dominate, tempos move it, easy miles can't); the marathon fade is a
+  // transparent readiness+durability penalty. This REPLACES the old anchor/hub/blend as the authority.
+  // Career résumé (his marathon finishes) — durability/experience input; NOT level evidence (all > 6 mo old).
+  const careerRaces = (() => { try { return storage.get('careerRaces') || []; } catch { return []; } })();
+  // Race CALENDAR (past + upcoming) — the dates the app knows are races, so a controlled-effort race
+  // (Emil's 81% HRmax Brooklyn Half) is recognised as level evidence instead of falling under the HR gate
+  // and leaving the state with no anchor. Step-1 fix (2026-07); validated in realData.test.js.
+  const races = (() => { try { return storage.get('races') || []; } catch { return []; } })();
+  let state = null, proj = null;
   try {
-    const hub = storage.get('hub:state');
-    const fitness = hub && hub.fitness;
-    if (fitness && fitness.params && fitness.params.ref10kEquivSecs) {
-      const p = predictFromFitness(fitness, distanceKm, racePredictionOpts(activities));
-      if (p && p.secs > 0) {
-        return { seconds: Math.round(p.secs), exponent: p.k != null ? +Number(p.k).toFixed(3) : null, exponentSource: 'hub', source: 'hub', distanceKm };
+    state = estimateFitnessState(acts, { today, hrMax, races });
+    if (state) proj = projectRace(state, distanceKm, { activities: acts, today, hrMax, careerRaces });
+  } catch { /* fall through to the legacy fallback */ }
+
+  let result = null;
+  if (proj) {
+    result = {
+      seconds: proj.seconds, low: proj.low, high: proj.high, confidence: proj.confidence, asOf: proj.asOf,
+      source: 'fitness-state', exponentSource: 'fitness-state', distanceKm,
+      vdot: proj.vdot, base: proj.base, fade: proj.fade, readiness: proj.readiness, durability: proj.durability,
+    };
+  }
+
+  // ── FALLBACK (no recent LEVEL evidence): hub fitness, else best empirical anchor. Kept so users with only
+  // stale/odd data still get a (clearly lower-confidence) number rather than a blank.
+  let demo = null;
+  if (!result) {
+    try {
+      const hub = storage.get('hub:state');
+      const fitness = hub && hub.fitness;
+      if (fitness && fitness.params && fitness.params.ref10kEquivSecs) {
+        const p = predictFromFitness(fitness, distanceKm, racePredictionOpts(acts));
+        if (p && p.secs > 0) demo = { seconds: Math.round(p.secs), source: 'hub', exponent: p.k != null ? +Number(p.k).toFixed(3) : null, exponentSource: 'hub', asOf: null };
+      }
+    } catch { /* ignore */ }
+    if (!demo) {
+      const anchor = findEmpiricalRaceAnchor(acts);
+      if (anchor?.run) {
+        const D1mi = Number(anchor.run.distanceMi || anchor.run.distance_mi);
+        const T1 = Number(anchor.run.durationSecs);
+        if (D1mi >= 3 && T1 >= 15 * 60) {
+          const D1km = D1mi * 1.60934;
+          const fit = fatigueExponent(acts, { anchorKm: D1km, targetKm: distanceKm });
+          demo = { seconds: Math.round(T1 * Math.pow(distanceKm / D1km, fit.k)), source: 'anchor', exponent: +fit.k.toFixed(3), exponentSource: fit.source, asOf: anchor.run.date };
+        }
       }
     }
-  } catch {}
+    if (demo) {
+      const conf = 0.5;   // fallback path → explicitly lower confidence
+      result = { seconds: demo.seconds, ..._bandAround(demo.seconds, conf), confidence: conf, asOf: demo.asOf, source: demo.source, exponent: demo.exponent, exponentSource: demo.exponentSource, distanceKm };
+    }
+  }
 
-  const anchor = findEmpiricalRaceAnchor(activities || []);
-  if (!anchor?.run) return null;
-  const D1mi = Number(anchor.run.distanceMi || anchor.run.distance_mi);
-  const T1 = Number(anchor.run.durationSecs);
-  if (!D1mi || D1mi < 3 || !T1 || T1 < 15 * 60) return null;
-  const D1km = D1mi * 1.60934;
-  // T = T1 × (D2/D1)^k, k from the runner's own data (not a constant Riegel 1.06,
-  // which under-predicts the further you reach past the anchor).
-  const fit = fatigueExponent(activities, { anchorKm: D1km, targetKm: distanceKm });
-  return {
-    seconds: Math.round(T1 * Math.pow(distanceKm / D1km, fit.k)),
-    exponent: +fit.k.toFixed(3),
-    exponentSource: fit.source,   // 'personal-fit' | 'durability-adjusted' | 'distance-aware'
-    fit,                          // diagnostic detail (R², n points, durability, etc.)
-    anchor,
-    distanceKm,
-  };
+  // Debug hook — `window.__finishDebug()`. Shows the state, the projection breakdown, and EVERY detected race
+  // effort at ANY age (so a marathon history surfaces for back-testing/calibration, even if it's >1 yr old).
+  try {
+    if (typeof window !== 'undefined' && Math.abs(distanceKm - 42.195) < 0.5) {
+      const raceEfforts = acts.map((a) => {
+        const o = effortToVdot(a, { hrMax });
+        return (o && o.kind === 'race') ? { date: a.date, distanceMi: +(Number(a.distanceMi || a.distance_mi) || 0).toFixed(2), durationSecs: Number(a.durationSecs), str: _fmtHMS(Number(a.durationSecs)), vdot: o.vdot } : null;
+      }).filter(Boolean).sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+      window.__finishDebug = () => ({
+        distanceKm,
+        result: result && { seconds: result.seconds, str: _fmtHMS(result.seconds), source: result.source, confidence: result.confidence, asOf: result.asOf },
+        state: state && { vdot: state.vdot, sigma: state.sigma, asOf: state.asOf, nObs: state.nObs, effRate: state.effRate, contributions: state.contributions },
+        projection: proj && { base: proj.base, baseStr: _fmtHMS(proj.base), fade: proj.fade, readiness: proj.readiness, durability: proj.durability, low: _fmtHMS(proj.low), high: _fmtHMS(proj.high) },
+        detectedRaces: raceEfforts,
+        fallback: demo && { seconds: demo.seconds, str: _fmtHMS(demo.seconds), source: demo.source },
+      });
+    }
+  } catch { /* ignore */ }
+
+  return result;
 }
+
+// hh:mm:ss for the debug hook.
+function _fmtHMS(s) { if (!Number.isFinite(s)) return null; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = Math.round(s % 60); return `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`; }
 
 export function predictRaceFinish(race, activities) {
   if (!race) return null;
@@ -423,68 +457,10 @@ export function fatigueExponent(activities, { anchorKm, targetKm }) {
   return { k: distanceAwareK, source: 'distance-aware' };
 }
 
-// Phase 4m.2.8 — Calibrated VDOT predictor (kept available as a secondary
-// option; not currently used by the Race Predictor metric, which uses
-// Riegel above. Available for future "ceiling forecast" features).
-// Raw VDOT assumes you're peaked and properly trained for the distance.
-// In reality, race-day finish times depend heavily on training volume and
-// long-run readiness. Underprepared runners with high VO2max but low
-// weekly mileage will run slower than VDOT predicts.
-//
-// We apply two penalties on top of the VDOT baseline:
-//   1. VOLUME PENALTY — compares trailing 8-week avg weekly km to the
-//      "racing target" volume for the distance:
-//        Half: ~42 km/wk (~26 mi),  Full: ~84 km/wk (~52 mi)
-//      Each percentage-point shortfall adds 0.40% to predicted time,
-//      capped at 30% total slowdown.
-//   2. LONG-RUN PENALTY — compares longest single run in the last 8 weeks
-//      to ~85% of race distance (the "have you been there?" check):
-//        Half: ~17 km long run,  Full: ~34 km long run
-//      Each percentage-point shortfall adds 0.30%, capped at 20%.
-//
-// Combined: a runner at 19 mi/wk + 8.4 mi long going into a half marathon
-// gets ~18-20% slowdown applied to their VDOT half-time. That puts the
-// prediction in race-realistic territory rather than VO2max-ceiling.
-//
-// FIELD_TO_KM maps the predictor field key to standard race distance.
+// _FIELD_TO_KM maps the predictor field key to standard race distance.
+// (Still used by riegelPredictFromRun above; the calibratedVDOTPredict that
+// also consumed it was removed as dead code in audit Fix #4.)
 const _FIELD_TO_KM = { t5k: 5, t10k: 10, tHM: 21.1, tM: 42.2 };
-
-export function calibratedVDOTPredict(vo2max, field, ctx) {
-  const baseVDOT = predictFromVDOT(vo2max, field);
-  if (baseVDOT == null) return null;
-  const raceKm = _FIELD_TO_KM[field];
-  if (!raceKm) return baseVDOT;
-
-  // Trailing 8-week training context. Use the same ctx the metric receives
-  // so the prediction stays in sync with whatever data is loaded.
-  const acts = ctx?.activities || [];
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 56);
-  cutoff.setHours(0, 0, 0, 0);
-  const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
-  let totalKm = 0;
-  let longestKm = 0;
-  for (const a of acts) {
-    if (!isRun(a) || !a?.date || a.date < cutoffStr) continue;
-    const km = (Number(a.distanceMi || a.distance_mi) || 0) * 1.60934;
-    totalKm += km;
-    if (km > longestKm) longestKm = km;
-  }
-  const avgWeeklyKm = totalKm / 8;
-
-  // Recommended training thresholds for "racing the distance":
-  const recommendedWeeklyKm = raceKm * 2.0;     // Half ≈ 42 km/wk
-  const recommendedLongKm   = raceKm * 0.85;    // Half ≈ 18 km
-
-  const volumeShortfall  = Math.max(0, 1 - avgWeeklyKm / recommendedWeeklyKm);
-  const longRunShortfall = Math.max(0, 1 - longestKm  / recommendedLongKm);
-
-  const volumePenalty  = Math.min(volumeShortfall  * 0.40, 0.30);
-  const longRunPenalty = Math.min(longRunShortfall * 0.30, 0.20);
-  const totalPenalty   = volumePenalty + longRunPenalty;
-
-  return Math.round(baseVDOT * (1 + totalPenalty));
-}
 
 // Phase 4m.2 — Nutrition samples helper. Walks nutritionLog full-day entries
 // + legacy cronometer collection, returning dated {date, value} pairs for a
@@ -957,22 +933,30 @@ export const TILE_METRICS = [
     // reflects evolving fitness as measured by what the user has ACTUALLY
     // demonstrated, not Garmin's VO2max-derived ceiling.
     historyOf: (ctx) => {
-      const acts = (ctx.activities || [])
+      // Trend series = each qualifying run projected to the HM (the default
+      // headline field). Audit Fix #4 — project with the PERSONAL distance-aware
+      // fatigue exponent (the exact model predictFinishSecs uses internally),
+      // NOT a constant Riegel 1.06, so the trend arrow speaks the same predictor
+      // as the headline number instead of a parallel one.
+      const acts = ctx.activities || [];
+      const runs = acts
         .filter(a => isRun(a) && a?.distanceMi && a?.durationSecs)
         .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      const targetKm = 21.0975; // HM
       const out = [];
-      for (const a of acts) {
-        // Only project from runs that are themselves at least ~5K — Riegel
-        // gets noisy below that. Map every qualifying run to its HM
-        // projection (the default headline field).
+      for (const a of runs) {
         const dMi = Number(a.distanceMi) || Number(a.distance_mi) || 0;
-        if (dMi < 3) continue;
-        const proj = riegelPredictFromRun(a, 'tHM');
-        if (proj && proj > 0) out.push(proj);
+        if (dMi < 3) continue;                 // Riegel/exponent noisy below ~5K
+        const T1 = Number(a.durationSecs);
+        if (!T1 || T1 < 15 * 60) continue;     // exclude warmups / sprint reps
+        const D1km = dMi * 1.60934;
+        const fit = fatigueExponent(acts, { anchorKm: D1km, targetKm });
+        const proj = Math.round(T1 * Math.pow(targetKm / D1km, fit.k));
+        if (proj > 0) out.push(proj);
       }
       // Fall back to Garmin's projections if no qualifying activity data.
       if (out.length === 0) {
-        return (ctx.activities || [])
+        return acts
           .filter(a => isRun(a) && a?.racePredictor?.tHM)
           .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
           .map(a => a.racePredictor.tHM);
@@ -1117,18 +1101,23 @@ export const TILE_METRICS = [
       // per window — your fastest demonstrated fitness — instead of averaging easy
       // runs with a constant Riegel 1.06 (the old 1:01:40 vs 49:23 disagreement).
       const targetKm = km == null ? 21.0975 : km;   // default Half when no race scheduled
-      // Hub-authoritative: when the hub is seeded, every sample = the hub's prediction
-      // so the Trend headline matches Races + the HubPanel exactly (one number). The
-      // series flattens in that case (current fitness is a single hub estimate); before
-      // the hub is seeded it falls back to the per-run personal-best projection so the
-      // tile still shows a real trend.
-      const hubSecs = (() => { const p = predictFinishSecs(targetKm, ctx.activities); return p && p.source === 'hub' ? p.seconds : null; })();
+      // Audit Fix #4 — drop the `source === 'hub'` gate. The unified predictor
+      // (predictFinishSecs: fitness-state → hub → anchor, in that order) is THE
+      // current-fitness number the Races list and the HubPanel show, so every
+      // window uses it whenever it resolves — regardless of which internal rung
+      // produced it. The old gate only flattened to the unified number when it
+      // happened to be hub-sourced; a fitness-state or anchor result slipped
+      // through to a parallel per-run Riegel fold and produced the 1:01:40-vs-
+      // 49:23 disagreement. The per-run projection now survives ONLY as the
+      // no-anchor fallback (predSecs == null), so the tile still trends before
+      // the predictor has enough to anchor on.
+      const predSecs = (() => { const p = predictFinishSecs(targetKm, ctx.activities); return p && p.seconds > 0 ? p.seconds : null; })();
       return timeframesFromCollection(
         ctx.activities,
         {
           filter: a => isRun(a),
           valueField: a => {
-            if (hubSecs != null) return hubSecs;
+            if (predSecs != null) return predSecs;   // ONE number, matches Races + Hub
             const dMi = Number(a.distanceMi || a.distance_mi);
             const T1 = Number(a.durationSecs);
             if (!dMi || dMi < 3 || !T1 || T1 < 15 * 60) {

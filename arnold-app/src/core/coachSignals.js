@@ -12,7 +12,15 @@ import { racePhase } from './seasonPlan.js';   // ONE source of the race periodi
 // `new Date().toISOString().slice(0,10)` fallback defaults across this file,
 // which silently used UTC and rolled the date forward for users west of UTC
 // in the evening (and backward for users east of UTC early in the morning).
-import { localDate } from './time.js';
+import { localDate, ymd } from './time.js';
+// ymd() is core/time.js's LOCAL formatter. Every helper below used to build a
+// Date from a local date string and then read it back with toISOString(), which
+// is UTC — so anywhere east of UTC (all of Europe, all of Asia) local midnight is
+// already the previous day in UTC and every one of these helpers returned a date
+// one day early. That shifts the windows these signals are computed over and
+// misaligns the planner week keys against the ones planGenerator writes, which is
+// how planned sessions end up compared against the wrong day and read as missed.
+// Emil races in Berlin and Valencia — the phone's timezone changes with him.
 //
 // Six derived signals that extend Arnold's view from "snapshot of today"
 // to "multi-horizon pattern analysis." Each signal is a pure function
@@ -35,7 +43,7 @@ import { localDate } from './time.js';
 function daysAgo(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  return ymd(d);
 }
 
 function inWindow(dateStr, todayStr, days) {
@@ -575,7 +583,7 @@ function isHardSession(a) {
 function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return ymd(d);
 }
 
 export function computeRecoveryVelocity(hardSessions, hrvByDate, opts = {}) {
@@ -943,7 +951,7 @@ export function computePolarizationIndex(activities, opts = {}) {
   const startDate = (() => {
     const d = new Date(today + 'T00:00:00');
     d.setDate(d.getDate() - (windowDays - 1));
-    return d.toISOString().slice(0, 10);
+    return ymd(d);
   })();
 
   const eligible = (activities || []).filter(a =>
@@ -1046,7 +1054,7 @@ export function computeDowPatterns(hrvArr, opts = {}) {
   const cutoff = (() => {
     const d = new Date(today + 'T00:00:00');
     d.setDate(d.getDate() - 90);
-    return d.toISOString().slice(0, 10);
+    return ymd(d);
   })();
   const recent = samples.filter(s => s.date >= cutoff && s.date <= today);
 
@@ -1286,7 +1294,7 @@ export function computeDeficitHrvCorrelation(opts = {}) {
   const start = new Date(today + 'T00:00:00');
   for (let i = 0; i < lookbackDays; i++) {
     const d = new Date(start); d.setDate(d.getDate() - i);
-    const ds = d.toISOString().slice(0, 10);
+    const ds = ymd(d);
     const intake = Number(getIntake(ds)) || 0;
     const tdee   = Number(getTdee(ds))   || 0;
     if (intake <= 0 || tdee <= 0) continue;
@@ -1326,7 +1334,7 @@ export function computeLoadSleepCorrelation(activities, sleepArr, opts = {}) {
     // Move to Monday of that week
     const dow = (d.getDay() + 6) % 7; // 0=Mon..6=Sun
     d.setDate(d.getDate() - dow);
-    return d.toISOString().slice(0, 10); // Monday's date as the week key
+    return ymd(d); // Monday's date as the week key
   }
 
   const loadByWeek = new Map();
@@ -1680,7 +1688,7 @@ export function computeUpcomingPlan(plannerData, opts = {}) {
     if (!Number.isFinite(d.getTime())) return null;
     const dow = (d.getDay() + 6) % 7; // 0=Mon..6=Sun
     d.setDate(d.getDate() - dow);
-    return d.toISOString().slice(0, 10);
+    return ymd(d);
   }
   function plannedFor(dateStr) {
     const wk = plannerData[mondayOf(dateStr)];
@@ -1692,7 +1700,7 @@ export function computeUpcomingPlan(plannerData, opts = {}) {
   function addDays(dateStr, n) {
     const d = new Date(dateStr + 'T12:00:00');
     d.setDate(d.getDate() + n);
-    return d.toISOString().slice(0, 10);
+    return ymd(d);
   }
   function dowOf(dateStr) {
     const d = new Date(dateStr + 'T12:00:00');
@@ -1848,7 +1856,7 @@ export function computeGoalProgress(weightArr, outcomeGoal, opts = {}) {
   const windowStart = (() => {
     const d = new Date(today + 'T00:00:00');
     d.setDate(d.getDate() - weeksWindow * 7);
-    return d.toISOString().slice(0, 10);
+    return ymd(d);
   })();
   const inWindow = series.filter(s => s.date >= windowStart && s.date <= today);
   if (inWindow.length < 2) {
@@ -2080,7 +2088,7 @@ export function computeCoachSignals(input = {}) {
   const ninetyDaysAgo = (() => {
     const d = new Date(today + 'T00:00:00');
     d.setDate(d.getDate() - 90);
-    return d.toISOString().slice(0, 10);
+    return ymd(d);
   })();
   const hardSessions = (input.activities || [])
     .filter(a => a?.date && a.date >= ninetyDaysAgo && a.date <= today && isHardSession(a))

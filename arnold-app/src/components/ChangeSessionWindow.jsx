@@ -48,8 +48,8 @@ function ImpactBox({ impact }) {
       <div style={S.iline}><span style={S.ik}>Change</span><span style={{ color: 'var(--text-secondary, #b4b8c0)' }}>{impact.summary.split('.')[0]}.</span></div>
       {v && <div style={S.iline}><span style={S.ik}>Volume</span><span style={{ color: volChanged ? '#fbbf24' : '#4ade80' }}>{volChanged ? `${v.before} → ${v.after} mi` : `${v.after} mi · unchanged`}</span></div>}
       {(impact.conflicts || []).map((c, i) => <div key={i} style={S.iline}><span style={S.ik}>Spacing</span><span style={{ color: '#fbbf24' }}>{c.text}</span></div>)}
-      {impact.losesRest && <div style={S.iline}><span style={S.ik}>Recovery</span><span style={{ color: '#f87171' }}>no rest day left this week</span></div>}
-      {impact.protectsSessions && !(impact.conflicts || []).length && !impact.losesRest && <div style={S.iline}><span style={S.ik}>Sessions</span><span style={{ color: '#4ade80' }}>all kept</span></div>}
+      {impact.losesRest && <div style={S.iline}><span style={S.ik}>Recovery</span><span style={{ color: '#f87171' }}>No rest day left this week</span></div>}
+      {impact.protectsSessions && !(impact.conflicts || []).length && !impact.losesRest && <div style={S.iline}><span style={S.ik}>Sessions</span><span style={{ color: '#4ade80' }}>All kept</span></div>}
     </div>
   );
 }
@@ -98,10 +98,18 @@ export function ChangeSessionWindow({
     const isQuality = ['tempo', 'intervals', 'hiit', 'threshold'].includes(sess.type);
     const isRun = RUN_TYPES.has(sess.type);
     const out = [];
-    // De-load a hard day to an easy run — but NOT when this session aggravates an injury:
-    // an easy run still pounds the joint, so offering it under a "protecting your knee"
-    // warning is self-contradictory (Emil). The cross-train / mobility offloads below cover it.
-    if (isQuality && !sess.aggravated) out.push({ id: 'to_easy', title: 'Easy run instead', how: 'De-load — keep the aerobic base, drop the hard stimulus.', keeps: 'aerobic base', tradeoff: 'no threshold / VO₂ today' });
+    // De-load a hard day to an easy run — ALWAYS available for a quality run, because backing intensity
+    // off while still running is a legitimate call on its own (fatigue, a niggle, a heavy week), not only
+    // an injury response (Emil: "this is not an option available to me"). When the session aggravates an
+    // injury we still OFFER it, but say plainly that an easy run keeps the impact (cross-train spares the joint more).
+    if (isQuality) out.push({
+      id: 'to_easy', title: 'Easy run instead',
+      how: sess.aggravated
+        ? 'De-load to an easy run — keeps the aerobic base, but still has impact (cross-train below spares the joint more).'
+        : 'De-load — keep the aerobic base, drop the hard stimulus.',
+      keeps: 'aerobic base',
+      tradeoff: sess.aggravated ? 'still pounds the joint' : 'no threshold / VO₂ today',
+    });
     // Equipment-gated cross-train + intent-preserving reduces from the tested engine (minus 'swap').
     const eng = buildSessionOptions(
       { type: sess.type, distanceMi: sess.distanceMi, minutes: sess.minutes },

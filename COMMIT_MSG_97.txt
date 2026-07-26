@@ -1,0 +1,45 @@
+ROUND 97 — fit the strips on a phone, gate the Fuel coach on the clock, and make Arnold's capitalisation rule a test
+
+Six complaints from four screenshots (mobile Fuel / EdgeIQ / Calendar-Your plan, web Your plan).
+
+#140 Fuel coach fired at 00:53 on a rest day with an empty food log
+  "You're 153g of protein short ... after the long run ... ~40g in the next
+  couple hours (and before bed)". Every clause was false at once: the session
+  had not happened (primarySession is what the plan WROTE, not what was done),
+  it was nearly 1am, and the "gap" from an empty log is just the target
+  restated. gMechanism now has three gates - day.postWorkout (the MPS window
+  must exist), day.fuelWindowOpen (the world model's 06:00-21:00 eating hours;
+  an unknown clock leaves it CLOSED rather than guessing), and a protein.today
+  presence check, the twin of gEnergyAvailability's. The beat is not deleted:
+  a second wording says only what an empty log supports.
+
+  Why it survived: coachQuality's TIME_SENSITIVE map had NO rule naming this
+  beat, so timely=1.0 was vacuous for it; and coachNarrativeSim drew intake as
+  rng.int(0,3200)/rng.int(0,180), making "exactly nothing logged" a ~0.5%
+  coincidence - the no-data branch of every fuel beat was graded on ~zero
+  cases. Both closed: a rule with teeth (proven by /tmp/proteinprobe.mjs
+  asserting assessTimely FAILS at 01:00 and PASSES at 18:00) and an explicit
+  15% emptyLog outcome with both numbers zero together.
+
+#141/#142 both tier strips wrapped, for opposite reasons
+  repeat(auto-fit, minmax(84px,1fr)) needs ~440px; a 390px phone wrapped it
+  3+2 and clipped CEILING. Fixed in BOTH files the same way: an explicit
+  repeat(N, minmax(0,1fr)) which can never wrap, clamp() typography so one
+  declaration is 13.7px on a phone and 15.5px on web, and a maxWidth so the
+  bins cannot balloon on a 1400px card. No media queries, no second layout.
+  On web the biggest saving was deleting `asks 38` - it printed the selected
+  option's peak a SECOND time ~90px from the chip already showing it, which
+  is what pushed `Working` onto its own line.
+
+#143 "All writing in Arnold should start with a capital letter"
+  ~130 offenders across 26 files. Swept mechanically (85 label slots by regex
+  with a protected allowlist, 42 JSX text nodes by verified pair list, 9
+  attribute strings) and PINNED by a new source-scanning guard,
+  src/components/ui/sentenceCaseGuard.test.js, modelled on
+  buttonHeightGuard.test.js. ALLOW holds only units/assay names/format tokens
+  whose lowercase spelling is correct (mL, hsCRP, rTSS, hh/mm/ss).
+
+Verified: 21 node harnesses green (incl. 2 new), runPlanSim 2000 plans 0 hard
+violations, runCoachSim 0 violations across 5 seeds AFTER the sim widening,
+runQualityEval grounded/timely/coherent/concise=1.0 actionable>=0.998.
+Build-blind - not yet verified on device.

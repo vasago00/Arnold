@@ -15,7 +15,59 @@ import {
   getPlannerWeek, weekKey, nextWeekKey, daySessions, weekPlanTotals, DAY_LABELS,
 } from './planner.js';
 import { storage } from './storage.js';
-import { isRun } from './activityClass.js';
+import { allActivities, canonicalActivityType } from './dcyMath.js';
+// activityClass is THE classification contract (isRun/isHIIT/isStrength/…) and it
+// is a pure module — no imports, no storage — so it is safe to pull in statically.
+import {
+  isRun, isHIIT, isStrengthVolume, isCycling, isSwim, isSki, isWalk, isMobility,
+} from './activityClass.js';
+
+// Which logged modality actually SATISFIES a planned day. A planned tempo is
+// "done" only if you RAN — not if you lifted that day. This is the per-modality
+// honesty the flat "any run or strength" flag lacked. Recovery types
+// (rest/mobility/walk) are intentionally absent — they're never "missed" and
+// don't require a match. `cross` accepts any non-run cardio.
+//
+// intervals/hiit accept BOTH 'run' and 'hiit'. Emil's Garmin stamps a Fartlek or
+// a HYROX session as activityType 'HIIT', which classifies as hiit — a planned
+// interval session satisfied by a logged HIIT session was reading MISSED even
+// though isRun() calls the very same activity a run everywhere else.
+//
+// race accepts ANY logged session (the '*' sentinel). A race day is satisfied by
+// showing up; hard-coding ['run'] meant a cycling, swim or ski race — or a
+// marathon whose file came back tagged HIIT — was permanently missed.
+const ANY = '*';
+const PLAN_TO_CANON = {
+  easy_run: ['run'], long_run: ['run'], tempo: ['run'],
+  intervals: ['run', 'hiit'], hiit: ['run', 'hiit'], race: [ANY],
+  strength: ['strength'],
+  cycle: ['cycling'], swim: ['swim'], ski: ['ski'],
+  cross: ['cycling', 'swim', 'ski', 'hiit', 'row', 'rowing', 'elliptical', 'cross'],
+};
+
+// The modes a single logged activity satisfies, decided by the SAME predicates
+// every other surface uses. Deliberately NOT one-of: the contract at the top of
+// activityClass.js says a HIIT session with distance passes both isHIIT() and
+// isRun(), and a HYROX session is both hiit and strength volume. An activity that
+// genuinely covers two planned modalities should credit both — the alternative is
+// the old behaviour, where dcyMath's canonicalActivityType() (written for DEDUP,
+// not for classification) returned one string and quietly disagreed with isRun().
+export function modesForActivity(a) {
+  const out = new Set();
+  if (!a) return out;
+  if (isMobility(a)) { out.add('mobility'); return out; }   // mobility is exclusive
+  if (isRun(a))           out.add('run');
+  if (isHIIT(a))          out.add('hiit');
+  if (isStrengthVolume(a)) out.add('strength');
+  if (isCycling(a))       out.add('cycling');
+  if (isSwim(a))          out.add('swim');
+  if (isSki(a))           out.add('ski');
+  if (isWalk(a))          out.add('walk');
+  // Nothing matched — fall back to the canonical string so an exotic type still
+  // lands somewhere rather than vanishing.
+  if (!out.size) out.add(canonicalActivityType(a.activityType || a.title));
+  return out;
+}
 
 // Recovery days = rest OR mobility (athlete's choice, per the plan's unified
 // "Recovery" model). They're flexible: skipping one (resting) is a valid choice,
@@ -65,26 +117,67 @@ function findKey(days, fromIdx) {
 // summary. No storage/DOM, so it's node-testable by passing plain week records.
 // `executedDates` (Set/array of ISO dates with a logged activity) drives per-day
 // status: done / missed / off-plan.
-export function buildPlanWeekSummary({ week, nextWeek = null, todayIdx = 0, weekStart = null, executedDates = [] }) {
+export function buildPlanWeekSummary({ week, nextWeek = null, todayIdx = 0, weekStart = null, executedDates = [], executedMi = {}, executedModes = null }) {
   const rawDays = (week?.days || []).slice(0, 7);
-  const tIdx = Math.max(0, Math.min(6, todayIdx));
+  // `todayIdx` is where TODAY falls inside THIS week, and it is deliberately NOT clamped into
+  // 0..6 any more. It used to be, which quietly made this function unable to describe any week
+  // except the current one:
+  //
+  //   • a FUTURE week (todayIdx < 0) had Monday pinned to `tIdx = 0`, so Monday read "today" and
+  //     — combined with a caller passing a different week's days — earlier positions read `isPast`
+  //     and came back **missed**. That is Emil's "I still see misses across all surfaces": a block
+  //     generated on a Saturday starts next Monday and was being marked missed before it existed.
+  //   • a PAST week (todayIdx > 6) had Sunday pinned to `tIdx = 6`, so Sunday read "today" and a
+  //     genuinely skipped Sunday long run could never be marked missed at all.
+  //
+  // Out of range now means what it says: below 0, the whole week is ahead of us; above 6, the
+  // whole week is behind us. `isToday` can then legitimately be true for no day at all.
+  const tIdx = Number.isFinite(todayIdx) ? Math.trunc(todayIdx) : 0;
   const execSet = executedDates instanceof Set ? executedDates : new Set(executedDates || []);
+  const execMi = (executedMi && typeof executedMi === 'object') ? executedMi : {};
+  // Per-date executed modalities: { iso: Set<canonType> }. When present, done/
+  // missed is decided by whether the PLANNED modality was actually trained;
+  // when absent (older callers / the pure tests) we fall back to the flat
+  // "any run or strength" flag so the contract is unchanged.
+  const execModes = (executedModes && typeof executedModes === 'object') ? executedModes : null;
 
   const days = rawDays.map((d, i) => {
     const type = dayHeadline(d);
     const isToday = i === tIdx, isPast = i < tIdx;
     const iso = weekStart ? addDaysISO(weekStart, i) : null;
-    const executed = iso ? execSet.has(iso) : false;   // a RUN / strength was logged
+    const modeSet = (iso && execModes) ? execModes[iso] : null;
+    // `executed` — did the athlete train (run/strength) at all that day? Drives
+    // off-plan detection on recovery days. `executedPlanned` — did they do the
+    // specific modality this day called for? Drives done/missed on load days.
+    let executed, executedPlanned;
+    if (modeSet) {
+      executed = modeSet.has('run') || modeSet.has('strength');
+      const accept = PLAN_TO_CANON[type];
+      executedPlanned = accept
+        ? (accept[0] === ANY ? modeSet.size > 0 : accept.some(c => modeSet.has(c)))
+        : executed;
+    } else {
+      executed = iso ? execSet.has(iso) : false;
+      executedPlanned = executed;
+    }
+    // The ACTUAL run miles logged that day (so the plan reflects "you ran 7.5"
+    // vs the planned 6). Sourced ONLY from real logged miles — planned mileage
+    // is NEVER credited as actual when nothing was run (actualMi stays null).
+    const actualMi = (iso && execMi[iso] != null) ? Math.round(Number(execMi[iso]) * 10) / 10 : null;
     const isRecovery = RECOVERY_TYPES.has(type);
-    // status: today (ring) · done (past load day + executed) · missed (past LOAD
-    // day, nothing logged) · offplan (past recovery day but a run/strength was
-    // logged) · rest (recovery day, flexible — never "missed") · upcoming (future).
+    // status: today (ring, nothing logged yet) · done (executed the planned
+    // modality, INCLUDING today the moment you log it) · missed (past LOAD day,
+    // planned modality not trained) · offplan (recovery day but a run/strength
+    // was logged) · rest (recovery, flexible — never "missed") · upcoming.
     let status;
-    if (isToday) status = 'today';
+    if (isToday) {
+      if (isRecovery) status = executed ? 'offplan' : 'today';
+      else status = executedPlanned ? 'done' : 'today';   // today flips to done when the planned work is logged
+    }
     else if (!isPast) status = isRecovery ? 'rest' : 'upcoming';
     else if (isRecovery) status = executed ? 'offplan' : 'rest';   // recovery is optional
-    else status = executed ? 'done' : 'missed';                    // load day
-    return { idx: i, label: DAY_LABELS[i], type, isToday, isPast, executed, status };
+    else status = executedPlanned ? 'done' : 'missed';             // load day: needs the planned modality
+    return { idx: i, label: DAY_LABELS[i], type, isToday, isPast, executed, actualMi, status };
   });
 
   const totals = weekPlanTotals(week || {});
@@ -92,7 +185,9 @@ export function buildPlanWeekSummary({ week, nextWeek = null, todayIdx = 0, week
 
   // Next KEY session: today forward this week, then roll into next week.
   let nextKey = null;
-  const hit = findKey(rawDays, tIdx);
+  // Scan from today, or from Monday when the whole week is still ahead. A fully-past week
+  // (tIdx > 6) finds nothing and correctly rolls into nextWeek below.
+  const hit = findKey(rawDays, Math.max(0, tIdx));
   if (hit) {
     nextKey = {
       type: hit.session.type,
@@ -116,29 +211,91 @@ export function buildPlanWeekSummary({ week, nextWeek = null, todayIdx = 0, week
 }
 
 // Storage wrapper — reads the applied planner weeks and delegates to the pure core.
-// `date` defaults to now (injectable for tests / date changes).
-export function summarizePlanWeek(date = new Date()) {
+//
+// TWO dates, and keeping them apart is the whole point of the second parameter:
+//   `date` — WHICH WEEK to summarize (any day inside it).
+//   `now`  — WHEN IT IS. Defaults to the real clock, injectable for tests.
+//
+// They used to be the same value, which meant this function could only ever describe the
+// current week. Callers that wanted a different week — LivingPlan renders `block.weeks[0]`,
+// which after a Saturday generate is NEXT Monday's week — got this week's statuses handed back
+// and applied positionally to a different week's days. Days that had not happened yet came back
+// **missed**. Emil: "I still see misses across all surfaces."
+//
+// With them separate, todayIdx is today's position RELATIVE TO THE WEEK ASKED FOR: negative when
+// that week is still ahead (nothing can be missed yet), 0..6 inside the current week, and 7 or
+// more when the week is fully behind us (its Sunday can finally be judged).
+export function summarizePlanWeek(date = new Date(), now = null) {
   const d0 = date instanceof Date ? date : new Date(date);
+  const nowD = now == null ? new Date() : (now instanceof Date ? now : new Date(now));
   const wkStart = weekKey(d0);
+  const nowWkStart = weekKey(nowD);
+  // Whole weeks between the requested week and the current one, then today's offset inside it.
+  // Computed on the noon-safe ISO ladder rather than by dividing epoch millis, so a DST change
+  // between the two weeks cannot shift the answer by a day (Europe's 25 Oct change falls inside
+  // Emil's block). Bounded so a corrupt week key can't spin.
+  let weeksAhead = 0;
+  if (wkStart !== nowWkStart) {
+    const forward = wkStart > nowWkStart;   // ISO dates compare lexicographically
+    let cursor = forward ? nowWkStart : wkStart, n = 0;
+    const stop = forward ? wkStart : nowWkStart;
+    while (cursor < stop && n < 520) { cursor = addDaysISO(cursor, 7); n++; }
+    weeksAhead = forward ? n : -n;
+  }
+  const exec = executedForWeek(wkStart);
   return buildPlanWeekSummary({
     week: getPlannerWeek(wkStart),
     nextWeek: getPlannerWeek(nextWeekKey(d0)),
-    todayIdx: dowIndex(d0),
+    // -7 per week ahead pushes every day of a future week past `isToday`/`isPast`; +7 per week
+    // behind pushes every day of a past week into `isPast`, where it can be judged.
+    todayIdx: dowIndex(nowD) - weeksAhead * 7,
     weekStart: wkStart,
-    executedDates: executedDatesForWeek(wkStart),
+    executedDates: exec.set,
+    executedMi: exec.mi,
+    executedModes: exec.modes,
   });
 }
 
-// Dates in this week (Mon..Sun) that had a REAL training session — a run in the
-// activities store OR a strength session in the workouts store. Deliberately
-// excludes non-run activities (mobility/walk) so doing mobility on a recovery day
-// doesn't read as off-plan. Drives done/missed/off-plan. Best-effort.
-function executedDatesForWeek(weekStart) {
-  const set = new Set();
+// What was actually trained this week (Mon..Sun), read from the ONE unified
+// activity universe (dcyMath.allActivities — CSV + FIT-in-dailyLogs, deduped)
+// so a run logged only as a FIT attachment isn't invisible here and marked
+// "missed". Returns, per ISO date:
+//   • modes — Set of modes actually done that day (run/hiit/strength/cycling/
+//     swim/ski/walk/mobility), per modesForActivity(), for done/missed matching.
+//     One activity can contribute several — a HYROX is both hiit and strength.
+//   • mi    — SUMMED run miles (so the plan can show what was actually run)
+//   • set   — flat "a run or strength happened" set (back-compat / off-plan)
+// Strength sessions also come from the workouts store (they don't always land
+// in the activity universe). Best-effort — never throws.
+function executedForWeek(weekStart) {
+  const modes = {};
+  const mi = {};
   const weekDates = new Set(Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i)));
-  try { for (const a of (storage.get('activities') || [])) if (a?.date && weekDates.has(a.date) && isRun(a)) set.add(a.date); } catch { /* ignore */ }
-  try { for (const w of (storage.get('workouts') || [])) if (w?.date && weekDates.has(w.date)) set.add(w.date); } catch { /* ignore */ }
-  return set;
+  const add = (iso, mode) => { (modes[iso] || (modes[iso] = new Set())).add(mode); };
+  try {
+    for (const a of (allActivities() || [])) {
+      if (!a?.date || !weekDates.has(a.date)) continue;
+      for (const mode of modesForActivity(a)) add(a.date, mode);
+      // Miles are gated on isRun() — the SAME predicate planAdherence.js:63 uses
+      // to total the week. The strip and the adherence engine now agree by
+      // construction instead of by coincidence.
+      if (isRun(a)) {
+        const m = Number(a.distanceMi ?? a.distance_mi ?? a.miles) || 0;
+        if (m > 0) mi[a.date] = (mi[a.date] || 0) + m;
+      }
+    }
+  } catch { /* ignore */ }
+  try {
+    for (const w of (storage.get('workouts') || [])) {
+      if (w?.date && weekDates.has(w.date)) add(w.date, 'strength');
+    }
+  } catch { /* ignore */ }
+  // Flat set = any run/strength that day (mobility/walk/cycle alone don't count
+  // as "trained" for off-plan purposes — matching the prior behavior).
+  const set = new Set(
+    Object.keys(modes).filter(iso => modes[iso].has('run') || modes[iso].has('strength'))
+  );
+  return { set, mi, modes };
 }
 
 // A short human label for the next-key session, e.g. "Sat · 18 mi long run".

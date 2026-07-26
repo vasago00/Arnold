@@ -18,6 +18,7 @@ import { accumulateTrainingSignals, accumulateBodyAndSweat } from './accumulate.
 import { predictFromFitness } from './raceFitness.js';
 import { ensureHub } from './hubBoot.js';
 import { hubFacts } from './hubFacts.js';
+import { scheduleWeatherBackfill } from '../weatherBackfill.js';
 
 // Representative personal endurance exponent (10K->Marathon span), for display.
 export function personalK(activities) {
@@ -50,6 +51,14 @@ function exponentOpts(activities, opts) {
   return { k: undefined, kFor, displayK: kFor(10, 42.195) };
 }
 
+// Bridge the hub's race-fitness predictions onto the PRIMARY predictor (the fitness-state model), so the
+// "Race fitness" row in LearnedHero reads the SAME anchored number as the Training Profile / Start pill /
+// Calendar — not the legacy hub Riegel fold. Returns null when there's no anchored number → hubFacts falls
+// back to its own predictFromFitness only then.
+function finishSecsForOf(activities) {
+  return (km) => { try { const p = predictFinishSecs(km, activities); return p && p.seconds > 0 ? p.seconds : null; } catch { return null; } };
+}
+
 // Read-only: backfill a fresh hub from stored history (does not persist).
 export function buildHubFromStorage(opts = {}) {
   const activities = storage.get('activities') || [];
@@ -59,7 +68,7 @@ export function buildHubFromStorage(opts = {}) {
   const weightLog = storage.get('weight') || [];
   const acc2 = accumulateBodyAndSweat(acc.state, activities, weightLog, opts); // body trend + sweat rate
   const racedKms = racedDistancesKm(activities); // for extrapolation conservatism
-  return { ...result, state: acc2.state, k: displayK, facts: hubFacts(acc2.state, { k, kFor, racedKms }), heatLearned: acc.heatLearned, sweatLearned: acc2.sweatLearned };
+  return { ...result, state: acc2.state, k: displayK, facts: hubFacts(acc2.state, { k, kFor, racedKms, finishSecsFor: finishSecsForOf(activities) }), heatLearned: acc.heatLearned, sweatLearned: acc2.sweatLearned };
 }
 
 // PERSISTING boot: load the hub from storage, or backfill+save it if absent.
@@ -67,7 +76,7 @@ export function ensureHubFromStorage(opts = {}) {
   const activities = storage.get('activities') || [];
   const { k, kFor, displayK } = exponentOpts(activities, opts);
   const { state, source } = ensureHub(storage, { ...opts, activities, weightLog: storage.get('weight') || [], attributionFn: attribFn(), k, kFor });
-  return { state, source, k: displayK, facts: hubFacts(state, { k, kFor, racedKms: racedDistancesKm(activities) }) };
+  return { state, source, k: displayK, facts: hubFacts(state, { k, kFor, racedKms: racedDistancesKm(activities), finishSecsFor: finishSecsForOf(activities) }) };
 }
 
 if (typeof window !== 'undefined') {
@@ -139,4 +148,9 @@ if (typeof window !== 'undefined') {
   // Boot-hook (Step 2): persist the hub once shortly after startup, after the app
   // has loaded activities into storage. Guarded + silent on failure.
   setTimeout(() => { try { ensureHubFromStorage(); } catch (e) { /* boot-ensure skipped */ } }, 5000);
+
+  // One-time historical weather backfill — fills temp/humidity on past runs from
+  // their GPS coords so the environmental HR-drift model (heat/humidity) has data.
+  // Guarded + throttled + best-effort; also wires window.weatherBackfill().
+  scheduleWeatherBackfill();
 }

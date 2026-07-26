@@ -334,32 +334,67 @@ const REVERSE_KEYS = Object.fromEntries(Object.entries(KEYS).map(([k, v]) => [v,
 // has it and the union merge resurrects it.  LWW is simple and predictable:
 // "last save wins" across the board.
 //
+// Stable cross-device identity for a record inside an LWW array collection.
+// The old merge keyed only on `r.id || r.date`. Activities carry NEITHER a
+// top-level id NOR are keyed on their real identity, so two runs on the SAME
+// day collided on `date` alone — and the extras-preservation branch below then
+// silently DROPPED a genuinely-new local activity whenever its date matched
+// ANY remote record for that day (the "my second run of the day vanished after
+// sync" data loss). Weight had the identical failure: multiple readings per day
+// collapse to one when keyed on date alone.
+//
+// Identity precedence (first hit wins), mirroring the dedup keys already used
+// at import time (garmin-activities-client: source.activityId / date+type+
+// duration signature; garmin-weight-client: samplePk / date|time|weight):
+//   1. explicit ids:        id, activityId, source.activityId, samplePk
+//   2. date + sub-day time: date|time            (weight readings, timed runs)
+//   3. date + signature:    date|type|dur|cal|wt (activities without a time)
+//   4. date alone:          last resort           (daily scalar rows)
+// A more specific key can only ever SEPARATE records the old code merged — it
+// never merges records the old code kept apart — so this strictly reduces
+// silent drops without risking new duplicates (the same logical record is a
+// byte-copy across devices, so it produces an identical key on both).
+function recordIdentity(r) {
+  if (!r || typeof r !== 'object') return null;
+  if (r.id != null)                            return 'id:'  + r.id;
+  if (r.activityId != null)                    return 'aid:' + r.activityId;
+  if (r.source && r.source.activityId != null) return 'aid:' + r.source.activityId;
+  if (r.samplePk != null)                      return 'spk:' + r.samplePk;
+  const time = r.time || r.startTime || r.startTimeLocal || r.timestampLocal || null;
+  if (r.date != null && time != null)          return 'dt:'  + r.date + '|' + time;
+  if (r.date != null) {
+    const type = r.activityType || r.title || '';
+    const dur  = Math.round(Number(r.durationSecs) || 0);
+    const cal  = Math.round(Number(r.calories) || 0);
+    const wt   = (r.weightLbs != null) ? r.weightLbs : (r.weight != null ? r.weight : '');
+    if (type || dur || cal || wt !== '') return 'ds:' + r.date + '|' + type + '|' + dur + '|' + cal + '|' + wt;
+    return 'd:' + r.date;
+  }
+  return null;
+}
+
 function mergeArrays(local, remote, remoteWrittenAt = 0) {
   if (!Array.isArray(local))  return remote;
   if (!Array.isArray(remote)) return local;
 
-  // Start from the remote array (authoritative).
-  // Preserve local-only records created AFTER the remote snapshot was built,
-  // so we don't discard genuinely new local data that hasn't pushed yet.
-  const remoteIds = new Set();
-  const remoteDates = new Set();
-  for (const r of remote) {
-    if (r.id)   remoteIds.add(r.id);
-    if (r.date) remoteDates.add(r.date);
-  }
+  // Start from the remote array (authoritative). Preserve local-only records
+  // created AFTER the remote snapshot was built, so we don't discard genuinely
+  // new local data that hasn't pushed yet. Identity is composite (see above),
+  // NOT date-only — so a distinct second same-day record survives.
+  const remoteKeys = new Set();
+  for (const r of remote) { const k = recordIdentity(r); if (k) remoteKeys.add(k); }
 
   const extras = [];
   for (const r of local) {
-    // Already in remote — skip (remote version wins)
-    if (r.id && remoteIds.has(r.id))     continue;
-    if (!r.id && r.date && remoteDates.has(r.date)) continue;
+    const k = recordIdentity(r);
+    // Already in remote (identity match) — skip; the remote version wins.
+    if (k && remoteKeys.has(k)) continue;
 
-    // Local-only: keep only if created after the remote snapshot
-    const ct = r.createdAt ? new Date(r.createdAt).getTime() : 0;
-    if (ct > remoteWrittenAt) {
-      extras.push(r);
-    }
-    // Otherwise it was deleted / replaced on the remote — drop it.
+    // Local-only: keep only if created after the remote snapshot. Otherwise it
+    // was deleted / replaced on the remote — drop it (keeps deletions
+    // propagating, the reason this is LWW-with-remote-wins and not a union).
+    const ct = (r && r.createdAt) ? new Date(r.createdAt).getTime() : 0;
+    if (ct > remoteWrittenAt) extras.push(r);
   }
 
   const merged = [...remote, ...extras];
@@ -968,6 +1003,11 @@ export function getSyncStatus() {
 export function clearLastPullError() {
   try { localStorage.removeItem(CFG_LAST_PULL_ERROR); } catch {}
 }
+
+// Test-only exports — the array merge is internal to the sync engine, but its
+// identity logic is where the "same-day record vanished" data loss lives, so
+// it's exercised directly in cloud-sync.test.js.
+export { mergeArrays as _mergeArrays, recordIdentity as _recordIdentity };
 
 // ── Self-test (call from console / init) ────────────────────────────────────
 export async function selfTest() {

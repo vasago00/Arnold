@@ -377,7 +377,7 @@ export function RaceFocusCard({ race, goalPaceSecs, avgPace30, fmtPace, planned,
     <div style={panel}><span style={flagStripe}/>
       <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between'}}>
         <span style={{fontSize:SZ.title,fontWeight:500,color:'var(--text-primary)'}}>⚑ Race Focus</span>
-        <span style={{fontSize:SZ.dateLbl,color:'var(--text-muted)'}}>no race scheduled</span>
+        <span style={{fontSize:SZ.dateLbl,color:'var(--text-muted)'}}>No race scheduled</span>
       </div>
     </div>
   );

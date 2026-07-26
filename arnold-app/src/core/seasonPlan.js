@@ -19,15 +19,28 @@ const DAY = 86400000;
 const MINI_TAPER_DAYS   = 5;     // shave volume within this many days before a race
 const RACE_WEEK_DAYS    = 1;     // race is imminent (today/tomorrow)
 const RECOVERY_DAYS     = 5;     // easy days after a marathon
-const MAX_RAMP_PCT      = 0.10;  // ≤10%/week volume increase (injury-safe ramp)
-const ACWR_HOT          = 1.3;   // acute:chronic above this = overreaching → hold (don't add)
-const ACWR_DANGER       = 1.5;   // above this = high injury risk → cut volume
-const ACWR_COLD         = 0.8;   // below this = undertraining (room to build)
+// ≤10%/week volume increase — the classic conservative ramp, and still the DEFAULT.
+// Exported because core/planTiers.js has to name it as the BASELINE rung of the tier
+// triad. The triad's whole premise is that the 10% rule is a population heuristic and
+// not the physiological limit; the actual limit is acute:chronic load, i.e. ACWR_HOT
+// below. Both live here so the triad derives its rungs from this file's constants
+// rather than inventing a second, quietly different, idea of "safe".
+export const MAX_RAMP_PCT = 0.10;
+export const ACWR_HOT     = 1.3;   // acute:chronic above this = overreaching → hold (don't add)
+const ACWR_DANGER         = 1.5;   // above this = high injury risk → cut volume
+const ACWR_COLD           = 0.8;   // below this = undertraining (room to build)
 const LONGRUN_FLOOR     = 8;     // mi — don't drop a build long-run below this
 const LONGRUN_STEP      = 1.5;   // mi/week long-run progression
 const LONGRUN_TARGET    = 20;    // mi — marathon-supportive ceiling
 const DEFAULT_CEILING   = 50;    // sustainable weekly-mile ceiling (overridable)
 const MARATHON_MIN_MI   = 24;    // only races ≥ this (marathons) get a taper/recovery window
+// The line Emil drew between "a race that is part of the week" and "a race that IS the
+// week's long effort": a half marathon. 13 rather than 13.1 so a course measured or
+// entered at 13.0 doesn't fall on the wrong side of it by a rounding error. Exported
+// because hub/planGenerator.js shapes the week around exactly this threshold — one
+// definition, imported, rather than the same 13 written down in two files that can
+// then disagree.
+export const HALF_MIN_MI = 13;
 
 function parseDate(s) { return s instanceof Date ? s : new Date(String(s) + 'T12:00:00'); }
 function daysBetween(a, b) { return Math.round((parseDate(b).getTime() - parseDate(a).getTime()) / DAY); }
@@ -134,8 +147,15 @@ export function racePhase({ races = [], today = new Date(), aRaceDate = null } =
  *   ceilingMiles     : sustainable weekly ceiling (default 50)
  * @returns weekly verdict + targets + next/last-race context
  */
-export function resolveSeasonPlan({ races = [], today = new Date(), weeklyMiles = 0, longestRecentMi = 0, acwr = null, ceilingMiles = DEFAULT_CEILING, aRaceDate = null } = {}) {
+export function resolveSeasonPlan({ races = [], today = new Date(), weeklyMiles = 0, longestRecentMi = 0, acwr = null, ceilingMiles = DEFAULT_CEILING, aRaceDate = null, maxRampPct = MAX_RAMP_PCT } = {}) {
   const t = parseDate(today);
+  // The weekly step is a PARAMETER now, not a hard constant, because the tier triad
+  // needs three of them side by side (core/planTiers.js derives each rung's step from
+  // a target steady-state ACWR). Omitting it reproduces the 10% rule exactly, so every
+  // pre-existing caller behaves identically. Hard-capped at 25%/wk: past roughly there
+  // the geometric steady-state ACWR crosses the danger line no matter what the caller
+  // believes, and this file is the last place that can refuse.
+  const rampPct = Number(maxRampPct) > 0 ? Math.min(0.25, Number(maxRampPct)) : MAX_RAMP_PCT;
   // Phase + race context come from the ONE shared source (racePhase) — every
   // coaching surface now uses it, so the marathon-anchored rule lives in one place.
   const { phase, nextRace, lastRace, nextMarathon, lastMarathon,
@@ -167,8 +187,8 @@ export function resolveSeasonPlan({ races = [], today = new Date(), weeklyMiles 
       why = `ACWR ${ratio} is into overreaching (>${ACWR_HOT}) — hold volume here, don't add load, let it settle.`;
     } else if (weeklyMiles < ceilingMiles) {
       verdict = 'increase';
-      targetWeeklyMiles = Math.min(ceilingMiles, Math.round(weeklyMiles * (1 + MAX_RAMP_PCT)));
-      why = `Base (${Math.round(weeklyMiles)}mpw) is below your ${ceilingMiles}-mi ceiling and load is in range — add ~10% this week.`;
+      targetWeeklyMiles = Math.min(ceilingMiles, Math.round(weeklyMiles * (1 + rampPct)));
+      why = `Base (${Math.round(weeklyMiles)}mpw) is below your ${ceilingMiles}-mi ceiling and load is in range — add ~${Math.round(rampPct * 100)}% this week.`;
     } else {
       verdict = 'hold';
       targetWeeklyMiles = Math.round(weeklyMiles);
@@ -177,7 +197,20 @@ export function resolveSeasonPlan({ races = [], today = new Date(), weeklyMiles 
     // Long-run progression toward marathon-supportive, anchored to the build.
     const base = Math.max(LONGRUN_FLOOR, longestRecentMi || LONGRUN_FLOOR);
     longRunTargetMi = Math.min(LONGRUN_TARGET, r1(base + LONGRUN_STEP));
-    if (tuneUp) why += ` Tune-up ${tuneUp.name}${tuneUp.distanceMi ? ` (${tuneUp.distanceMi}M)` : ''} in ${tuneUp.daysToNext}d — race it as a hard effort within the week, no taper.`;
+    // "Race it hard inside the week, no taper" is the right instruction for a 5K or a
+    // 10-miler and flatly the wrong one for a supported MARATHON, which A-race mode
+    // routes through here as a tune-up so the build doesn't reset around it. The week
+    // does dip (planGenerator cuts it to ~60% and strips the quality); saying "no
+    // taper" while the plan tapers is the plan contradicting itself in its own text.
+    if (tuneUp) {
+      const tuneMi = Number(tuneUp.distanceMi) || 0;
+      const dist = tuneUp.distanceMi ? ` (${tuneUp.distanceMi}M)` : '';
+      why += tuneMi >= MARATHON_MIN_MI
+        ? ` ${tuneUp.name}${dist} in ${tuneUp.daysToNext}d — a supported marathon inside the build: easy running only into it, and the race is this week's long run. The build resumes after, it does not restart.`
+        : tuneMi >= HALF_MIN_MI
+          ? ` ${tuneUp.name}${dist} in ${tuneUp.daysToNext}d — race it hard; it takes over as this week's long run, with an easy 48h either side.`
+          : ` Tune-up ${tuneUp.name}${dist} in ${tuneUp.daysToNext}d — race it as a hard effort within the week, no taper. It counts inside the week's mileage; the long run stands.`;
+    }
   }
 
   return {
@@ -192,6 +225,7 @@ export function resolveSeasonPlan({ races = [], today = new Date(), weeklyMiles 
     targetWeeklyMiles,
     longRunTargetMi,
     acwr: ratio,
+    rampPct,
     why,
   };
 }

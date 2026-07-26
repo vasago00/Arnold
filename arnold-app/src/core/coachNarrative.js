@@ -164,17 +164,42 @@ function gMechanism(ctx) {
   const f = ctx.fuel || {};
   // Post-strength / post-long protein timing: the MPS window, not a bare gap.
   const gap = f.protein?.gap;
-  if (s && (s.type === 'strength' || s.type === 'long_run') && gap > 5) {
-    const dose = Math.min(40, Math.max(25, Math.round(gap)));
-    return {
-      id: 'mech-protein-timing', kind: 'mechanism', surfaces: ['play', 'fuel', 'daily'],
-      claim: { text: `You're ${r(gap)}g of protein short of today's target — but after ${s.type === 'strength' ? 'lifting' : 'a long run'} the timing matters more than the number: ~${dose}g in the next couple hours (and before bed) is when the session actually turns into muscle instead of just a deficit.`,
-        data: { proteinGap: gap, dose, target: f.protein?.target, today: f.protein?.today } },
-      why: `fuelForWork.protein.gap=${gap} + MPS window (post ${s.type})`,
-      tone: 'neutral',
-    };
-  }
-  return null;
+  if (!s || !(s.type === 'strength' || s.type === 'long_run') || !(gap > 5)) return null;
+
+  // ── THREE GATES. Emil, 2026-07-26, 00:53 local, on a day with NOTHING logged and NOTHING run:
+  // "You're 153g of protein short of today's target — but after a long run the timing matters more
+  // than the number: ~40g in the next couple hours (and before bed)…". Every clause of that was
+  // wrong at once, and each gate below kills one of them. ──
+  const _d = dayOf(ctx);
+
+  // (1) THE WINDOW HAS TO EXIST. "after a long run" is a claim about a session that HAS HAPPENED.
+  // `primarySession` is what the plan WROTE for today, not what was done — so with no gate the beat
+  // narrated a future run in the past tense and opened an MPS window around nothing.
+  if (!_d.postWorkout) return null;
+
+  // (2) DON'T TALK INTAKE OUTSIDE EATING HOURS. "~40g in the next couple hours (and before bed)" at
+  // 00:53 is not advice, it's an alarm clock. The world model already publishes this exact gate
+  // (`fuelWindowOpen`, 06:00–21:00); an unknown clock leaves it closed, so the beat stays silent
+  // rather than guessing — the same no-fabrication stance as everywhere else in this file.
+  if (!_d.fuelWindowOpen) return null;
+
+  // (3) NO-DATA GUARD, the twin of gEnergyAvailability's above. With an empty food log the "gap" is
+  // just the target restated: "153g short of 153g" is a fact about the LOG, not about the athlete.
+  // The nudge is still worth making after a real session — it just has to say what it actually knows.
+  const pToday = Number.isFinite(+f.protein?.today) ? +f.protein.today : null;
+  if (pToday == null) return null;
+
+  const dose = Math.min(40, Math.max(25, Math.round(gap)));
+  const after = s.type === 'strength' ? 'lifting' : 'the long run';
+  const text = pToday > 0
+    ? `You're ${r(gap)}g of protein short of today's target — but after ${after} the timing matters more than the number: ~${dose}g in the next couple hours (and before bed) is when the session actually turns into muscle instead of just a deficit.`
+    : `Nothing logged since ${after} yet. Don't chase today's ${r(f.protein?.target)}g total — get ~${dose}g in over the next couple of hours: that first dose is what turns the session into muscle rather than just a deficit.`;
+  return {
+    id: 'mech-protein-timing', kind: 'mechanism', surfaces: ['play', 'fuel', 'daily'],
+    claim: { text, data: { proteinGap: gap, dose, target: f.protein?.target, today: pToday } },
+    why: `fuelForWork.protein.gap=${gap} + MPS window (post ${s.type}, phase ${_d.phase})`,
+    tone: 'neutral',
+  };
 }
 
 function gEnergyAvailability(ctx) {

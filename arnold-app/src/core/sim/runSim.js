@@ -23,6 +23,7 @@ export function runSim({ seed = 20260702, nAthletes = 400, daysPerAthlete = 25, 
     actions: { ease: 0, trim: 0, hold: 0, greenlit: 0 },
     brackets: { none: 0, light: 0, moderate: 0, high: 0, 'very-high': 0 },
     targetMin: Infinity, targetMax: -Infinity, targetSum: 0,
+    byDiscipline: {},   // { runner:{athletes,cases,hardViolations}, triathlete:{…}, … }
   };
   const hardViolations = [];
   const monotonicViolations = [];
@@ -30,11 +31,15 @@ export function runSim({ seed = 20260702, nAthletes = 400, daysPerAthlete = 25, 
 
   for (let ai = 0; ai < nAthletes; ai++) {
     const athlete = generateAthlete(rng);
+    const disc = athlete.discipline || 'runner';
+    const db = stats.byDiscipline[disc] || (stats.byDiscipline[disc] = { athletes: 0, cases: 0, hardViolations: 0 });
+    db.athletes++;
 
     // Deterministic structural check (fuel monotonicity) once per athlete.
     for (const mv of checkFuelMonotonic(prescribeFuel, athlete)) {
       hardViolationCount++;
-      if (monotonicViolations.length < maxStoredViolations) monotonicViolations.push({ athleteIndex: ai, ...mv });
+      db.hardViolations++;
+      if (monotonicViolations.length < maxStoredViolations) monotonicViolations.push({ athleteIndex: ai, discipline: disc, ...mv });
     }
 
     const days = generateDayStream(rng, athlete, daysPerAthlete);
@@ -61,10 +66,11 @@ export function runSim({ seed = 20260702, nAthletes = 400, daysPerAthlete = 25, 
       const violations = checkCase(day, out);
       if (violations.length) {
         hardViolationCount += violations.length;
+        db.hardViolations += violations.length;
         for (const vio of violations) {
           if (hardViolations.length < maxStoredViolations) {
             hardViolations.push({
-              seed, athleteIndex: ai, dayIndex: day.dayIndex, ...vio,
+              seed, athleteIndex: ai, discipline: disc, dayIndex: day.dayIndex, ...vio,
               snapshot: {
                 fitness: athlete.fitness, rmr: athlete.rmr,
                 session: day.session.intensityClass, readiness: day.readiness,
@@ -78,6 +84,7 @@ export function runSim({ seed = 20260702, nAthletes = 400, daysPerAthlete = 25, 
 
       // Accumulate stats.
       stats.cases++;
+      db.cases++;
       if (stats.actions[adapted.action] != null) stats.actions[adapted.action]++;
       if (adapted.action === 'greenlit') stats.greenlit++;
       if (stats.brackets[fuel.bracket] != null) stats.brackets[fuel.bracket]++;
@@ -104,6 +111,7 @@ export function runSim({ seed = 20260702, nAthletes = 400, daysPerAthlete = 25, 
     monotonicViolations,
     aggregateViolations,
     ok: hardViolationCount === 0 && aggregateViolations.length === 0,
+    byDiscipline: stats.byDiscipline,   // per-discipline coverage + violation counts (multi-sport transparency)
     summary: {
       actionRates: {
         ease: pct(stats.actions.ease), trim: pct(stats.actions.trim),

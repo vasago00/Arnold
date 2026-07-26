@@ -47,12 +47,12 @@ export function AddedLoad({ fd, dateStr, profile, onSaved, onHide }) {
           </div>
           {/* Custom input on its OWN row so Set/clear never clip off the narrow mobile card. */}
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
-            <input type="number" inputMode="decimal" step="1" placeholder="custom lb" value={draft}
+            <input type="number" inputMode="decimal" step="1" placeholder="Custom lb" value={draft}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') commit(parseFloat(draft)); }}
               style={{ ...inp, flex: 1, minWidth: 0, width: 'auto' }} />
             <button onClick={() => commit(parseFloat(draft))} style={{ ...link, flexShrink: 0, opacity: parseFloat(draft) > 0 ? 1 : 0.5 }}>Set</button>
-            {lbs ? <button onClick={() => commit(0)} style={{ ...link, flexShrink: 0, color: '#f87171', background: 'rgba(248,113,113,0.08)', borderColor: 'rgba(248,113,113,0.15)' }}>clear</button> : null}
+            {lbs ? <button onClick={() => commit(0)} style={{ ...link, flexShrink: 0, color: '#f87171', background: 'rgba(248,113,113,0.08)', borderColor: 'rgba(248,113,113,0.15)' }}>Clear</button> : null}
           </div>
           {!lbs && onHide && (
             <button onClick={() => { setOpen(false); onHide(); }} style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Hide this tile</button>

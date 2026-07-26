@@ -94,7 +94,7 @@ export function CockpitRail({ gauges = [] }) {
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
               </span>
               {isFallback
-                ? <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', textTransform: 'none', letterSpacing: 0 }}>last wk</span>
+                ? <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', textTransform: 'none', letterSpacing: 0 }}>Last wk</span>
                 : (g.goal != null && !isNull && <span style={{ color: s.color, fontWeight: 600 }}>{Math.round((pct || 0) * 100)}%</span>)}
             </div>
             {isNull ? (

@@ -789,7 +789,7 @@ function CustomStrengthEditor({ initial, onSave, onCancel, onDelete }) {
           style={styles.editInput}
           value={unit}
           onChange={e => setUnit(e.target.value)}
-          placeholder="reps"
+          placeholder="Reps"
         />
       </div>
       <div>
@@ -1702,7 +1702,7 @@ export function GoalsHub({ showToast }) {
                                 className="arnold-compact-btn"
                                 style={styles.editBtn}
                                 onClick={() => setRaceModal(r.id)}
-                              >edit</button>
+                              >Edit</button>
                               <button
                                 className="arnold-compact-btn"
                                 title={`Delete ${r.name}`}
@@ -1834,7 +1834,7 @@ export function GoalsHub({ showToast }) {
                         className="arnold-compact-btn"
                         style={styles.editBtn}
                         onClick={() => setEditingId(rowKey)}
-                      >edit</button>
+                      >Edit</button>
                     </div>
                   );
                 })

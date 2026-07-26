@@ -78,9 +78,9 @@ describe('quality baseline — the current engine holds across the athlete-day d
   });
 
   it('brevity + actionability stay high, and mean quality is strong', () => {
-    expect(r.passRate.concise).toBeGreaterThanOrEqual(0.95);      // measured ~0.962 (start+week-drift overflow)
-    expect(r.passRate.actionable).toBeGreaterThanOrEqual(0.95);   // measured ~0.981
-    expect(r.meanScore).toBeGreaterThanOrEqual(0.99);
+    expect(r.passRate.concise).toBe(1);                          // was ~0.962; fixed by removing week-drift from the start cockpit
+    expect(r.passRate.actionable).toBeGreaterThanOrEqual(0.95);  // measured ~0.97
+    expect(r.meanScore).toBeGreaterThanOrEqual(0.995);           // measured ~0.998
   });
 
   it('is stable across seeds (quality is not seed-dependent)', () => {

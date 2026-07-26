@@ -19,6 +19,7 @@
 
 import { unzipSync } from 'fflate';
 import { storage } from './storage.js';
+import { resolveZones } from './zones.js';   // single source of truth for HR zones (personal-data LT1)
 import { getGarminAuth, isGarminConfigured } from './garmin-client.js';
 import { parseFITFile } from './parsers/fitParser.js';
 import { fetchWeatherForActivity, extractActivityCoords } from './weather.js';
@@ -318,7 +319,10 @@ export async function applyAdaptiveZonesIfDue() {
 export async function reBinActivitiesWithBpmZones({ daysBack = 30, onProgress, force = false } = {}) {
   if (!isGarminConfigured()) return { ok: false, error: 'not_configured' };
   const profile = storage.get('profile') || {};
-  const z = profile?.hrZoneBpm;
+  // Bin against the ONE resolved zone frame (personal-data LT1 > garmin cached), not the raw Garmin zone —
+  // so an activity's zone-seconds agree with the easy ceiling shown everywhere else (fixes the 136 vs 143 split).
+  const rz = (() => { try { return resolveZones(); } catch { return null; } })();
+  const z = (rz && rz.z) || profile?.hrZoneBpm;
   if (!z) return { ok: false, error: 'no_zone_bpm' };
   const arr = [z.z1Max, z.z2Max, z.z3Max, z.z4Max].map(Number);
   if (!arr.every(n => Number.isFinite(n) && n > 0) || !(arr[0] < arr[1] && arr[1] < arr[2] && arr[2] < arr[3])) {

@@ -23,6 +23,7 @@ import { DataHealthBanner } from './DataHealthBanner.jsx';
 // (their consumers in this file now read getEffectiveTargets fields
 // for all five of calories/protein/carbs/fat/fiber).
 import { getEffectiveTargets } from '../core/goalModel.js';
+import { describeEatBack } from '../core/calorieTargetMath.js';
 import {
   MEAL_CATEGORIES, createEntry, saveEntry, deleteEntry,
   getEntriesForDate, dailyTotals, goalImpact,
@@ -1388,11 +1389,18 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
   // eatBack come from goalModel's explain.components; training-day
   // flag = eatBack > 0.
   const _eatBack = eff?.dailyCalories?.explain?.components?.eatBack || 0;
+  // Fix #5 — surface the burned→earned relationship so the "+earned" chip and the
+  // Daily burn tile read as ONE story (401 is the eat-back of the 715 you burned),
+  // not two disagreeing numbers. One helper (describeEatBack) owns the wording.
+  const _eb = describeEatBack(eff?.dailyCalories?.explain?.components || {});
   const dyn = eff?.dailyCalories?.effective ? {
     dynamicTarget: eff.dailyCalories.effective,
     baseline:      eff.dailyCalories.effective - _eatBack,
     eatBackKcal:   _eatBack,
     isTrainingDay: _eatBack > 0,
+    burnedKcal:    _eb.burned,
+    earnedPct:     _eb.pct,
+    earnedExplain: _eb.text,
     proteinG:      eff.dailyProtein?.effective || 0,
     carbsG:        eff.dailyCarbs?.effective   || 0,
     fatG:          eff.dailyFat?.effective     || 0,
@@ -1421,8 +1429,12 @@ export function NutritionInput({ date, onUpdate, headerSlot, subtitleSlot, coach
                 {dyn.dynamicTarget} <span style={{fontSize: isMobile ? 9 : 10,fontWeight:400,color:'var(--text-muted)'}}>kcal</span>
               </span>
               {dyn.isTrainingDay && (
-                <span style={{fontSize: isMobile ? 9 : 10,color:'#e0b45e',fontWeight:500,whiteSpace:'nowrap'}}>
-                  +{dyn.eatBackKcal} earned
+                <span
+                  title={dyn.earnedExplain || undefined}
+                  style={{fontSize: isMobile ? 9 : 10,color:'#e0b45e',fontWeight:500,whiteSpace:'nowrap',cursor: dyn.earnedExplain ? 'help' : 'default'}}>
+                  +{dyn.eatBackKcal} earned{(!isMobile && dyn.burnedKcal > 0 && dyn.earnedPct != null) ? (
+                    <span style={{color:'var(--text-muted)',fontWeight:400}}> · {dyn.earnedPct}% of {dyn.burnedKcal} burned</span>
+                  ) : null}
                 </span>
               )}
               <span style={{fontSize: isMobile ? 9 : 10,color:'var(--text-muted)',whiteSpace:'nowrap'}}>

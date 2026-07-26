@@ -382,7 +382,7 @@ export function WebSystemDetail({ system, comment, onClose, data }) {
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 28, fontWeight: 600, color: statusColor, lineHeight: 1, fontFamily: 'var(--font-mono)' }}>{system.pct || 0}%</div>
-          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.08em' }}>today</div>
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Today</div>
         </div>
         {onClose && (
           <button
@@ -830,7 +830,7 @@ export function WebSystemDetail({ system, comment, onClose, data }) {
                       panel · {latestLab.date}{stale ? ` · ${labAgeMo}mo old` : ''}
                     </span>
                   ) : (
-                    <span style={{ fontSize: 9, color: '#fbbf24', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>no panel on file</span>
+                    <span style={{ fontSize: 9, color: '#fbbf24', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>No panel on file</span>
                   )}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(3, Math.min(signals.blood.length, 4))}, 1fr)`, gap: 8 }}>
@@ -846,8 +846,8 @@ export function WebSystemDetail({ system, comment, onClose, data }) {
                         </div>
                         <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 4 }}>
                           {hasValue
-                            ? (stale ? <span style={{ color: '#fbbf24' }}>stale — re-test</span> : <span>recorded</span>)
-                            : <span style={{ color: '#fbbf24' }}>no result</span>}
+                            ? (stale ? <span style={{ color: '#fbbf24' }}>Stale — re-test</span> : <span>Recorded</span>)
+                            : <span style={{ color: '#fbbf24' }}>No result</span>}
                         </div>
                       </div>
                     );

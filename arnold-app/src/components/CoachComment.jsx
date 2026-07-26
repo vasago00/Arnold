@@ -46,8 +46,12 @@ import { narrateSurface } from '../core/coachNarrative.js';          // Coach Na
 import { buildCoachContext } from '../core/coachContext.js';         // live context assembler
 import { recordShown } from '../core/coachMemory.js';                // episodic memory — record what was shown
 import { recordEngagement } from '../core/coachPersonalization.js';  // preference learning — record interaction (Stage 4)
+import { reasonedNarrative, getReasoner } from '../core/coachReasoner.js';      // Stage 3: on-device phrasing (verified)
+import { registerCoachReasoner, isEnabled as llmEnabled } from '../core/coachModel.js';   // opt-in on-device model
 import { localDate } from '../core/time.js';                         // local YYYY-MM-DD
 import { resolveTrainingProfile } from '../core/trainingProfile.js'; // async goal-vs-current profile → weakLink (slice 2b)
+import { timed, onIdle } from '../core/perf.js';                     // response-time probe + idle scheduler (keep transitions snappy)
+import { recordCoachRead } from '../core/coachReactivity.js';        // observability: when each message reacts + what triggered it
 
 const COACH_TEAL = '#5eead4';
 
@@ -792,7 +796,7 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     return () => { alive = false; };
   }, []);   // once on mount (matches LivingPlan); the weak link shifts over weeks, not per log
 
-  const computed = useMemo(() => safeCompute('CoachComment:compute', () => {
+  const computed = useMemo(() => timed('coach:compute:' + surface, () => safeCompute('CoachComment:compute', () => {
     const data = {
       // Unified activity universe (stored activities + dailyLog FIT uploads),
       // the same set the card/gauge use — so a FIT-uploaded run isn't invisible
@@ -869,31 +873,67 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
         };
       } catch {}
     }
-    return { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights };
-  }, null), [storageVersion, tick]);
+    return { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights, activities: data.activities };
+  }, null)), [storageVersion, tick]);
 
   // Episodic memory (Phase D) — after render, log the beats THIS surface actually showed so the
   // coach doesn't repeat them tomorrow. The read semantic (coachMemory: prior days only) means
   // today's write can't affect today's ranking, so there's no render loop. `shownRef` is set in the
   // narrative branches below; a render that shows no narrative leaves it null → the effect no-ops.
   const shownRef = useRef(null);
+  const bodyRef = useRef(null);   // the deterministic read for THIS surface this render (for reactivity logging)
   useEffect(() => {
     const beats = shownRef.current;
     if (beats && beats.length) {
       const ids = beats.map((b) => b.id);
       try { recordShown(ids, localDate()); } catch { /* best-effort */ }
     }
+    // Reactivity: log WHEN this surface's message changed + WHAT triggered it (dedupes internally), so a
+    // message that lingers while data streams in is visible via __coachReactivity() (Emil).
+    try { if (typeof bodyRef.current === 'string' && bodyRef.current) recordCoachRead({ surface, text: bodyRef.current, beats: shownRef.current, storageVersion }); } catch { /* best-effort */ }
+  });
+
+  // ── On-device phrasing (Stage 3, OPT-IN). Deterministic text always renders first; this effect
+  // lazily registers the on-device model (once, if the athlete flipped the flag) and, when it's ready,
+  // phrases THIS surface's read and swaps it in — non-blocking, cached per surface/day. phraseRef is
+  // populated during render (below), same pattern as shownRef. All guarded → a no-op when disabled.
+  const phraseRef = useRef(null);           // { ctx, surface, stamp, key } for the current render
+  const lastPhraseKeyRef = useRef(null);    // the read we've already kicked off (avoid re-calling the model)
+  const regKickedRef = useRef(false);       // registered the model at most once
+  const [phrased, setPhrased] = useState(null);   // { key, text }
+  useEffect(() => {
+    if (llmEnabled() && !getReasoner() && !regKickedRef.current) {
+      regKickedRef.current = true;
+      // Model REGISTRATION triggers a heavy one-time GPU load — do it at IDLE so it never competes with a
+      // screen transition (the "EdgeIQ→Play felt slow after the model went live" regression, Emil).
+      onIdle(() => { try { registerCoachReasoner().then(() => setTick((t) => t + 1)).catch(() => {}); } catch { /* ignore */ } }, 2000);
+    }
+    const p = phraseRef.current;
+    if (!p || !p.key || !getReasoner()) return;
+    if (lastPhraseKeyRef.current === p.key) return;   // already phrasing/phrased this exact read
+    lastPhraseKeyRef.current = p.key;
+    let alive = true;
+    // Keep transitions snappy: wait for the user to SETTLE on this surface (~450ms — a quick tab-through
+    // cancels via cleanup), THEN run the model at IDLE so its GPU work never janks the change animation.
+    // Deterministic text is already on screen; this only swaps in the warmer phrasing a beat later.
+    const settle = setTimeout(() => onIdle(() => {
+      if (!alive) return;
+      reasonedNarrative(p.ctx, p.surface, p.stamp)
+        .then((r) => { if (alive && r && r.source === 'reasoner' && r.text) setPhrased({ key: p.key, text: r.text }); })
+        .catch(() => {});
+    }, 2000), 450);
+    return () => { alive = false; clearTimeout(settle); };
   });
 
   if (!computed) return null;
-  const { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights } = computed;
+  const { narrative, cards, us, sessions, upcomingPlan, raceHorizon, nowMs, hour, hubInsights, activities } = computed;
   const cfg = SURFACE_CONFIG[surface] || SURFACE_CONFIG.edgeiq;
   shownRef.current = null;   // reset per render; narrative branches below set it to their shown beat ids
 
   // ── Coach Narrative engine (Phase B) — one reasoned narrative from the whole picture,
   // used on Play + Daily. Built once here; each surface below tries it first and falls
   // back to the legacy composer if it produces nothing (defensive migration). ──
-  const coachCtx = safeCompute('coachNarrative:ctx', () => buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hour, nowMs, weakLink }), null);
+  const coachCtx = safeCompute('coachNarrative:ctx', () => buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hour, nowMs, weakLink, activities }), null);
   let usedNarrative = false;
   const NARRATIVE_TONE_DOT = { corrective: '#f87171', gentle: '#fbbf24', affirming: '#4ade80', neutral: COACH_TEAL };
 
@@ -1072,6 +1112,14 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
     for (const m of picked) body += ' ' + m.text;
   }
 
+  // On-device phrasing feed (Stage 3): only when the NARRATIVE engine produced this text (not a legacy
+  // line), hand its ctx/surface to the phraser; the effect above swaps in the model's line once ready.
+  // Only body TEXT is replaced — tag, dot, beats, engagement all stay as the deterministic engine set them.
+  bodyRef.current = body;   // the finalized deterministic read (post hub-insight) — fed to reactivity logging
+  const _phraseKey = (usedNarrative && body) ? `${surface}|${localDate()}|${body}` : null;
+  phraseRef.current = _phraseKey ? { ctx: coachCtx, surface, stamp: localDate(), key: _phraseKey } : null;
+  const displayBody = (phrased && _phraseKey && phrased.key === _phraseKey) ? phrased.text : body;
+
   // Phase 4r.narrative.5.fix.30 — single-flow layout per user feedback:
   //   [sigil]  TAG: message…
   // The tag is a bold-caps, state-colored INLINE prefix to the message —
@@ -1130,7 +1178,7 @@ export function CoachComment({ surface = 'edgeiq', onOpen, style }) {
             {tag}:
           </span>
         )}
-        {body}
+        {displayBody}
       </div>
     </div>
   );

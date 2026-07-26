@@ -1112,7 +1112,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
           {weakLink && (
             <div style={{ textAlign: 'left' }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#f87171', lineHeight: 1.15 }}>{weakLink.label}</div>
-              <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 4, whiteSpace: 'nowrap' }}>weak link</div>
+              <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 4, whiteSpace: 'nowrap' }}>Weak link</div>
             </div>
           )}
         </div>
@@ -1184,7 +1184,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                 lines. Nothing was removed — the step labels became the apply button's own wording
                 (which is where that instruction actually belongs), and every explanatory paragraph
                 moved behind "show the working", where the rest of the provenance already lived. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', rowGap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', rowGap: 5, minWidth: 0, maxWidth: '100%' }}>
               <span
                 title="Every option is selectable, including the ones the coach would not advise. Choosing one redraws the preview; nothing reaches your calendar until you apply."
                 style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.09em', color: 'var(--text-muted)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}
@@ -1200,7 +1200,17 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
               {/* The ladder itself. One line per chip now, not two: name, time, and the peak it
                   demands, read left to right. The ramp cost that used to occupy the second line is
                   in the tooltip and spelled out under "show the working" — it is the kind of number
-                  you consult once, not the kind you scan six of. */}
+                  you consult once, not the kind you scan six of.
+
+                  ON A PHONE THE CHIPS ARE A GRID, NOT A RAGGED WRAP. Emil, 2026-07-26, circling this
+                  strip: *"This does not display fully or well."* Six chips of unequal width flowing
+                  into a wrapping row gave him a first line ending mid-option — the eye reads that as
+                  truncation, and it is not wrong, because there is no visible rule saying where the
+                  ladder ends. Three fixed columns × two rows is the same six options with an edge:
+                  every chip the same width, every row full, nothing dangling. */}
+              <div style={isMobile
+                ? { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4, width: '100%', minWidth: 0 }
+                : { display: 'contents' }}>
               {tierRows.map(r => {
                 const on = cur?.key === r.key;
                 const rc = VC[r.verdict] || 'var(--text-muted)';
@@ -1216,13 +1226,14 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                     onClick={() => { tierExplicit.current = true; setTier(r.key); setDirty(true); generate(target, { tier: r.key }); }}
                     style={{
                       all: 'unset', cursor: 'pointer', borderRadius: 7, whiteSpace: 'nowrap',
-                      display: 'flex', alignItems: 'baseline', gap: 4, padding: '2px 7px',
+                      display: 'flex', alignItems: 'baseline', justifyContent: 'center',
+                      gap: 3, padding: '2px 5px', minWidth: 0,
                       border: `0.5px solid ${on ? rc : 'var(--border-subtle)'}`,
                       background: on ? `${rc}1a` : 'rgba(255,255,255,0.02)',
                       opacity: on ? 1 : 0.78,
                     }}
                   >
-                    <span style={{ fontSize: 7.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: on ? rc : 'var(--text-muted)' }}>
+                    <span style={{ fontSize: 7.5, fontWeight: 700, letterSpacing: '0.02em', textTransform: 'uppercase', color: on ? rc : 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {r.label}{!r.advised ? ' ·' : ''}
                     </span>
                     <span style={{ fontSize: 11.5, fontWeight: 800, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums', color: on ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
@@ -1234,6 +1245,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                   </button>
                 );
               })}
+              </div>
 
               {/* The athlete's own time. Emil's sub-3:40 fell between Stretch (3:46) and Goal (3:30)
                   and so was not on the ladder at all — a target you cannot name is a target you
@@ -1242,7 +1254,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
               <input
                 className="arnold-compact-input"
                 value={customDraft}
-                placeholder="your own"
+                placeholder="Your own"
                 title="Name any finish time — it is priced by the same model as every option on the ladder."
                 inputMode="numeric"
                 onChange={e => setCustomDraft(e.target.value)}
@@ -1273,7 +1285,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                     setDirty(true); generate(target, { tier: undefined });
                   }}
                   style={{ all: 'unset', cursor: 'pointer', fontSize: 9.5, color: 'var(--text-muted)', borderBottom: '0.5px dotted var(--border-subtle)' }}
-                >clear</button>
+                >Clear</button>
               )}
 
               {/* ── HOW MANY DAYS THE WEEK IS SPREAD OVER ────────────────────────────────────
@@ -1317,15 +1329,18 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
 
               <span style={{ flex: 1, minWidth: 4 }} />
 
-              {/* ── THE THREE NUMBERS THAT DECIDE THE BUILD ── base is here because it is the term
-                  that moves; ask-vs-peaks because it is the only place the card can say the plan
-                  will not reach the time just picked. Everything else is provenance. */}
+              {/* ── THE NUMBERS THAT DECIDE THE BUILD ── base is here because it is the term that
+                  moves. `asks` is GONE, and its removal is what bought the row back: it printed the
+                  selected option's peak a second time, ~5cm to the right of the chip already showing
+                  that exact number — 90px of duplication that was pushing "Working ▾" onto a line of
+                  its own (Emil: "it drops to a new line for the working sign… fit it all on one row").
+                  `peaks` survives but only when the ramp actually falls short, because that is the
+                  only state in which it says something the chip does not. */}
               <span style={{ fontSize: 10, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                {baseRead?.baseMi > 0 && <>base <b style={{ color: 'var(--text-primary)' }}>{baseRead.baseMi}</b></>}
-                {cur && cur.peakMi > 0 && (
+                {baseRead?.baseMi > 0 && <>Base <b style={{ color: 'var(--text-primary)' }}>{baseRead.baseMi}</b></>}
+                {cur && cur.peakMi > 0 && cur.deliversPeakMi > 0 && cur.shortfallMi > 2 && (
                   <>
-                    {baseRead?.baseMi > 0 ? ' · ' : ''}asks <b style={{ color: 'var(--text-primary)' }}>{cur.peakMi}</b>
-                    {cur.deliversPeakMi > 0 ? <> · peaks <b style={{ color: cur.shortfallMi > 2 ? '#fbbf24' : '#34d399' }}>{cur.deliversPeakMi}</b></> : null}
+                    {baseRead?.baseMi > 0 ? ' · ' : ''}Peaks <b style={{ color: '#fbbf24' }}>{cur.deliversPeakMi}</b> of {cur.peakMi}
                   </>
                 )}
               </span>
@@ -1348,8 +1363,8 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                 </button>
               )}
               {pasted && !dirty && (
-                <span style={{ fontSize: 9.5, color: '#34d399', whiteSpace: 'nowrap' }}>
-                  ✓ {block?.weeks?.length || 0} wks on calendar{cur ? ` · ${cur.label}` : ''}
+                <span title="This road is written to your calendar." style={{ fontSize: 9.5, color: '#34d399', whiteSpace: 'nowrap' }}>
+                  ✓ {block?.weeks?.length || 0} wks{cur ? ` · ${cur.label}` : ''}
                 </span>
               )}
 
@@ -1359,7 +1374,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                 aria-expanded={showWork}
                 style={{ all: 'unset', cursor: 'pointer', fontSize: 9, fontWeight: 700, letterSpacing: '0.04em', color: 'var(--text-secondary)', borderBottom: '0.5px dotted var(--border-subtle)', whiteSpace: 'nowrap' }}
               >
-                {showWork ? 'hide working ▴' : 'working ▾'}
+                {showWork ? 'Hide working ▴' : 'Working ▾'}
               </button>
             </div>
 
@@ -1376,7 +1391,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                 is what turns "pick a finish time" into an informed choice instead of a wish. */}
             {cur?.rampPct > 0 && (
               <div style={{ fontSize: 9.5, color: 'var(--text-muted)', lineHeight: 1.45, marginTop: 5 }}>
-                Each finish time has a <i>cost</i>: how fast the weekly volume has to climb to get there.
+                Each finish time has a <i>Cost</i>: how fast the weekly volume has to climb to get there.
                 {' '}{cur.label} needs <b style={{ color: 'var(--text-primary)' }}>{(cur.rampPct * 100).toFixed(1)}%/wk</b>
                 {cur.acwr > 0 ? <> — a steady load ratio of <b style={{ color: 'var(--text-primary)' }}>{cur.acwr.toFixed(2)}</b>, {cur.acwr < 1.3 ? 'inside' : 'past'} the 0.8–1.3 band Arnold holds you to</> : null}.
                 {shortestOrdinaryMi > 0 && <> Spread over <b style={{ color: 'var(--text-primary)' }}>{runDays}</b> days a week, the shortest ordinary run in this block is <b style={{ color: shortestOrdinaryMi < 4 ? '#fbbf24' : 'var(--text-primary)' }}>{Math.round(shortestOrdinaryMi * 10) / 10} mi</b>.</>}
@@ -1807,7 +1822,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                 <SessionGlyph type={d.type} color={c} size={13} />
                 <span style={{ fontSize: 11, fontWeight: 600, color: c, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                 {status === 'done' && <span style={{ marginLeft: 'auto', fontSize: 10, color: '#34d399', fontWeight: 700, flex: 'none' }}>✓</span>}
-                {status === 'missed' && <span style={{ marginLeft: 'auto', fontSize: 8, color: '#f87171', fontWeight: 700, flex: 'none', textTransform: 'uppercase', letterSpacing: '0.04em' }}>missed</span>}
+                {status === 'missed' && <span style={{ marginLeft: 'auto', fontSize: 8, color: '#f87171', fontWeight: 700, flex: 'none', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Missed</span>}
               </div>
               {/* bottom row — effort/tag on the left, mileage big on the bottom-right */}
               <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 4, marginTop: 'auto' }}>
@@ -1899,7 +1914,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                     fontVariantNumeric: 'tabular-nums',
                   }}
                 >
-                  all three roads · {flatMi} mi
+                  All three roads · {flatMi} mi
                 </div>
               )}
             </div>
@@ -1917,7 +1932,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
                 <SessionGlyph type="mobility" color={c} size={13} />
                 <span style={{ fontSize: 11, fontWeight: 600, color: c }}>Recovery</span>
               </span>
-              <div style={{ fontSize: 8, color: 'var(--text-muted)', lineHeight: 1.25 }}>rest or 15-min mobility</div>
+              <div style={{ fontSize: 8, color: 'var(--text-muted)', lineHeight: 1.25 }}>Rest or 15-min mobility</div>
             </div>
           );
         };

@@ -37,7 +37,7 @@ const daysBetween = (from, to) => {
   return Math.round((b - a) / 86400000);
 };
 const decay = (daysAgo) => 2 ** (-Math.max(0, daysAgo) / HALF_LIFE);
-const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+import { clamp } from './stats.js';
 // tanh so a run of strong signals saturates toward the cap instead of running away.
 const tanh = (x) => { const e = Math.exp(2 * x); return (e - 1) / (e + 1); };
 

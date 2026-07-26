@@ -131,6 +131,12 @@ function Strip({ profile, coach, open, onToggle }) {
           {/* Hide the finish number + headline when expanded — the FINISH ring below
               owns them, so 4:12 shows in one place, not three. */}
           {!open && finish.now && <span style={{ fontSize: 17, fontWeight: 800, color: nowColor, lineHeight: 1 }}>{finish.now.str}</span>}
+          {/* Confidence dot — colour tracks how proven the projection is; it CHANGES as evidence builds/ages. */}
+          {!open && finish.now && finish.now.confidenceScore != null && (() => {
+            const s = finish.now.confidenceScore;
+            const c = s >= 0.66 ? GOOD : (s >= 0.4 ? WARN : T3);
+            return <span title={`${Math.round(s * 100)}% confidence`} style={{ width: 6, height: 6, borderRadius: '50%', background: c, display: 'inline-block', alignSelf: 'center', marginLeft: 1 }} />;
+          })()}
           {!open && finish.goalStr && !finish.atOrAheadOfGoal && (
             <>
               <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)' }}>→</span>
@@ -145,14 +151,41 @@ function Strip({ profile, coach, open, onToggle }) {
   );
 }
 
+// Confidence (0..1) → a word + colour. Changes as recent, consistent, proven evidence accumulates/ages,
+// so the band is a LIVE signal, not decoration (Emil: "makes sense as long as it changes").
+function confInfo(score) {
+  if (score == null) return null;
+  if (score >= 0.66) return { word: 'High', color: GOOD };
+  if (score >= 0.4) return { word: 'Moderate', color: WARN };
+  return { word: 'Low', color: T3 };
+}
+// '2026-07-13' → 'Jul 13'
+function fmtAsOf(d) {
+  try { const [y, m, day] = String(d).split('-').map(Number); const MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${MO[(m || 1) - 1]} ${day}`; } catch { return null; }
+}
+
 // ── caption: "Projected from your recent quality runs — 43 min over goal" ────
 function GapCaption({ finish }) {
   const now = finish.now;
   if (!now) return null;
-  const src = now.confidence === 'measured' ? 'your recent quality runs' : 'your current fitness';
+  const src = now.responsive ? 'your training — updates as you train'
+    : (now.confidence === 'measured' ? 'your recent quality runs' : 'your current fitness');
+  const ci = confInfo(now.confidenceScore);
   return (
     <div style={{ marginBottom: 8 }}>
       <div style={{ fontSize: 10.5, color: T3 }}>Projected from {src}</div>
+      {now.lowStr && now.highStr && (
+        <div style={{ fontSize: 11, color: T2, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>Likely <b style={{ color: T1 }}>{now.lowStr}–{now.highStr}</b></span>
+          {ci && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: ci.color, display: 'inline-block' }} />
+              <span style={{ color: T3 }}>{ci.word} confidence{now.bandPct != null ? ` · ±${now.bandPct}%` : ''}</span>
+            </span>
+          )}
+          {now.asOf && <span style={{ color: T3 }}>· as of {fmtAsOf(now.asOf)}</span>}
+        </div>
+      )}
       {finish.goalStr && !finish.atOrAheadOfGoal && finish.gapToGoalStr && (
         <div style={{ fontSize: 13.5, fontWeight: 700, color: WARN, marginTop: 2 }}>
           {finish.gapToGoalStr.replace(/^~/, '')} <span style={{ color: T2, fontWeight: 500 }}>to your {finish.goalStr} goal</span>
@@ -163,6 +196,22 @@ function GapCaption({ finish }) {
       )}
       {!finish.goalStr && (
         <div style={{ fontSize: 11, color: T3, marginTop: 2 }}>Set a goal to see the gap</div>
+      )}
+      {/* Aerobic ceiling — a SEPARATE upside marker, never the prediction. Your engine (measured VO2max) vs
+          your race legs: the gap is what threshold/economy work can convert. Distinct colour so it never reads
+          as the finish itself. */}
+      {now.potential && now.potential.ceilingStr && (
+        <div style={{ fontSize: 11, color: T2, marginTop: 5, paddingTop: 5, borderTop: `1px solid ${T3}22`, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: TEAL, display: 'inline-block' }} />
+          <span style={{ color: T3 }}>Aerobic ceiling</span>
+          <b style={{ color: TEAL }}>~{now.potential.ceilingStr}</b>
+          <span style={{ color: T3 }}>
+            — engine ~{now.potential.gapVdot > 0 ? `+${now.potential.gapVdot}` : now.potential.gapVdot} VDOT ahead
+            {now.potential.lever === 'economy+threshold' ? ' · convert with threshold + economy work'
+              : now.potential.lever === 'threshold' ? ' · convert with threshold work' : ''}
+            {now.potential.reachStr ? ` (realistic next step ~${now.potential.reachStr})` : ''}
+          </span>
+        </div>
       )}
     </div>
   );

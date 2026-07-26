@@ -46,9 +46,9 @@ export function SwapImpactModal({ impact, title = 'Swap impact', confirmLabel = 
             {(impact.conflicts || []).map((c, i) => (
               <Row key={i} label="Spacing" value={c.text} color="#fbbf24" wrap />
             ))}
-            {impact.losesRest && <Row label="Recovery" value="no rest day left this week" color="#f87171" wrap />}
+            {impact.losesRest && <Row label="Recovery" value="No rest day left this week" color="#f87171" wrap />}
             {impact.protectsSessions && (!impact.conflicts || !impact.conflicts.length) && !impact.losesRest && (
-              <Row label="Sessions" value="all kept — nothing dropped" color="#4ade80" />
+              <Row label="Sessions" value="All kept — nothing dropped" color="#4ade80" />
             )}
           </div>
         )}

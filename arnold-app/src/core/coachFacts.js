@@ -41,7 +41,7 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 // to decide staleness: a purpose note is spent once you train (session); a fuel read is a today thing;
 // plan/volume facts hold for the week; a lab flag persists across the season.
 const SCOPE = {
-  purpose: 'session', knockOn: 'session', readiness: 'session',
+  purpose: 'session', session: 'session', knockOn: 'session', readiness: 'session',
   reds: 'today', mechanism: 'today', divergence: 'today', context: 'today',
   planImpact: 'week', progress: 'week',
   learned: 'now', clinical: 'season',

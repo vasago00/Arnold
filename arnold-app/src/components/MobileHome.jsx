@@ -80,7 +80,7 @@ import { PlannedWorkoutTile, getPlannedWorkoutState } from "./PlannedWorkoutTile
 import MobilePlanTicker from "./MobilePlanTicker.jsx";
 import { MetricTile } from "./ui/MetricTile.jsx";
 import { CoachComment } from "./CoachComment.jsx";
-import { TrainingProfileCard } from "./RecipePath.jsx";
+import { RaceOutlookCard } from "./RaceOutlookCard.jsx";
 import { CoachSigil } from "./CoachSigil.jsx";
 // Phase 4r.hygiene.1 — InsightsPanel import removed. Its last consumer in
 // this file (MobileEdgeIQ) was removed in 4r.intel.24 when the legacy
@@ -3072,9 +3072,13 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
       />
 
       {(() => {
-        // Hide CoachingHeroCard when the planned-workout tile rendered
-        // something — it's already carrying the "what to do" message.
-        // Show it as the fallback only on rest days / no-plan days.
+        // When the planned-workout tile rendered, it carries the session DATA
+        // (targets, weather, fuel chips) AND its own readiness verdict chip —
+        // that IS the tile's voice on Start. We do NOT also render the Coach's
+        // play line here: the Play tab already speaks that read, and doubling
+        // it on Start read as a duplicate/mixed signal (Emil 2026-07-24). The
+        // full CoachingHeroCard only stands in on rest / no-plan days, when the
+        // tile itself is absent.
         const ws = getPlannedWorkoutState({
           plannedToday: todayPlanned(),
           nextRace,
@@ -3207,24 +3211,24 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
           hasTraining ? (
             // Compact strip — training already has its own card, so this stays terse.
             <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12, color: T2, padding: '2px 0', flexWrap: 'wrap' }}>
-              <span><strong style={{ color: T1, fontWeight: 700 }}>{todayMovement.steps.toLocaleString()}</strong> <span style={{ color: T4 }}>steps</span></span>
-              <span><strong style={{ color: T1, fontWeight: 700 }}>{Math.round(todayMovement.active)}</strong> <span style={{ color: T4 }}>active kcal</span></span>
-              <span><strong style={{ color: T1, fontWeight: 700 }}>{Math.round(todayMovement.total)}</strong> <span style={{ color: T4 }}>total kcal</span></span>
+              <span><strong style={{ color: T1, fontWeight: 700 }}>{todayMovement.steps.toLocaleString()}</strong> <span style={{ color: T4 }}>Steps</span></span>
+              <span><strong style={{ color: T1, fontWeight: 700 }}>{Math.round(todayMovement.active)}</strong> <span style={{ color: T4 }}>Active kcal</span></span>
+              <span><strong style={{ color: T1, fontWeight: 700 }}>{Math.round(todayMovement.total)}</strong> <span style={{ color: T4 }}>Total kcal</span></span>
             </div>
           ) : (
             // Three-tile layout — rest/mobility day, ambient is the main event.
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
               <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.blue, lineHeight: 1 }}>{todayMovement.steps.toLocaleString()}</div>
-                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>steps</div>
+                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>Steps</div>
               </div>
               <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.amber, lineHeight: 1 }}>{Math.round(todayMovement.active)}</div>
-                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>active kcal</div>
+                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>Active kcal</div>
               </div>
               <div style={{ background: BG, borderRadius: 10, padding: '12px 6px 10px', textAlign: 'center', border: `1px solid ${BORDER}` }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: C.green, lineHeight: 1 }}>{Math.round(todayMovement.total)}</div>
-                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>total kcal</div>
+                <div style={{ fontSize: 11, color: T4, marginTop: 4 }}>Total kcal</div>
               </div>
             </div>
           )
@@ -3498,7 +3502,7 @@ function SystemDetailPanel({ systemId, data, comment }) {
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: statusColor, lineHeight: 1 }}>{detail.system.pct || 0}%</div>
-          <div style={{ fontSize: 10, color: T3, marginTop: 2 }}>today</div>
+          <div style={{ fontSize: 10, color: T3, marginTop: 2 }}>Today</div>
         </div>
       </div>
 
@@ -4428,12 +4432,13 @@ export function MobileEdgeIQ({ data, onOpenTab }) {
           which shows "the one thing." surface='edgeiq_mobile'. */}
       <CoachComment surface="edgeiq_mobile" />
 
-      {/* ── TRAINING PROFILE (Sprint 3.2b) — the recipe→finish path. Compact
-          strip that expands in place to the full wired SVG. Renders nothing
-          until there's a projectable finish or recipe ingredients, so cold
-          starts stay quiet. The weak link here is what the living plan (3.2c)
-          will prioritize. ── */}
-      <TrainingProfileCard />
+      {/* ── TRAINING PROFILE · SEASON GOAL (2026-07) — the unified race-outlook
+          card replaces the legacy recipe→finish strip. ONE ladder
+          (Current → Target → Stretch → Ceiling, Goal marked), the A-race
+          "planet", and the "moons" (the other races on the calendar), all from
+          the single live read getRaceOutlook(). Renders nothing until there's a
+          fitness state (a logged race/hard effort), so cold starts stay quiet. ── */}
+      <RaceOutlookCard />
 
       {/* ── HEALTH SYSTEMS ── */}
       <div style={sectionHeader}>Health Systems

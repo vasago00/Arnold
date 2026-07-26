@@ -40,4 +40,18 @@ describe('scoreSession', () => {
   it('returns null without both inputs', () => {
     expect(scoreSession({ planned: { type: 'easy_run' } })).toBe(null);
   });
+
+  it('judges an easy run on ZONE DISCIPLINE (HR vs the easy ceiling) when available — held vs ran hot', () => {
+    const held = scoreSession({ planned: { type: 'easy_run', distanceMi: 6 }, actual: { distanceMi: 6, avgHR: 140 }, zones: { z2Ceiling: 145 } });
+    const hot = scoreSession({ planned: { type: 'easy_run', distanceMi: 6 }, actual: { distanceMi: 6, avgHR: 158 }, zones: { z2Ceiling: 145 } });
+    expect(held.score).toBeGreaterThan(hot.score);
+    expect(held.parts.some(p => p.label === 'zone')).toBe(true);   // easy is graded on the ONE ceiling, not pace
+    expect(hot.parts.some(p => p.label === 'zone')).toBe(true);
+  });
+
+  it('falls back to pace-control for an easy run when HR / ceiling are absent (unchanged behaviour)', () => {
+    const r = scoreSession({ planned: { type: 'easy_run', distanceMi: 6, paceTarget: '9:30' }, actual: { distanceMi: 6, avgPaceRaw: '9:30' } });
+    expect(r.parts.some(p => p.label === 'control')).toBe(true);
+    expect(r.parts.some(p => p.label === 'zone')).toBe(false);
+  });
 });

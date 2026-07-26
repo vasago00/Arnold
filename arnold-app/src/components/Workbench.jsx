@@ -449,7 +449,7 @@ function StepRow({ step, idx, isFirst, isLast, onChange, onRemove, onMove }) {
               style={{ ...inputStyle, width: 60 }}/>
           )}
           {step.target === 'open' && (
-            <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>lap</span>
+            <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>Lap</span>
           )}
         </div>
         <select value={step.intensity || 'active'}

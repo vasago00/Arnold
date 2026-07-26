@@ -421,7 +421,7 @@ export default function CloudSyncPanel() {
           </div>
           <div style={{ marginBottom: 10 }}>
             <label style={labelStyle}>Bearer token</label>
-            <input style={inputStyle} type="password" placeholder="paste from `wrangler secret put SYNC_TOKEN`" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))} required />
+            <input style={inputStyle} type="password" placeholder="Paste from `wrangler secret put SYNC_TOKEN`" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))} required />
           </div>
           <div style={{ marginBottom: 10 }}>
             <button type="button" style={{ ...btnSecondary, padding: '4px 10px', fontSize: 12 }} onClick={() => setShowAdvanced(s => !s)}>
@@ -795,7 +795,7 @@ function CronometerImportSection() {
     <div style={sectionStyle}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <h4 style={{ margin: 0, fontSize: 14 }}>🥗 Cronometer manual import</h4>
-        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#1f3a1f', color: '#a0e0a0', border: '1px solid #2f5a2f' }}>compliant · no worker</span>
+        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#1f3a1f', color: '#a0e0a0', border: '1px solid #2f5a2f' }}>Compliant · no worker</span>
       </div>
       <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10, lineHeight: 1.4 }}>
         Export your own data from Cronometer (<strong>Settings → Account → Export Data → Daily Nutrition</strong>),
@@ -1482,15 +1482,15 @@ function HealthConnectStatusSection() {
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         <div style={{ flex: 1, background: '#0b0d12', padding: '8px 6px', borderRadius: 6, textAlign: 'center' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: hasData ? '#60a5fa' : '#666' }}>{hasData ? steps.toLocaleString() : '—'}</div>
-          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>steps today</div>
+          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>Steps today</div>
         </div>
         <div style={{ flex: 1, background: '#0b0d12', padding: '8px 6px', borderRadius: 6, textAlign: 'center' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: hasData ? '#fbbf24' : '#666' }}>{hasData ? Math.round(activeKcal) : '—'}</div>
-          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>active kcal</div>
+          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>Active kcal</div>
         </div>
         <div style={{ flex: 1, background: '#0b0d12', padding: '8px 6px', borderRadius: 6, textAlign: 'center' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: hasData ? '#4ade80' : '#666' }}>{hasData ? Math.round(totalKcal) : '—'}</div>
-          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>total kcal</div>
+          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>Total kcal</div>
         </div>
       </div>
 

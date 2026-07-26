@@ -38,11 +38,18 @@ const LEN_MAX_DEFAULT = 1000;
 const TIME_SENSITIVE = {
   'reds-lowEA':   (day) => day.isWindDown || day.isMorning,     // no "fuel up" nudge at bed / first thing
   'fuel-status':  (day, text) => day.isWindDown && /front-load protein early/i.test(text || ''),
+  // The MPS-window nudge is only true INSIDE the window: after the session, during eating hours.
+  // It escaped for months because no rule named it — it shipped a "get 40g in the next couple hours"
+  // instruction at 00:53 on a day with no session at all. Pinned here so the eval, not the athlete,
+  // catches the next regression.
+  'mech-protein-timing': (day) => !day.postWorkout || !day.fuelWindowOpen,
 };
 // A purpose beat is a pre-workout preview — it must be gone once the athlete has trained.
 const purposeAfterTrained = (id, day) => id.startsWith('purpose') && day.postWorkout;
 
-const ACTION_VERB = /\b(add|keep|ease|trim|protect|spread|skew|hold|eat|front-load|back off|absorb|bank|lift|fuel|refuel|sleep|rest|cut|redistribute|take|shift|dial|prioriti[sz]e)\b/i;
+// Match verb STEMS with any inflection (protects / eased / checked / re-testing) — a whole-word list
+// missed the inflected forms the beats actually use. Soft dimension, so prefix-matching is acceptable.
+const ACTION_VERB = /\b(add|keep|eas|trim|protect|spread|skew|hold|eat|front-load|back|absorb|bank|lift|fuel|refuel|sleep|rest|redistribut|shift|dial|prioriti|check|recheck|test|discuss|confirm|rais|cut|trust|get|let|take|skip|swap)\w*/i;
 
 // ── pure per-dimension assessors (independently negative-controllable) ─────────────────────────
 

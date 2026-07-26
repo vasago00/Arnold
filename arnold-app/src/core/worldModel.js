@@ -23,7 +23,7 @@ const numOr = (x, d = null) => {
   if (x === null || x === undefined || x === '') return d;
   return Number.isFinite(+x) ? +x : d;
 };
-const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+import { clamp } from './stats.js';
 
 // ── DAY: a real temporal object, not a scalar hour ────────────────────────────────────────────
 // phase priority is deliberate: sleep/wind-down WIN over recovery, so training at 22:00 still reads

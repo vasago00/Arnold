@@ -31,6 +31,7 @@ import { MobileHome } from "./MobileHome.jsx";
 import { CoachComment } from "./CoachComment.jsx";
 import { HealthSystemsGrid } from "./HealthSystemsGrid.jsx";
 import { RaceFocusCard } from "./RaceFocusCard.jsx";
+import { RaceOutlookCard } from "./RaceOutlookCard.jsx";   // training profile — the ONE ladder, shared with the Trend tab and mobile
 
 export function TrainingTab({setTab,data,mobileInitView,onMobileInitViewUsed}){
   // Phase 4r.intel.13-fix1 — useStorageVersion lets the insightsForHero
@@ -473,7 +474,7 @@ Structure:
           strokeDashoffset={-(arcLength*0.167+aeroFilled)}
           strokeLinecap="round"
           transform={`rotate(135 ${size/2} ${size/2})`}/>
-        <text x={size/2} y={size/2-5} textAnchor="middle" fontSize="7.5" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>aero/ana</text>
+        <text x={size/2} y={size/2-5} textAnchor="middle" fontSize="7.5" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>Aero/ana</text>
         <text x={size/2} y={size/2+7} textAnchor="middle" fontSize="11" fontWeight="500" fill="var(--text-primary)" style={{fontFamily:'var(--font-ui)'}}>{aero}/{ana}</text>
         <text x={size/2} y={size/2+17} textAnchor="middle" fontSize="7" fill="var(--text-muted)" style={{fontFamily:'var(--font-ui)'}}>%</text>
       </svg>
@@ -1011,7 +1012,7 @@ Structure:
                             )}
                             {todayStat.done && (
                               <span
-                                aria-label="completed"
+                                aria-label="Completed"
                                 title={`Today's session logged · ${todayRTSS} load`}
                                 style={{ color:'#4ade80', fontSize:12, lineHeight:1, fontWeight:700 }}>
                                 ✓
@@ -1104,6 +1105,16 @@ Structure:
 
       {/* Standalone Coach line + Focus tiles removed — embedded in or
           consolidated by the Hero Line above (Phase 4n.1.3). */}
+
+      {/* ═══════ TRAINING PROFILE — the unified ladder + the road to the A-race ═══════
+          This is the tab the web nav LABELS "EdgeIQ" (Arnold.jsx: {id:"training", label:"EdgeIQ"}),
+          so this is where Emil looked for the training profile and didn't find it — the card was
+          mounted only on the `weekly` tab, which the nav labels "Trend". Same card, same single
+          getRaceOutlook() read, mounted on both surfaces: no second copy of the numbers, so the
+          two tabs cannot disagree. Collapsed by default (its own Strip handles tap-to-expand). */}
+      <div style={{ marginBottom: 'clamp(10px,1vw,14px)' }}>
+        <RaceOutlookCard />
+      </div>
 
       {/* ═══════ SECTION 3: HEALTH SYSTEMS — clickable tiles, inline detail ═══════ */}
       <HealthSystemsGrid dateStr={td()} data={data} />

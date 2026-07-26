@@ -182,3 +182,62 @@ test('de-linearize: qualityLead rotates the leading hard session', () => {
   assert.ok(d1.some(d => d && d.type === 'intervals') && !d1.some(d => d && d.type === 'tempo'), 'intervals-led week');
   assert.ok(d2.some(d => d && d.type === 'tempo') && !d2.some(d => d && d.type === 'intervals'), 'tempo-led week');
 });
+
+test('ramp PAUSES across race + recovery — no invisible snap-back past the trained peak (Emil 2026-07)', () => {
+  // Full Valencia season from a real slow base. The bug was the ramp climbing UNDER the
+  // race dips, so the week after a recovery snapped to a line never actually trained
+  // (22 → 36 → 48). With the ramp frozen on non-build weeks, the resume after a race
+  // recovery must be ONE ~10% step over the volume held BEFORE that race, not a leap.
+  const base = 13.6;
+  const { weeks } = generateSeasonBlock({ ...SEASON_BASE, weeklyMiles: base, longestRecentMi: 12, ceilingMiles: 48, races: RACES, today: '2026-07-24', targetRaceDate: '2026-12-06' });
+  const T = weeks.map(w => w.targetWeeklyMiles || 0);
+  const acwr = (i) => { const p = T.slice(Math.max(0, i - 4), i); const c = p.reduce((s, x) => s + x, 0) / p.length; return c > 0 ? T[i] / c : 0; };
+  for (let i = 1; i < weeks.length; i++) {
+    const prev = weeks[i - 1], cur = weeks[i];
+    // Only check a pure build week that FOLLOWS a race or post-race recovery (the resume).
+    const resume = cur.phase === 'build' && !cur.cutback && !cur.raceName && !cur.recoveryAfterRace
+      && (prev.recoveryAfterRace || prev.raceName);
+    if (!resume) continue;
+    // The resume must be a RAMPED return, not a leap onto an untrained line: capped step
+    // over the dip week, and the acute:chronic ratio stays out of the injury-danger zone
+    // (the old snap produced ~+64% jumps and ACWR spikes).
+    assert.ok(cur.targetWeeklyMiles <= Math.round(prev.targetWeeklyMiles * 1.4) + 1, 'resume is a capped ramp, not a leap');
+    assert.ok(acwr(i) <= 1.8, `resume ACWR in-band, got ${acwr(i).toFixed(2)}`);
+  }
+  // The peak is HONESTLY reached: it climbs meaningfully above the slow base but never
+  // fabricates the theoretical 48 — pausing through two mid-season marathons genuinely
+  // caps it (the plan surfaces that instead of faking the ceiling).
+  const peak = Math.max(...T);
+  assert.ok(peak > base * 1.5 && peak <= 48, `peak honestly above base, under ceiling, got ${peak}`);
+});
+
+test("refresh paste re-baselines FUTURE machine days but never rewrites the past or a knee cross-swap", () => {
+  const today = '2026-07-27';   // a Monday
+  const planner = {
+    '2026-07-20': { days: [   // entirely in the PAST vs today
+      { type: 'easy_run', distanceMi: 3, generated: true },
+      { type: 'strength', generated: false },                 // past hand-edit
+      ...Array(5).fill(null).map(() => ({ type: 'rest' })),
+    ] },
+    '2026-07-27': { days: [   // Mon = today, rest future
+      { type: 'easy_run', distanceMi: 8, generated: true },   // today, generated → re-baseline
+      { type: 'tempo', distanceMi: 7, generated: false },     // FUTURE hand-edited run → re-baseline (living)
+      { type: 'bike', generated: false },                     // FUTURE cross-swap → PRESERVE (knee)
+      ...Array(4).fill(null).map(() => ({ type: 'rest' })),
+    ] },
+  };
+  const fresh = [
+    { weekKey: '2026-07-20', phase: 'build', days: Array(7).fill(null).map(() => ({ type: 'easy_run', distanceMi: 2 })) },
+    { weekKey: '2026-07-27', phase: 'build', days: Array(7).fill(null).map(() => ({ type: 'easy_run', distanceMi: 3 })) },
+  ];
+  const store = { get: () => planner, set: (_k, v) => { store._saved = v; } };
+  const { resynced } = pasteSeasonBlock(store, fresh, { mode: 'refresh', today });
+  const past = store._saved['2026-07-20'].days;
+  const cur = store._saved['2026-07-27'].days;
+  assert.equal(past[1].type, 'strength', 'past hand-edit untouched');
+  assert.ok(!past[0].generated || past[0].distanceMi === 3, 'past week not re-baselined (history is history)');
+  assert.equal(cur[0].distanceMi, 3, 'today generated day re-baselined to the fresh road');
+  assert.equal(cur[1].distanceMi, 3, 'future hand-edited RUN re-baselined (living plan wins)');
+  assert.equal(cur[2].type, 'bike', 'future cross-train swap preserved (knee choice)');
+  assert.ok(resynced >= 1, 'counts the stale future hand-edit it re-baselined');
+});

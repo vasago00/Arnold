@@ -27,8 +27,15 @@ import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isHIIT, isExplicitHIIT, isHybridWorkout, isMobility, isCycling, isSwim, isSki, isWalk } from "../core/activityClass.js";
 import { getPlannerWeek, savePlannerWeek, weekKey, DAY_TYPES, daySessions, makeDay, dayRunMiles, dayWorkoutCount, weekPlanTotals } from "../core/planner.js";
 import { PLAN_TYPE_FAMILY } from "../core/todayStatus.js";   // plan-type → family for the planned-session rail
+// The three roads, on the ACTUAL month grid (Emil: "I see nothing on the Calendar for the option
+// on what to run"). READ ONLY — the calendar never builds a triad, it reads back the one that was
+// frozen onto the commitment when the plan was applied. See indexTriadByDate below.
+import { getCommitment } from "../core/planCommitment.js";
+import { triadDayFrom, classifySessionRung, RUNG_ORDER } from "../core/planTiers.js";
 import { LivingPlan } from "./LivingPlan.jsx";   // 3.2c — the living plan (retires the static SeasonPlanGenerator)
 import { ChangeSessionWindow } from "./ChangeSessionWindow.jsx";   // THE single change/swap hub (Option B)
+import { recordPlanChange } from "../core/planChanges.js";   // capture intentional changes → coach responds/re-calibrates
+import { planChangeLine } from "../core/coachNarrative.js";   // moment-of-action coach voice (spoken the instant you commit)
 import { getModalities } from "../core/modalities.js";
 import { sessionAggravatesInjury } from "../core/injury.js";
 import { analyzePlannedWeek, analyzeSeason } from "../core/planLoad.js";
@@ -246,6 +253,146 @@ function indexPlannerByDate(monthYear, monthMonth) {
     cursor.setDate(cursor.getDate() + 7);
   }
   return map;
+}
+
+// ── THE THREE ROADS ON THE MONTH GRID ────────────────────────────────────────────────
+// Emil, 2026-07-25: "I see nothing on the Calendar for the option on what to run."
+//
+// Fair — the per-session triad shipped onto LivingPlan's THIS-WEEK strip, which is a
+// different surface from the month grid he was looking at. This puts it where he asked
+// for it, and the ONE rule that governs how is: the calendar does not compute a triad.
+//
+// It cannot. Building one here would mean a second call to buildTierTriad off a second
+// read of the base, the ladder and the race set — and the moment either surface's inputs
+// moved a day out of step with the other's, the calendar and the plan would print
+// different mileages for the same Tuesday. That is exactly the "parallel systems
+// computing the same thing differently" failure Emil has named more than once, and it is
+// not worth three numbers on a tile.
+//
+// So the calendar READS BACK the triad that was frozen onto the commitment record at the
+// moment the plan was applied (planTiers.packTriad → commitment.triad). One derivation,
+// one writer, two readers. If nothing has been committed there is simply nothing to show,
+// which is correct: three roads you never chose between are not a fact about your week.
+//
+// The type gate is the same one LivingPlan applies. A frozen day carries the session type
+// it was generated as; if the athlete has since swapped Tuesday's intervals to Thursday,
+// Thursday's numbers are not this day's numbers, and quietly showing them anyway would be
+// the same class of lie in a smaller font.
+function indexTriadByDate(monthYear, monthMonth) {
+  const map = new Map();
+  const labels = {};
+  let packed = null;
+  try {
+    const c = getCommitment();
+    packed = (c && c.triad && c.triad.weeks) ? c.triad : null;
+  } catch { packed = null; }
+  if (!packed) return { map, labels };
+  // The athlete's OWN vocabulary (Current / Target / Stretch / Ceiling / Goal), matched by
+  // rung and never by array position — a triad that ever ships fewer than three rungs must
+  // not silently shift every label one place along.
+  RUNG_ORDER.forEach((k) => {
+    const r = (packed.rungs || []).find(x => x && x.rung === k);
+    labels[k] = (r && r.tierLabel) || k;
+  });
+  const start = new Date(monthYear, monthMonth, -6);
+  const end   = new Date(monthYear, monthMonth + 1, 7);
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const wk = weekKey(cursor);
+    const monday = new Date(wk + 'T12:00:00');
+    for (let i = 0; i < 7; i++) {
+      const day = triadDayFrom(packed, wk, i);
+      if (!day) continue;
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const ds = ymd(d);
+      if (!map.has(ds)) map.set(ds, day);
+    }
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return { map, labels };
+}
+
+// The tile's three-number row. Shared by DayTile and MobileDayTile so the web grid and the
+// phone grid cannot drift — the same component, the same rule, two sizes.
+//
+// BEFORE the run: three targets, dimmed, in ladder order.
+// AFTER it: exactly one lights — the highest rung the logged distance actually met, decided
+// by planTiers.classifySessionRung and by nothing else. Under all three, none lights and the
+// lowest is marked red, because lighting a rung he did not run would be flattery.
+function TriadRow({ triad, plannedTypes, actualMi, isPast, labels, compact }) {
+  if (!triad || !triad.tiers) return null;
+  // Type gate — a swapped session is not this day's triad. Only enforced when the day HAS a
+  // planned session to compare against; an empty planner day (nothing applied there, or the
+  // week was cleared) simply has nothing to contradict the frozen record.
+  const types = plannedTypes || [];
+  if (triad.type && types.length && !types.includes(triad.type)) return null;
+  const mis = RUNG_ORDER.map(k => triad.tiers[k] && triad.tiers[k].distanceMi).filter(x => x > 0);
+  if (mis.length < 2) return null;
+  const settled = actualMi > 0 || isPast;
+  const hit = actualMi > 0 ? classifySessionRung({ tiers: triad.tiers, actualMi }) : null;
+  const TONE = { baseline: '#94a3b8', reach: '#5eead4', challenge: '#e0b45e' };
+
+  // FLAT DAY. Early in a block all three roads genuinely prescribe the same run — the ladder
+  // only opens up once the blocks have had weeks to diverge. Printing 4 / 4 / 4 across the
+  // tile would paint that as a choice the athlete doesn't have, and printing nothing (which
+  // is what this surface did until 2026-07-26) reads as a broken feature. So: one chip that
+  // says the true thing out loud, worded and toned exactly as LivingPlan's week strip words
+  // it, because the same Tuesday must not be described two ways on two screens.
+  const spread = Math.max(...mis) - Math.min(...mis);
+  if (spread < 0.05) {
+    const flatMi = mis[0];
+    const done = actualMi > 0 && actualMi >= flatMi - 0.05;
+    const shortOf = actualMi > 0 && !done;
+    const bc = done ? '#5eead4' : shortOf ? '#f87171' : null;
+    return (
+      <div
+        title={actualMi > 0
+          ? `Ran ${actualMi} mi against ${flatMi} mi — all three roads asked for the same run today.`
+          : `All three roads prescribe the same ${flatMi} mi today — there is nothing to choose between them this week.`}
+        style={{
+          flexShrink: 0, borderRadius: 3, textAlign: 'center',
+          padding: compact ? '0px 1px' : '0px 2px',
+          fontSize: compact ? 6.5 : 7.5, fontWeight: done ? 800 : 600,
+          fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums',
+          opacity: settled ? 1 : 0.75,
+          color: bc || 'var(--text-muted)',
+          background: done ? `${bc}22` : 'transparent',
+          border: `0.5px solid ${bc ? `${bc}88` : 'rgba(255,255,255,0.05)'}`,
+          overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', lineHeight: 1.3,
+        }}>{compact ? `All 3 · ${flatMi}` : `All three roads · ${flatMi} mi`}</div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 1.5, flexShrink: 0, lineHeight: 1 }}>
+      {RUNG_ORDER.map(k => {
+        const t = triad.tiers[k];
+        if (!t || !(t.distanceMi > 0)) return null;
+        const lit = !!(hit && hit.rung === k);
+        const under = !!(hit && hit.short) && k === RUNG_ORDER[0];
+        const bc = under ? '#f87171' : TONE[k];
+        const name = labels[k] || k;
+        return (
+          <span key={k}
+            title={lit ? `Ran ${actualMi} mi — that is ${name} (asked ${t.distanceMi})`
+              : under ? `Ran ${actualMi} mi — under ${name}, which asked ${t.distanceMi}`
+                : `${name} · ${t.distanceMi} mi`}
+            style={{
+              flex: 1, minWidth: 0, textAlign: 'center', borderRadius: 3,
+              padding: compact ? '0px 1px' : '0px 2px',
+              fontSize: compact ? 6.5 : 7.5, fontWeight: lit ? 800 : 600,
+              fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums',
+              opacity: (settled && !lit && !under) ? 0.3 : (settled ? 1 : 0.75),
+              color: (lit || under) ? bc : 'var(--text-muted)',
+              background: lit ? `${bc}22` : 'transparent',
+              border: `0.5px solid ${lit ? `${bc}88` : under ? '#f8717155' : 'rgba(255,255,255,0.05)'}`,
+              overflow: 'hidden', whiteSpace: 'nowrap',
+            }}>{t.distanceMi}</span>
+        );
+      })}
+    </div>
+  );
 }
 
 export function CalendarTab({ showToast }) {
@@ -572,6 +719,12 @@ export function CalendarTab({ showToast }) {
     if (!changeCtx) return;
     if (scope === 'both') swapDayPlans(changeCtx.date, toDate);
     else movePlannedSession(changeCtx.date, scope, toDate);
+    try {
+      const s = Array.isArray(changeCtx.sessions) ? (scope === 'both' ? changeCtx.sessions[0] : changeCtx.sessions[scope]) : null;
+      recordPlanChange({ date: changeCtx.date, kind: 'move', fromType: s ? s.type : null, toDate });
+      const line = planChangeLine({ kind: 'move', fromType: s ? s.type : null, toDate });
+      if (line) showToast?.(line);
+    } catch {}
   };
   const SUB_TYPE = { sub_bike: 'cycle', sub_pool: 'cross', sub_rower: 'cross', sub_elliptical: 'cross', sub_gym: 'strength', sub_treadmill: null };
   const commitChangeSubstitute = (scope, opt) => {
@@ -582,13 +735,16 @@ export function CalendarTab({ showToast }) {
       const fi = dayIdxOf(wk, date); if (fi < 0 || fi >= 7) return;
       const sess = daySessions(days[fi]); const idx = scope === 'both' ? 0 : scope;
       if (!sess[idx]) return;
+      const fromType = sess[idx].type;   // capture BEFORE mutation — the coach re-calibrates by the session's role
       // Changing the type invalidates the baked-in paceTarget — clear it; pace is DERIVED from the
       // session type at display time (see LivingPlan paceForType), so it's always right, both ways.
-      let changed = false;
+      let changed = false; let logKind = 'substitute'; let logToType = null; let logDur = null;
+      // coach-facing modality names so the narrative's cross-train detection fires (bike/pool/row/elliptical)
+      const SUB_LABEL = { sub_bike: 'bike', sub_pool: 'pool swim', sub_rower: 'rowing', sub_elliptical: 'elliptical', sub_gym: 'strength' };
       if (opt.id === 'to_easy') {
-        sess[idx] = { ...sess[idx], type: 'easy_run', paceTarget: null }; changed = true;   // de-load → easy run (pace derived from type)
+        sess[idx] = { ...sess[idx], type: 'easy_run', paceTarget: null }; changed = true; logToType = 'easy_run';   // de-load → easy run (pace derived from type)
       } else if (opt.id === 'to_mobility') {
-        sess[idx] = { type: 'mobility', label: 'Mobility', distanceMi: null, strength: false }; changed = true;   // make it a recovery day
+        sess[idx] = { type: 'mobility', label: 'Mobility', distanceMi: null, strength: false }; changed = true; logToType = 'mobility';   // make it a recovery day
       } else if (Object.prototype.hasOwnProperty.call(SUB_TYPE, opt.id)) {
         const t = SUB_TYPE[opt.id];
         if (!t) { showToast?.('Same session — on the treadmill.'); return; }
@@ -597,10 +753,19 @@ export function CalendarTab({ showToast }) {
         // (falls back to any pre-existing durationMin). Bike/pool/row/etc. have no run pace.
         const dur = Number(opt.minutes) > 0 ? Math.round(Number(opt.minutes)) : (Number(sess[idx].durationMin) || null);
         sess[idx] = { ...sess[idx], type: t, distanceMi: null, durationMin: dur, paceTarget: null }; changed = true;
+        logToType = SUB_LABEL[opt.id] || t; logDur = dur;
       } else if (opt.id === 'shorten_easy' || opt.id === 'shorten_quality') {
-        const cur = Number(sess[idx].distanceMi) || 0; if (cur > 0) { sess[idx] = { ...sess[idx], distanceMi: Math.max(1, Math.round(cur * 0.6)) }; changed = true; }
+        const cur = Number(sess[idx].distanceMi) || 0; if (cur > 0) { sess[idx] = { ...sess[idx], distanceMi: Math.max(1, Math.round(cur * 0.6)) }; changed = true; logKind = 'shorten'; }
       } else { showToast?.(`${opt.title} — noted for today.`); return; }
-      if (changed) { days[fi] = makeDay(sess); savePlannerWeek(wk, { ...week, days }); setTick((t) => t + 1); showToast?.(`Changed to ${prettyFamily(sess[idx].type)}`); }
+      if (changed) {
+        days[fi] = makeDay(sess); savePlannerWeek(wk, { ...week, days }); setTick((t) => t + 1);
+        try {
+          recordPlanChange({ date, kind: logKind, fromType, toType: logToType, durationMin: logDur });
+          // Moment-of-action: the coach reacts the instant you commit — not only later on a surface you navigate to.
+          const line = planChangeLine({ kind: logKind, fromType, toType: logToType, durationMin: logDur });
+          showToast?.(line || `Changed to ${prettyFamily(sess[idx].type)}`);
+        } catch { showToast?.(`Changed to ${prettyFamily(sess[idx].type)}`); }
+      }
     } catch (e) { console.warn('[calendar] change substitute failed:', e); }
   };
   const commitChangeSkip = (scope) => {
@@ -610,8 +775,14 @@ export function CalendarTab({ showToast }) {
       const week = getPlannerWeek(wk); const days = [...(week.days || [])]; while (days.length < 7) days.push({ type: 'rest' });
       const fi = dayIdxOf(wk, date); if (fi < 0 || fi >= 7) return;
       let sess = daySessions(days[fi]);
+      const skipped = scope === 'both' ? (sess[0] || null) : (sess[scope] || null);   // capture role before removal
       sess = scope === 'both' ? [] : sess.filter((_, k) => k !== scope);
-      days[fi] = makeDay(sess); savePlannerWeek(wk, { ...week, days }); setTick((t) => t + 1); showToast?.('Removed from the plan');
+      days[fi] = makeDay(sess); savePlannerWeek(wk, { ...week, days }); setTick((t) => t + 1);
+      try {
+        recordPlanChange({ date, kind: 'skip', fromType: skipped ? skipped.type : null });
+        const line = planChangeLine({ kind: 'skip', fromType: skipped ? skipped.type : null });
+        showToast?.(line || 'Removed from the plan');
+      } catch { showToast?.('Removed from the plan'); }
     } catch (e) { console.warn('[calendar] change skip failed:', e); }
   };
 
@@ -723,6 +894,10 @@ export function CalendarTab({ showToast }) {
 
   const activitiesByDate = useMemo(() => indexActivitiesByDate(activities), [activities]);
   const plannerByDate    = useMemo(() => indexPlannerByDate(viewYear, viewMonth), [viewYear, viewMonth, tick]);
+  // Frozen triad → date. Same deps as the planner map: applying a plan writes both the weeks
+  // and the commitment, so they must be re-read together or the tiles would show one month's
+  // numbers against another month's sessions.
+  const { map: triadByDate, labels: rungLabels } = useMemo(() => indexTriadByDate(viewYear, viewMonth), [viewYear, viewMonth, tick]);
   // C3 — map each date the preview block will fill → its phase, for the grid overlay.
   const previewByDate = useMemo(() => {
     const m = new Map();
@@ -917,6 +1092,8 @@ export function CalendarTab({ showToast }) {
             selectedDate={selectedDate}
             activitiesByDate={activitiesByDate}
             plannerByDate={plannerByDate}
+            triadByDate={triadByDate}
+            rungLabels={rungLabels}
             racesByDate={racesByDate}
             sleepByDate={sleepByDate}
             hrvByDate={hrvByDate}
@@ -1189,7 +1366,7 @@ function CalendarHeader({ monthLabel, onPrev, onNext, onToday }) {
 
 // ── Month grid ──────────────────────────────────────────────────────────────
 
-function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByDate, racesByDate, sleepByDate, hrvByDate, goals, isMobile, dragOverDate, onTileDragStart, onTileDragMove, onTileDragEnd, onPickDate, onTileDrop, todayCellRef, previewByDate }) {
+function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByDate, triadByDate, rungLabels, racesByDate, sleepByDate, hrvByDate, goals, isMobile, dragOverDate, onTileDragStart, onTileDragMove, onTileDragEnd, onPickDate, onTileDrop, todayCellRef, previewByDate }) {
   const TileComponent = isMobile ? MobileDayTile : DayTile;
   // Web drag-and-drop (desktop). Mobile keeps its touch long-press path; on the web the tiles
   // weren't draggable at all, so a session couldn't be moved. Native HTML5 DnD on the cell
@@ -1271,6 +1448,8 @@ function MonthGrid({ cells, todayStr, selectedDate, activitiesByDate, plannerByD
               isSelected={cell.date === selectedDate}
               completed={activitiesByDate.get(cell.date) || []}
               planned={plannerByDate.get(cell.date)}
+              triad={(triadByDate && triadByDate.get(cell.date)) || null}
+              rungLabels={rungLabels || {}}
               races={racesByDate.get(cell.date) || []}
               sleep={sleepByDate.get(cell.date)}
               hrv={hrvByDate.get(cell.date)}
@@ -1454,7 +1633,7 @@ function tileFigures({ hasRace, hasCompleted, isPlannedOnly, races, completed, p
 // Phase 4r.calendar.4 — bottom strip now carries the three-domain
 // summary (Activity / Fuel / Body) that Arnold tracks throughout the
 // app, mirroring the daily score's composition on every calendar cell.
-function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, hrv, goals, onPick }) {
+function DayTile({ cell, isToday, isSelected, completed, planned, triad, rungLabels, races, sleep, hrv, goals, onPick }) {
   const hasRace = races.length > 0;
   const hasCompleted = completed.length > 0;
   const isPlannedOnly = !hasRace && !hasCompleted && planned && planned.type && planned.type !== 'rest';
@@ -1490,6 +1669,13 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
   const plannedRunMi = (() => { try { return dayRunMiles(planned) + (races || []).reduce((s, r) => s + (Number(r.distanceMi) || 0), 0); } catch { return 0; } })();
   const actualRunMi = completed.reduce((s, a) => s + (isRun(a) && Number(a.distanceMi) > 0 ? Number(a.distanceMi) : 0), 0);
   const isRunningDay = plannedRunMi > 0 || actualRunMi > 0;
+
+  // Every session type the day is planned for — the type gate the triad row checks itself
+  // against, so a swapped Tuesday never wears Thursday's three numbers.
+  const plannedTypes = (() => { try { return daySessions(planned).map(s => s.type); } catch { return []; } })();
+  // A race is a fixed distance, so it is never tierable and packTriad already dropped it;
+  // this is belt-and-braces so a race day can't inherit a neighbouring day's row.
+  const showTriad = !!triad && !hasRace;
 
 
   // Fuel — pull daily nutrition totals + compare to calorie target.
@@ -1626,17 +1812,26 @@ function DayTile({ cell, isToday, isSelected, completed, planned, races, sleep, 
         ) : null}
       </div>
 
-      {/* Run miles: actual run / planned (Emil — see daily planned + run). */}
+      {/* Run miles: actual run / planned (Emil — see daily planned + run).
+          When the three roads render below, the "/planned" half is dropped: the triad row
+          already states every target the day was given, and repeating the lowest of them as
+          "/4.0" is the same number said twice in two different vocabularies. */}
       {isRunningDay && (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 2, lineHeight: 1, flexShrink: 0 }}>
           <span style={{ fontSize: 9, fontWeight: 600, fontFamily: 'var(--font-mono)', color: actualRunMi > 0 ? '#60a5fa' : 'var(--text-muted)' }}>
             {actualRunMi > 0 ? actualRunMi.toFixed(1) : '–'}
           </span>
-          {plannedRunMi > 0 && (
+          {plannedRunMi > 0 && !showTriad && (
             <span style={{ fontSize: 8, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>/{plannedRunMi.toFixed(1)}</span>
           )}
           <span style={{ fontSize: 7, color: 'var(--text-faint)' }}>mi</span>
         </div>
+      )}
+
+      {/* ── THE THREE ROADS ── read back from the frozen commitment, never recomputed here. */}
+      {showTriad && (
+        <TriadRow triad={triad} plannedTypes={plannedTypes} actualMi={actualRunMi}
+          isPast={cell.date < localDate()} labels={rungLabels || {}} compact={false} />
       )}
 
       {/* COCKPIT BODY: image stays size-locked regardless of secondary
@@ -1791,7 +1986,7 @@ function CockpitVital({ icon, value, color }) {
 // the bottom, matching the desktop cockpit information density while
 // staying readable at small size. Mobility tilde still bottom-right
 // when mobility is layered on a non-mobility primary.
-function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, isPast, onTileDragStart, onTileDragMove, onTileDragEnd, onPick }) {
+function MobileDayTile({ cell, isToday, isSelected, completed, planned, triad, rungLabels, races, isPast, onTileDragStart, onTileDragMove, onTileDragEnd, onPick }) {
   const hasRace = races.length > 0;
   const hasCompleted = completed.length > 0;
   const isPlannedOnly = !hasRace && !hasCompleted && planned && planned.type && planned.type !== 'rest';
@@ -1853,6 +2048,18 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, i
     : hasCompleted
       ? (totalMi >= 0.5 ? `${totalMi.toFixed(1)}mi` : totalSecs >= 60 ? `${Math.round(totalSecs / 60)}m` : null)
       : null;
+  void headlineMetric; // computed for parity with the web tile; the phone tile shows the triad row instead
+
+  // ── THE THREE ROADS, phone size ────────────────────────────────────────────
+  // Emil, 2026-07-25: "I see nothing on the Calendar for the option on what to run."
+  // Identical rule to the web tile, because it is literally the same component — TriadRow
+  // is shared so the two grids cannot print different numbers for the same Tuesday. Only
+  // the size differs (compact), which is a fact about the screen and not about the plan.
+  //
+  // Note the phone tile never showed mileage at all before this, so nothing is being
+  // replaced: the three targets are new information here, not a re-styling of old.
+  const plannedTypes = (() => { try { return daySessions(planned).map(s => s.type); } catch { return []; } })();
+  const showTriad = !!triad && !hasRace;
 
   // Glyph-only cells (Emil pick B): one small signature per distinct
   // session on the day. Races first, then completed families, else the
@@ -2015,6 +2222,16 @@ function MobileDayTile({ cell, isToday, isSelected, completed, planned, races, i
                   style={{ height: 15, width: 'auto', objectFit: 'contain', transform: `scale(${SIG_SCALE[it.family] || 1})` }}
                   onError={(e) => { e.currentTarget.style.display = 'none'; }}/>
           ))}
+        </div>
+      )}
+
+      {/* The three roads. Sits under the figure and takes its height from it — the
+          signature block above is flex:1, so it yields the ~9px this row needs rather
+          than the row overflowing the tile. */}
+      {showTriad && (
+        <div style={{ position: 'relative', zIndex: 1, marginTop: 1 }}>
+          <TriadRow triad={triad} plannedTypes={plannedTypes} actualMi={actualRunMi}
+            isPast={isPast} labels={rungLabels || {}} compact />
         </div>
       )}
     </button>
@@ -2879,7 +3096,7 @@ function PlanPickerModal({ dateStr, onClose, onPick, editing = false, initialTyp
               value={dist}
               onChange={e => setDist(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') confirmRun(); }}
-              placeholder="mi (optional)"
+              placeholder="Miles (optional)"
               style={{
                 flex: 1, minWidth: 0, fontSize: 13,
                 background: 'var(--bg-surface, #0b0f14)', color: 'var(--text-primary, #e2e8f0)',

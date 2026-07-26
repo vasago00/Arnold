@@ -5,6 +5,7 @@
 // Pure (no storage/DOM) so it's node-testable and can feed any surface.
 import { daySessions, dayRunMiles } from './planner.js';
 import { racePhase } from './seasonPlan.js';   // ONE source of the race periodization phase (coach unification)
+import { resolveARace } from './aRace.js';      // THE canonical A-race (goal race) resolver — no more soonest-race drift
 
 const QUALITY  = new Set(['tempo', 'intervals', 'hiit', 'race']); // high intensity
 const LONG     = new Set(['long_run']);                            // key long run
@@ -145,8 +146,14 @@ export function analyzeSeason(weeks, opts = {}) {
   const rp = racePhase({ races, today });
   const imminent = (rp.phase === 'mini-taper' || rp.phase === 'race-week') && rp.nextMarathon
     ? { name: rp.nextMarathon.name, daysOut: rp.daysToMarathon } : null;
-  // "Build volume" only makes sense toward a race far enough out to train for.
-  const goalRace = withDays.find(r => r.daysOut > 21) || null;
+  // The A-RACE (the marathon you set a goal time on) via the ONE canonical resolver — NOT "the first
+  // race >3wk out", which grabbed a nearer tune-up (Harlem 5K) over the goal marathon (Valencia): the
+  // Berlin/Valencia bug, on the calendar coach (Emil). "Build volume" still only makes sense toward a
+  // race far enough out to train for, so keep the >21d guard; fall back to the old heuristic when
+  // there's no resolvable A-race.
+  const aRace = resolveARace(opts.races || [], today, opts.aRaceDate || null);
+  const aRaceOut = aRace ? { name: aRace.name, daysOut: dOut(aRace) } : null;
+  const goalRace = (aRaceOut && aRaceOut.daysOut > 21) ? aRaceOut : (withDays.find(r => r.daysOut > 21) || null);
   const wks = d => Math.max(1, Math.round(d / 7));
 
   const behind = missed >= 2 || emptyAhead >= 2;

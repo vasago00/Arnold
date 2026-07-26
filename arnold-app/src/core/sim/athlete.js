@@ -54,8 +54,14 @@ export function generateAthlete(rng) {
   // Sleep goal 7–9h (individual need).
   const sleepGoalHrs = Math.round(rng.clampedNormal(7.8, 0.6, 6.5, 9.5) * 10) / 10;
 
+  // Sport discipline — drives the day-stream's SESSION MIX (which modalities, and how
+  // long). Skewed toward the pure runner (Emil's real profile), but the multi-sport
+  // profiles battle-test the engine against bigger, longer bike/swim burns and mixed
+  // modality streams the single-sport sample never exercises. See dayStream.js.
+  const discipline = rng.choice(['runner', 'runner', 'runner', 'triathlete', 'cyclist', 'hybrid']);
+
   return {
-    sex, age, fitness,
+    sex, age, fitness, discipline,
     weightLbs: Math.round(weightLbs * 10) / 10,
     bodyFatPct: Math.round(bodyFatPct * 10) / 10,
     leanMassLbs: Math.round(leanMassLbs * 10) / 10,

@@ -63,6 +63,25 @@ export function std(xs) {
   return Math.sqrt(s / (xs.length - 1));
 }
 
+// ── Scalar primitives — THE single home (consolidation pass, 2026-07) ────────
+// These were byte-identical local copies scattered across derive/*, hub/*,
+// worldModel, coachPersonalization, and the garmin clients. Centralized here so
+// there's one definition to reason about. (Behaviorally-divergent primitives —
+// median's avg-two-middles vs upper-middle split, percentile's index method,
+// sample-vs-population variance, the pace parsers — were deliberately NOT
+// merged: they compute different numbers and unifying them blind would move
+// results.)
+
+/** Clamp a value to [lo, hi]. */
+export function clamp(value, lo, hi) {
+  return Math.max(lo, Math.min(hi, value));
+}
+
+/** Round to 2 decimal places. */
+export function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
 /**
  * Linear regression of ys against their index (0..n-1). Used for trend
  * detection over a window of consecutive observations. Returns slope per

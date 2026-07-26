@@ -134,6 +134,37 @@ export function lastNDays(refDate, n) {
  * Used to decide whether an HRV / RHR / sleep row is fresh enough to count
  * in today's DCY even if it's technically yesterday's date.
  */
+// ─── Finish-time display (h:mm) ──────────────────────────────────────────────
+//
+// Emil, 2026-07-25: mobile EdgeIQ printed his target as 3:48 and ceiling as 3:20 while
+// "Your plan" printed 3:49 and 3:21 for the same two numbers. Not a sync bug — four
+// surfaces had each written their own h:mm formatter and two of them disagreed about the
+// leftover seconds. raceOutlookLive (EdgeIQ's source) FLOORED the minute; LivingPlan,
+// volumeModel and tierFeasibility ROUNDED it. A goal of 3:48:35 is therefore "3:48" on one
+// screen and "3:49" on the other, and the athlete is left to guess which one is his goal.
+//
+// One formatter now, and it truncates, for two reasons.
+//
+// First, honesty. Rounding 3:48:35 up to "3:49" prints a target 25 seconds EASIER than the
+// one the plan actually solved for, and every pace derived from the printed figure is
+// correspondingly slower. Truncating prints "3:48" — a time that, if you hit it, means you
+// beat the ask. A display error that makes the athlete slightly faster than required is the
+// only direction of error a coach should be willing to ship.
+//
+// Second, rounding is outright wrong at the top of the hour: Math.round((3*3600+59*60+45)
+// % 3600 / 60) is 60, so the old fmtGoal rendered a 3:59:45 goal as "3:60". Truncation
+// cannot produce a 60th minute.
+//
+// Seconds are dropped on purpose — these are ladder targets carrying error bars measured in
+// minutes, and printing 3:48:35 would claim a precision the estimate does not have.
+export function fmtFinish(secs) {
+  const n = Number(secs);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
+
 export function withinHours(sourceDateStr, refDate, hours = 36) {
   const src = parseYmd(sourceDateStr);
   const ref = parseYmd(refDate || localDate());

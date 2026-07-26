@@ -11,6 +11,8 @@
 // This is a defensible DEFAULT and a single knob — like CROSS_TRAIN_CREDIT it's
 // meant to become hub-learnable from the athlete's own tolerated volume later.
 
+import { fmtFinish } from './time.js';
+
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; };
 
 /**
@@ -55,8 +57,7 @@ export function volumeReadout({ goalTimeSecs, distanceMi = 26.2, currentWeeklyMi
   if (peakMi == null) return null;
   const cur = num(currentWeeklyMi) || 0;
   const gapMi = Math.max(0, peakMi - cur);
-  const h = Math.floor(goalTimeSecs / 3600), m = Math.round((goalTimeSecs % 3600) / 60);
-  const goalStr = `${h}:${String(m).padStart(2, '0')}`;
+  const goalStr = fmtFinish(goalTimeSecs);   // the ONE finish-time formatter (core/time.js)
   return {
     peakMi, gapMi,
     behind: cur > 0 && cur < peakMi * 0.9,

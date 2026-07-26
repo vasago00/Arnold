@@ -89,4 +89,22 @@ describe('season read', () => {
   it('returns null without a goal', () => {
     expect(analyzeSeason(weeks, { today: '2026-06-17' })).toBeNull();
   });
+
+  it('anchors "rebuild toward" to the GOAL marathon, not a nearer tune-up (Emil: Harlem 5K vs Valencia)', () => {
+    const behindWeeks = [
+      { start: '2026-06-29', end: '2026-07-05', actual: 11, planned: 30 },
+      { start: '2026-07-06', end: '2026-07-12', actual: 11, planned: 30 },
+      { start: '2026-07-13', end: '2026-07-19', actual: 11, planned: 30 },
+    ];
+    const races = [
+      { name: 'NYRR Percy Sutton Harlem 5K', date: '2026-08-08', distanceMi: 3.1 },     // nearer tune-up
+      { name: 'Valencia Marathon', date: '2026-12-07', distanceMi: 26.2, goalTimeSecs: 12600 }, // the A-race
+    ];
+    const r = analyzeSeason(behindWeeks, { weeklyRunMilesGoal: 30, today: '2026-07-17', races });
+    expect(r.behind).toBe(true);
+    expect(r.goalRace.name).toBe('Valencia Marathon');         // NOT the Harlem 5K
+    expect(r.message).toMatch(/Valencia Marathon/);
+    expect(r.message).not.toMatch(/Harlem/);
+    expect(r.nextRace.name).toBe('NYRR Percy Sutton Harlem 5K'); // next-race is still the soonest (correct)
+  });
 });

@@ -18,8 +18,9 @@ import { detectCSVType } from "./core/parsers/detectType.js";
 // (the deleted legacy RacesTab) is gone. The live Calendar uses CalendarTab.jsx.
 import { startFitPolling } from "./core/fit-relay.js";
 import { parseCronometerCSV } from "./core/parsers/cronometerParser.js";
-import { storage, migrateLegacyStorage, migrateSupplementKeys, attachEngine, initEncryption, getStorageWriteCount } from "./core/storage.js";
+import { storage, migrateLegacyStorage, migrateSupplementKeys, migratePlanPrefsKey, attachEngine, initEncryption, getStorageWriteCount } from "./core/storage.js";
 import { migrateGoalsV1ToV2 } from "./core/migrateGoalsV1ToV2.js";
+import { isEnabled as llmEnabled, setEnabled as setLlmEnabled, registerCoachReasoner, unregisterCoachReasoner, hasWebGPU, coachVoiceStatus } from "./core/coachModel.js";   // on-device coach voice (Profile toggle)
 import { primeVitalsCache, dcy as dcyToday } from "./core/dcy.js";
 import { isResumeSuppressed } from "./core/appLifecycle.js";   // don't reset-to-Start when returning from a file picker
 import { runDiagnostics } from "./core/diagnostics.js";   // self-check / provenance (window.__arnoldDiag)
@@ -75,6 +76,9 @@ import { SyncPanel, checkSyncImport, applySyncData } from "./components/SyncPane
 import { BackupPanel } from "./components/BackupPanel.jsx";
 import CloudSyncPanel from "./components/CloudSyncPanel.jsx";
 import BackupStatusPanel from "./components/BackupStatusPanel.jsx";
+import RecordPanel from "./components/RecordPanel.jsx";   // durable System of Record status + folder grant
+import RedsCard from "./components/RedsCard.jsx";   // P3: REDs / energy-availability screen (2023 IOC)
+import EasyZoneCard from "./components/EasyZoneCard.jsx";   // P4: reserve-anchored "define easy honestly"
 import { startCloudSync, onCloudSyncEvent } from "./core/cloud-sync.js";
 import { startAutoBackup, snapshotBeforeOp, purgeLegacyLocalStorageBackups } from "./core/backup.js";
 // Phase 0.5 (slice 5) — supplement getters import removed; their only Arnold.jsx
@@ -447,6 +451,10 @@ export default function App(){
     // Phase 1: one-shot migration from legacy arnold-memory:* keys to unified arnold:* store
     migrateLegacyStorage();
     migrateSupplementKeys();
+    // Moves the plan's own config off the unprefixed 'planPrefs' slot and into the synced
+    // namespace, so the plan the desktop builds is the plan the phone builds. Idempotent;
+    // no-ops once the flag is set, and never overwrites a value already pulled from sync.
+    migratePlanPrefsKey();
     // Phase B Turn 4 (Phase 4r.dataspine.7) — idempotent goals v1→v2
     // migration. Builds nested outcome-only structures (goals.body,
     // goals.recovery, goals.performance, goals.races) from flat v1
@@ -1383,6 +1391,12 @@ export default function App(){
         };
         // Also expose storage itself so future ad-hoc inspection is easy.
         window.__arnoldStorage=storage;
+        // Seed the marathon RÉSUMÉ (career finishes) once — durability/experience input, non-destructive if the
+        // athlete already has a curated list. Doesn't touch the LEVEL (all entries are >6 mo old).
+        try { import('./core/record/careerRacesSeed.js').then(m => m.seedCareerRaces(storage)).catch(()=>{}); } catch {}
+        // Durable System of Record — exposes window.__arnoldRecord.grant()/.exportNow(). One-time folder grant
+        // starts writing the full store to <folder>/data (git-versionable, readable by Claude); resumes a prior grant.
+        try { import('./core/record/recordService.js').then(m => m.installRecordConsole({ storage })).catch(()=>{}); } catch {}
         // Expose the unified activity merge so we can diagnose count mismatches
         // between storage.get('activities') and what the dashboard actually uses.
         window.__allActs=_allActs;
@@ -1823,6 +1837,22 @@ function ProfileSettings({data,persist,showToast}){
   const[saved,setSaved]=useState(false);
   const update=(key,val)=>setForm(prev=>({...prev,[key]:val}));
 
+  // On-device coach voice (Stage 3) — opt-in toggle, syncs cross-device via the pref key.
+  const[llmOn,setLlmOn]=useState(()=>{try{return llmEnabled();}catch{return false;}});
+  // Seed the status from the LIVE model state (survives remounts) so returning to Profile still shows
+  // "ready (model)" when the model is loaded — instead of a blank line that looks like it unloaded.
+  const[llmStatus,setLlmStatus]=useState(()=>{try{const s=coachVoiceStatus();return s.ready?`ready — warmer voice${s.model?` (${String(s.model).replace(/-q4f(16|32)_1-MLC$/,"")})`:""}`:"";}catch{return "";}});
+  const toggleLlm=async()=>{
+    const next=!llmOn;
+    setLlmEnabled(next); setLlmOn(next);
+    if(next){
+      if(!hasWebGPU()){setLlmStatus("this device/browser has no WebGPU — the built-in voice stays");return;}
+      setLlmStatus("preparing the on-device model (one-time download)…");
+      const onProgress=(p)=>{try{const pct=p&&typeof p.progress==="number"?Math.round(p.progress*100):null;setLlmStatus(pct!=null?`downloading the model… ${pct}%`:(p&&p.text?String(p.text).slice(0,64):"downloading the model…"));}catch{}};
+      try{const r=await registerCoachReasoner({onProgress});setLlmStatus(r&&r.ok?`ready — warmer voice${r.model?` (${String(r.model).replace(/-q4f(16|32)_1-MLC$/,"")})`:""}`:`couldn't start (${r&&r.reason})${r&&r.error?`: ${String(r.error).slice(0,140)}`:""}`);}catch(e){setLlmStatus(`couldn't start the model${e&&e.message?`: ${String(e.message).slice(0,140)}`:""}`);}
+    }else{try{unregisterCoachReasoner();}catch{}setLlmStatus("off — using the built-in coach voice");}
+  };
+
   const handleSave=async()=>{
     storage.set('profile',form,{skipValidation:true});
     try{
@@ -1869,6 +1899,22 @@ function ProfileSettings({data,persist,showToast}){
   return(
     <div style={S.sec}>
       {_setIsMobile && <div style={S.st}>Profile</div>}
+
+      {/* On-device coach voice — opt-in AI phrasing, private + synced */}
+      <div style={{...S.lg,marginTop:4}}>
+        <div style={S.gt}>◈ Coach voice</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--text-primary)"}}>On-device AI phrasing<span style={{fontSize:8,fontWeight:800,letterSpacing:"0.14em",color:"#5eead4",background:"rgba(94,234,212,0.14)",padding:"2px 5px",borderRadius:3,marginLeft:6,verticalAlign:"1px"}}>BETA</span></div>
+            <div style={{fontSize:11,color:"var(--text-muted)",lineHeight:1.45,marginTop:3}}>Rephrases the coach in a warmer, more natural voice using a private model that runs entirely on your device — no account, nothing leaves the phone, and it can only say facts the coach already computed. First time on downloads the model once.{llmStatus?` · ${llmStatus}`:""}</div>
+          </div>
+          {/* arnold-compact-btn opts out of the mobile.css `button { min-height:42px !important; border-radius:10px !important }`
+              rule (scoped to @media max-width:600px) that was inflating this pill into a 46×42 rounded rectangle. */}
+          <button onClick={toggleLlm} role="switch" aria-checked={llmOn} title={llmOn?"On":"Off"} className="arnold-compact-btn" style={{flex:"none",flexShrink:0,boxSizing:"border-box",width:46,minWidth:46,height:26,minHeight:26,borderRadius:13,border:"none",cursor:"pointer",padding:2,background:llmOn?"#5eead4":"rgba(148,163,184,0.35)",transition:"background 0.15s"}}>
+            <span style={{display:"block",width:22,height:22,borderRadius:"50%",background:"#fff",transform:llmOn?"translateX(20px)":"translateX(0)",transition:"transform 0.15s"}}/>
+          </button>
+        </div>
+      </div>
 
       {/* Personal info — compact */}
       <div style={{...S.lg,marginTop:4}}>
@@ -1923,6 +1969,13 @@ function ProfileSettings({data,persist,showToast}){
         <BackupPanel showToast={showToast}/>
         <div style={{height:1,background:C.b,margin:"8px 0"}}/>
         <BackupStatusPanel/>
+        <div style={{height:1,background:C.b,margin:"8px 0"}}/>
+        {/* Energy availability / REDs screen (P3) — reads labs + DEXA + RMR + nutrition + weight */}
+        <RedsCard style={{marginBottom:10}}/>
+        {/* Define "easy" honestly (P4) — reserve-anchored aerobic ceiling from runs + resting HR */}
+        <EasyZoneCard style={{marginBottom:10}}/>
+        {/* Durable System of Record — the permanent, inspectable memory */}
+        <RecordPanel/>
         {/* ── Devices & Sync ── */}
         <div style={{display:'flex',alignItems:'center',gap:8,margin:'18px 0 10px'}}>
           <div style={{fontSize:"clamp(12px,0.5vw+10px,14px)",fontWeight:600,color:'var(--text-primary)',letterSpacing:'0.02em'}}>Devices & Sync</div>

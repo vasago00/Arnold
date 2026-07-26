@@ -1076,7 +1076,7 @@ function getQualityData({ planType, summary }) {
       color: summary.effortColor,
     });
     if (summary.avgHR) {
-      chips.push({ value: `${summary.avgHR}`, label: 'avg HR', color: T2 });
+      chips.push({ value: `${summary.avgHR}`, label: 'Avg HR', color: T2 });
     }
     return { chips, zones: z };
   }
@@ -1085,14 +1085,14 @@ function getQualityData({ planType, summary }) {
   if (summary.load != null) {
     chips.push({
       value: `${summary.load}`,
-      label: 'load',
+      label: 'Load',
       color: summary.effortColor,
     });
   }
   if (summary.decoupling != null) {
     chips.push({
       value: `${summary.decoupling}%`,
-      label: 'drift',
+      label: 'Drift',
       color: decouplingColor(summary.decoupling),
     });
   }
@@ -1114,7 +1114,7 @@ function getQualityData({ planType, summary }) {
   } else if (summary.efficiencyPct != null) {
     chips.unshift({
       value: `${summary.efficiencyPct}%`,
-      label: 'efficient',
+      label: 'Efficient',
       color: efficiencyColor(summary.efficiencyPct),
     });
   }
@@ -1143,9 +1143,9 @@ function qualityPanel({ planType, summary }) {
           color: easyZoneColor(z.z12),
         },
         secondary: [
-          z.z3plus != null ? { label: 'in Z3+', value: `${z.z3plus}%`, color: z.z3plus > 20 ? BAD : z.z3plus > 10 ? WARN : GOOD } : null,
-          summary.load != null ? { label: 'load', value: `${summary.load}`, color: summary.effortColor } : null,
-          summary.decoupling != null ? { label: 'drift', value: `${summary.decoupling}%`, color: decouplingColor(summary.decoupling) } : null,
+          z.z3plus != null ? { label: 'In Z3+', value: `${z.z3plus}%`, color: z.z3plus > 20 ? BAD : z.z3plus > 10 ? WARN : GOOD } : null,
+          summary.load != null ? { label: 'Load', value: `${summary.load}`, color: summary.effortColor } : null,
+          summary.decoupling != null ? { label: 'Drift', value: `${summary.decoupling}%`, color: decouplingColor(summary.decoupling) } : null,
         ].filter(Boolean).slice(0, 2),
       };
     }
@@ -1158,8 +1158,8 @@ function qualityPanel({ planType, summary }) {
           color: zHR.color,
         },
         secondary: [
-          summary.load != null ? { label: 'load', value: `${summary.load}`, color: summary.effortColor } : null,
-          summary.decoupling != null ? { label: 'drift', value: `${summary.decoupling}%`, color: decouplingColor(summary.decoupling) } : null,
+          summary.load != null ? { label: 'Load', value: `${summary.load}`, color: summary.effortColor } : null,
+          summary.decoupling != null ? { label: 'Drift', value: `${summary.decoupling}%`, color: decouplingColor(summary.decoupling) } : null,
         ].filter(Boolean).slice(0, 2),
       };
     }
@@ -1174,7 +1174,7 @@ function qualityPanel({ planType, summary }) {
         color: summary.effortColor,
       },
       secondary: [
-        summary.avgHR ? { label: 'avg HR', value: `${summary.avgHR}`, color: T2 } : null,
+        summary.avgHR ? { label: 'Avg HR', value: `${summary.avgHR}`, color: T2 } : null,
       ].filter(Boolean),
     };
   }
@@ -1183,12 +1183,12 @@ function qualityPanel({ planType, summary }) {
   return {
     primary: {
       value: summary.efficiencyPct != null ? `${summary.efficiencyPct}%` : '—',
-      label: 'efficient',
+      label: 'Efficient',
       color: efficiencyColor(summary.efficiencyPct),
     },
     secondary: [
-      summary.load != null ? { label: 'load', value: `${summary.load}`, color: summary.effortColor } : null,
-      summary.decoupling != null ? { label: 'drift', value: `${summary.decoupling}%`, color: decouplingColor(summary.decoupling) } : null,
+      summary.load != null ? { label: 'Load', value: `${summary.load}`, color: summary.effortColor } : null,
+      summary.decoupling != null ? { label: 'Drift', value: `${summary.decoupling}%`, color: decouplingColor(summary.decoupling) } : null,
     ].filter(Boolean).slice(0, 2),
   };
 }
@@ -1701,15 +1701,15 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
     // primer (electrolytes + protein) rather than a workout fuel checklist.
     const fuelChips = isMob
       ? [
-          fuel ? { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>, value: ozToLiters(fuel.waterOz), sub: 'water' } : null,
-          { icon: <Icon.Salt c="#fbbf24" s={14}/>, value: '500mg', sub: 'sodium' },
-          { icon: <Icon.Egg c="#fb923c" s={14}/>, value: '20g', sub: 'protein' },
+          fuel ? { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>, value: ozToLiters(fuel.waterOz), sub: 'Water' } : null,
+          { icon: <Icon.Salt c="#fbbf24" s={14}/>, value: '500mg', sub: 'Sodium' },
+          { icon: <Icon.Egg c="#fb923c" s={14}/>, value: '20g', sub: 'Protein' },
         ].filter(Boolean)
       : [
           // FUEL = hydration + carbs only. Warmup is a PREP element, not fuel —
           // it moved out of this group (Emil 2026-06-10) to the target row.
-          fuel ? { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>, value: ozToLiters(fuel.waterOz), sub: 'water' } : null,
-          fuel && fuel.carbsG > 0 ? { icon: <Icon.Wheat c={GOOD} s={14}/>, value: `${fuel.carbsG}g`, sub: 'carbs' } : null,
+          fuel ? { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>, value: ozToLiters(fuel.waterOz), sub: 'Water' } : null,
+          fuel && fuel.carbsG > 0 ? { icon: <Icon.Wheat c={GOOD} s={14}/>, value: `${fuel.carbsG}g`, sub: 'Carbs' } : null,
         ].filter(Boolean);
 
     // Header-right always shows weather now (Phase 4q.pre.5 restored it
@@ -1974,14 +1974,14 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
     const goalPace = profile?.targetRacePace || null;
 
     const leftLines = [
-      distLabel ? { value: distLabel, sub: 'race day', tier: 'big' } : null,
+      distLabel ? { value: distLabel, sub: 'Race day', tier: 'big' } : null,
       nextRace?.name ? { value: nextRace.name, sub: null, tier: 'small' } : null,
     ].filter(Boolean);
 
     const rightLines = [
       weather ? { icon: weatherIcon({ condition: weather.condition, color: familyColor, size: 12 }), value: `${weather.tempMinF}–${weather.tempMaxF}°`, sub: weather.condition.toLowerCase().split(/\s+/)[0], tier: 'big' } : null,
-      goalPace ? { icon: <Icon.Bullseye c={familyColor}/>, value: goalPace, sub: 'goal pace', tier: 'mid' } : null,
-      { icon: <Icon.Drop c={familyColor}/>, value: '0.7L', sub: 'pre-race', tier: 'small' },
+      goalPace ? { icon: <Icon.Bullseye c={familyColor}/>, value: goalPace, sub: 'Goal pace', tier: 'mid' } : null,
+      { icon: <Icon.Drop c={familyColor}/>, value: '0.7L', sub: 'Pre-race', tier: 'small' },
     ].filter(Boolean);
 
     return (
@@ -2085,12 +2085,12 @@ export function PlannedWorkoutTile({ profile, plannedToday, nextRace, storageVer
   // Mobility activity is logged today, showing actual minutes done.
   // Prescription minutes still show as the goal in parentheses.
   const recoveryChips = [
-    recovery.carbsG > 0 ? { icon: <Icon.Wheat c={GOOD}/>,                                        value: `${recovery.carbsG}g`,   sub: 'carbs' } : null,
-    { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>,                                value: `${recovery.waterL}L`,   sub: 'water' },
+    recovery.carbsG > 0 ? { icon: <Icon.Wheat c={GOOD}/>,                                        value: `${recovery.carbsG}g`,   sub: 'Carbs' } : null,
+    { icon: <PhDrop size={14} color="#22d3ee" weight="duotone"/>,                                value: `${recovery.waterL}L`,   sub: 'Water' },
     mobilityDone
-      ? { icon: <PersonSimpleTaiChi size={14} color={GOOD} weight="duotone"/>,                   value: `${mobilityDoneMin}m ✓`, sub: 'mobility', color: GOOD }
-      : { icon: <PersonSimpleTaiChi size={14} color="#a78bfa" weight="duotone"/>,                value: `${recovery.mobMin}m`,   sub: 'mobility' },
-    { icon: <PhMoon size={14} color="#94a3b8" weight="duotone"/>,                                value: `${recovery.sleepHrs}h`, sub: 'sleep' },
+      ? { icon: <PersonSimpleTaiChi size={14} color={GOOD} weight="duotone"/>,                   value: `${mobilityDoneMin}m ✓`, sub: 'Mobility', color: GOOD }
+      : { icon: <PersonSimpleTaiChi size={14} color="#a78bfa" weight="duotone"/>,                value: `${recovery.mobMin}m`,   sub: 'Mobility' },
+    { icon: <PhMoon size={14} color="#94a3b8" weight="duotone"/>,                                value: `${recovery.sleepHrs}h`, sub: 'Sleep' },
   ].filter(Boolean);
 
   // Phase 4p.plan.14 — split into two rows:

@@ -3,7 +3,7 @@
 // from hand-built week fixtures, then feed it through the REAL narrative engine to prove
 // gWeekDrift + gProgress fire with the right judgement, tone, and honest lead.
 import { describe, it, expect } from 'vitest';
-import { computePlanSlice } from './coachContext.js';
+import { computePlanSlice, canonicalSessionType, buildCoachContext } from './coachContext.js';
 import { narrateSurface, allBeats } from './coachNarrative.js';
 
 // A Mon–Sun week fixture helper. Each day: run sessions [{type,mi}] + whether strength was planned.
@@ -98,6 +98,41 @@ describe('narrative calibration — surfaces stay tight (Emil: no wall of text)'
       const fuelBeats = nv.beats.filter((b) => ['reds-lowEA', 'fuel-status', 'mech-protein-timing'].includes(b.id));
       expect(fuelBeats.length, `${s} stacked ${fuelBeats.length} fuel beats`).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe('per-surface density — mobile Play is one tight read, opts can retune (Emil 2026-07)', () => {
+  // Same "everything fires at once" fixture as the calibration block above.
+  const busy = {
+    clock: { hour: 11 },
+    today: { primarySession: { type: 'easy_run', label: 'Easy run', loadBearing: false }, trainedToday: false, tdee: 2500, injuryArea: null, readiness: { score: 78, band: 'high' }, tempC: 30 },
+    adaptation: null, tomorrow: null,
+    goal: { aRace: { name: 'Valencia Marathon', daysOut: 120 }, weakLink: null, body: { direction: 'cut', observedRateLbPerWk: 0.17, targetLb: 170 } },
+    fuel: { protein: { today: 105, target: 153, gap: 48 }, calories: { today: 1613, target: 1980, pct: 1613 / 1980 }, ea: { flag: true, valueKcalPerKg: 26, floor: 30, status: 'low' }, deficitPct: 0.19 },
+    plan: { weekMiTarget: 31, weekMiProjected: 31, missed: [], remaining: [{ type: 'easy_run', mi: 5 }], swappedToStrength: false, strengthTarget: 3, strengthDone: 2 },
+    learned: { heat: { perUnitPct: 0.63, confidence: 0.84 } }, clinical: {}, memory: {},
+  };
+
+  it('the mobile Play hero carries exactly one beat (no full paragraph)', () => {
+    const nv = narrateSurface(busy, 'play');
+    expect(nv).toBeTruthy();
+    expect(nv.beats.length).toBe(1);
+  });
+
+  it('the daily digest still gets its two-beat budget (unchanged)', () => {
+    expect(narrateSurface(busy, 'daily').beats.length).toBeLessThanOrEqual(2);
+  });
+
+  it("density:'full' lets a surface carry one extra beat; 'compact' clamps to one", () => {
+    const dflt = narrateSurface(busy, 'play').beats.length;
+    const full = narrateSurface(busy, 'play', { density: 'full' }).beats.length;
+    expect(full).toBeGreaterThan(dflt);
+    expect(narrateSurface(busy, 'daily', { density: 'compact' }).beats.length).toBe(1);
+  });
+
+  it('no opts → the surface keeps its declared budget (backward compatible)', () => {
+    // Two calls, same result — the default path is untouched by the opts plumbing.
+    expect(narrateSurface(busy, 'play').beats.length).toBe(narrateSurface(busy, 'play', {}).beats.length);
   });
 });
 
@@ -200,6 +235,101 @@ describe('gPlanStatus (dedicated plan voice — stays in the plan lane)', () => 
     // the plan beat is confined to the plan surface
     const onFuel = allBeats(ctx).find((b) => b.id === 'plan-status');
     expect(onFuel.surfaces).toEqual(['plan']);
+  });
+});
+
+describe('canonicalSessionType — logged activity → granular coach type (the real "Play showed strength" root cause)', () => {
+  it('a logged generic run inherits today\'s PLANNED granular run type', () => {
+    expect(canonicalSessionType('run', 'easy_run', 'running')).toBe('easy_run');
+    expect(canonicalSessionType('run', 'long_run', 'running')).toBe('long_run');
+    expect(canonicalSessionType('run', 'tempo', 'running')).toBe('tempo');
+  });
+  it('a logged run with no / non-granular planned type defaults to easy_run', () => {
+    expect(canonicalSessionType('run', null, 'running')).toBe('easy_run');
+    expect(canonicalSessionType('run', 'rest', 'running')).toBe('easy_run');
+    expect(canonicalSessionType('run', 'run', 'running')).toBe('easy_run');
+  });
+  it('non-run kinds map straight through', () => {
+    expect(canonicalSessionType('strength', null, 'strength_training')).toBe('strength');
+    expect(canonicalSessionType('hiit', null, 'hiit')).toBe('hiit');
+    expect(canonicalSessionType('cycling', null, 'cycling')).toBe('cycle');
+    expect(canonicalSessionType('swim', null, 'lap_swimming')).toBe('swim');
+    expect(canonicalSessionType('mobility', null, 'yoga')).toBe('mobility');
+  });
+});
+
+// The real "Play stuck on the 2-of-3-strength tally for days" root cause (Emil, 2026-07-18): coachSignals
+// emits todayPlanned as the next7Days[0] WRAPPER { planned:{type}, intensityClass, label, done } — the
+// granular type is at .planned.type. buildCoachContext was reading .type off the WRAPPER (undefined), so on
+// a planned-but-unlogged day primarySession fell to null → gPurpose/gSessionDone went silent → the strength
+// tally won by default, every day. These guard the wrapper→.planned.type shape end-to-end.
+describe('primarySession from the planned session (todayPlanned wrapper shape)', () => {
+  const nestedPlan = () => ({
+    status: 'has-plan',
+    todayPlanned: { date: '2026-07-18', daysOut: 0, dow: 6, planned: { type: 'easy_run', distanceMi: 6 }, intensityClass: 'easy', label: 'Easy 6mi', done: false },
+    next7Days: [
+      { date: '2026-07-18', daysOut: 0, dow: 6, planned: { type: 'easy_run', distanceMi: 6 }, intensityClass: 'easy', label: 'Easy 6mi', done: false },
+      { date: '2026-07-19', daysOut: 1, dow: 0, planned: { type: 'long_run', distanceMi: 16 }, intensityClass: 'hard', label: 'Long 16mi', done: null },
+    ],
+  });
+  it('reads today\'s granular type from .planned.type (a planned, unlogged easy day)', () => {
+    const upcomingPlan = nestedPlan();
+    const ctx = buildCoachContext({
+      us: { numbers: {}, asOf: '2026-07-18', coachSignals: { upcomingPlan } },
+      sessions: [], upcomingPlan, raceHorizon: null, hour: 9, nowMs: Date.parse('2026-07-18T09:00:00'),
+    });
+    expect(ctx.today.primarySession).toBeTruthy();
+    expect(ctx.today.primarySession.type).toBe('easy_run');
+  });
+});
+
+describe('planned easy day → Play leads with purpose, not the backward strength tally (Emil regression)', () => {
+  it('gPurpose (0.48) outranks gProgress (0.40) in the shared "train" slot when a planned session is set', () => {
+    const ctx = {
+      clock: { hour: 9 },                 // morning, pre-workout (not postWorkout → purpose is live)
+      today: { primarySession: { type: 'easy_run', label: 'Easy 6mi', loadBearing: false }, trainedToday: false, tdee: 2500 },
+      tomorrow: { type: 'long_run', label: 'Long 16mi', quality: false },
+      goal: { aRace: { name: 'Valencia', daysOut: 120 }, weakLink: 'aerobic', body: null },
+      fuel: { protein: null, ea: { flag: false }, deficitPct: null },
+      plan: { strengthDone: 2, strengthTarget: 3, weekMiTarget: 40, weekMiProjected: 40, missed: [], remaining: [] },
+      learned: {}, clinical: {}, memory: { saidAgoDays: {}, kindWeight: {} },
+    };
+    const play = narrateSurface(ctx, 'play');
+    expect(play.text).toMatch(/aerobic base|easy miles/i);   // the forward purpose read leads
+    expect(play.text).not.toMatch(/strength days/i);         // the backward tally no longer wins the slot
+  });
+});
+
+describe('post-workout session read (Emil: Play showed strength after logging a run)', () => {
+  const postRun = (type = 'easy_run') => ({
+    clock: { hour: 19 },
+    today: { primarySession: { type, label: type, loadBearing: type === 'strength' }, trainedToday: true, tdee: 2500 },
+    tomorrow: null, goal: { aRace: { name: 'Valencia', daysOut: 143 }, weakLink: null, body: null },
+    fuel: { protein: null, calories: null, ea: { flag: false }, deficitPct: null },
+    plan: { weekMiTarget: 30, weekMiProjected: 30, missed: [], remaining: [], strengthTarget: 3, strengthDone: 2 },
+    learned: {}, clinical: {}, memory: {},
+  });
+  it('after an easy run, Play LEADS with the run — not the strength tally', () => {
+    const nv = narrateSurface(postRun('easy_run'), 'play');
+    expect(nv.beats[0].id).toBe('session-done-easy_run');
+    expect(nv.text).toMatch(/Easy miles banked/);
+    expect(nv.text).not.toMatch(/2 of 3 strength days/);      // the bug: strength beat led on a run day
+  });
+  it('grounds the read in the ACTUAL logged distance when present', () => {
+    const ctx = postRun('easy_run');
+    ctx.today.primarySession.distanceMi = 7.5;
+    const nv = narrateSurface(ctx, 'play');
+    expect(nv.text).toMatch(/7.5 mi of easy running banked/);
+    expect(nv.text).not.toMatch(/^Easy miles banked/);        // the specific lead replaces the generic one
+  });
+  it('a logged strength day reads as strength done', () => {
+    expect(narrateSurface(postRun('strength'), 'play').text).toMatch(/Strength work is in/);
+  });
+  it('pre-workout still previews with purpose (session-done is post-only)', () => {
+    const pre = { ...postRun('easy_run'), today: { ...postRun('easy_run').today, trainedToday: false } };
+    const beats = allBeats(pre);
+    expect(beats.find((b) => b.id === 'purpose-easy_run')).toBeTruthy();
+    expect(beats.find((b) => b.id.startsWith('session-done'))).toBeUndefined();
   });
 });
 

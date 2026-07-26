@@ -136,9 +136,9 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
                   and "flag" as "review" (out-of-range), matching the
                   per-tile badges. */}
               {[
-                {key:'optimal', label:'optimal', clr:'#4ade80'},
-                {key:'warn',    label:'normal',  clr:'#facc15'},
-                {key:'flag',    label:'review',  clr:'#f87171'},
+                {key:'optimal', label:'Optimal', clr:'#4ade80'},
+                {key:'warn',    label:'Normal',  clr:'#facc15'},
+                {key:'flag',    label:'Review',  clr:'#f87171'},
               ].map(({key,label,clr})=>(
                 <div key={key} style={{fontSize:"clamp(10px,0.3vw + 9px,11px)",padding:"2px 7px",borderRadius:10,background:`${clr}18`,border:`0.5px solid ${clr}40`,color:clr}}>{sCounts[key]} {label}</div>
               ))}
@@ -178,7 +178,7 @@ Give: 1) Top 3 positives 2) Top 3 areas to address 3) Correlations with daily tr
                     </div>
                     <div style={{fontSize:"clamp(18px,1.5vw + 12px,24px)",fontWeight:500,color:C.t,letterSpacing:"-0.02em",lineHeight:1.2}}>{has?val:"—"}<span style={{fontSize:11,color:C.m,fontWeight:400,marginLeft:3}}>{has?unit:""}</span></div>
                     <div style={{fontSize:11,color:C.m,marginTop:3,display:"flex",alignItems:"baseline",gap:6,flexWrap:"wrap"}}>
-                      <span style={{fontStyle:'italic',opacity:0.75}}>no threshold defined</span>
+                      <span style={{fontStyle:'italic',opacity:0.75}}>No threshold defined</span>
                       {delta!==null&&<span>{delta>0?"▲":"▼"}{Math.abs(delta).toFixed(2)} from prev</span>}
                     </div>
                     <LabSparkline data={sd} color={'#94a3b8'} tooltip={tooltip}/>

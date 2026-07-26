@@ -30,6 +30,7 @@ import { getCurrentBodyComp, computeRMR } from "../core/energyBalance.js";
 import { getEffectiveTargets as getDerivedTargets } from "../core/goalModel.js";
 import { KRITile, InlineKRIStat } from "./KRITile.jsx";
 import { CoachComment } from "./CoachComment.jsx";
+import { RaceOutlookCard } from "./RaceOutlookCard.jsx";
 import { DataHealthBanner } from "./DataHealthBanner.jsx";
 import { CockpitRail } from "./CockpitRail.jsx";
 import { MobileEdgeIQ } from "./MobileHome.jsx";
@@ -663,6 +664,15 @@ export function EdgeIQ({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mo
           actionable. */}
       <CoachComment surface="trend" />
 
+      {/* ── TRAINING PROFILE · SEASON GOAL (2026-07) — the unified race outlook.
+          Same live read as mobile EdgeIQ (getRaceOutlook): the ONE ladder
+          (Current → Target → Stretch → Ceiling, Goal marked), the A-race planet,
+          and the moons. Silent until there's a fitness state, so it never shows
+          a fabricated finish. ── */}
+      <div style={{ marginBottom: 'clamp(10px,1vw,14px)' }}>
+        <RaceOutlookCard />
+      </div>
+
       {/* ── Cockpit · WoW values + 8-week sparkline trend ──
           Headline = THIS WEEK (Mon-Sun current). Sparkline = 8-week trend.
           Consistent timeframe across all 7 tiles.
@@ -821,7 +831,7 @@ export function EdgeIQ({data,setTab,onAiSum,aiSummLoad,aiSummStream,showToast,mo
                     );
                   })}
                 </div>
-                <span style={{fontSize:9,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.08em',whiteSpace:'nowrap'}}>tap a tile to pin to Start</span>
+                <span style={{fontSize:9,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.08em',whiteSpace:'nowrap'}}>Tap a tile to pin to Start</span>
               </div>
               {/* Thin section-color divider under the inline hero — visual
                   separation between the headline stats and the detail bands. */}

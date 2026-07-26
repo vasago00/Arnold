@@ -85,7 +85,7 @@ export function PostRunWeigh({ fd, dateStr, onSaved }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <input type="number" inputMode="decimal" step="0.1" placeholder="lb" value={w}
           onChange={e => setW(e.target.value)} style={inp} autoFocus />
-        <span style={lbl}>post-run weight</span>
+        <span style={lbl}>Post-run weight</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <input type="number" inputMode="decimal" step="0.1" placeholder="0" value={fluid}

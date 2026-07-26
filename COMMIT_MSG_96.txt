@@ -1,0 +1,9 @@
+ROUND 96: re-cut the tier triad forward on every living refresh (no re-apply); coach names sessions the way the calendar does and decomposes the week's gap
+
+- planTiers: TRIAD_PACK_V 1->2, new pure refreshTriadForward (frozen before today, fresh from today on)
+- LivingPlan: refreshCommittedTriad on the LIVING auto-apply beat; idempotent, writes only on a real diff
+- coachContext: donePlannedMi / doneUnmeasuredMi / weekMiActualRaw; label+date on slice entries
+- coachNarrative: nameOf/dayNameOf, gap decomposition, new week-short beat, trimmed for brevity
+- coachNarrativeSim: generate the full decomposition + label/date so the new branches are actually covered
+
+19 harnesses green, coachSim 0 violations x5 seeds, qualityEval mean 0.9999, planSim 2000 ok

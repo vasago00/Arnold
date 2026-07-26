@@ -206,13 +206,13 @@ export function WeeklyPlanner({ showToast }) {
                   ))}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input type="number" placeholder="dist (mi)" value={entry.distanceMi ?? ''}
+                  <input type="number" placeholder="Dist (mi)" value={entry.distanceMi ?? ''}
                     onChange={e => updateDay(editingDay, { distanceMi: e.target.value ? parseFloat(e.target.value) : null })}
                     style={{ flex: 1, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
-                  <input type="number" placeholder="mins" value={entry.durationMin ?? ''}
+                  <input type="number" placeholder="Mins" value={entry.durationMin ?? ''}
                     onChange={e => updateDay(editingDay, { durationMin: e.target.value ? parseInt(e.target.value) : null })}
                     style={{ flex: 1, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
-                  <input type="text" placeholder="notes" value={entry.notes ?? ''}
+                  <input type="text" placeholder="Notes" value={entry.notes ?? ''}
                     onChange={e => updateDay(editingDay, { notes: e.target.value })}
                     style={{ flex: 2, fontSize: 11, padding: '5px 8px', background: 'var(--bg-input)', border: '0.5px solid var(--border-default)', borderRadius: 4, color: 'var(--text-primary)' }}/>
                 </div>

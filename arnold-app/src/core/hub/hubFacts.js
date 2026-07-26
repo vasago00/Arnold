@@ -19,6 +19,7 @@ const STD = [
 const FACTOR_UNIT = {
   heat: '%/°C', heatStrain: '%/°C', sleep: '%/h', sleepAcute: '%/h', sleepChronic: '%/h',
   fuel: '%', hrv: '%', rhr: '%', load: '%',
+  humidity: '%/10%RH', elevation: '%/50m·mi',
 };
 
 export function fmtTime(secs) {
@@ -46,11 +47,17 @@ export function hubFacts(state, opts = {}) {
     })
     .sort((a, b) => b.confidence - a.confidence);
 
+  // Race-equivalent predictions. PREFER the injected fitness-state predictor (opts.finishSecsFor from
+  // racePredictionOpts) so this row shows the SAME anchored number as every other surface and is internally
+  // consistent across distances. Fall back to the legacy hub Riegel fold only when it isn't supplied or returns
+  // nothing (e.g. no activities passed) AND the hub fitness is seeded. No number → null (no fabrication).
+  const finishSecsFor = typeof opts.finishSecsFor === 'function' ? opts.finishSecsFor : null;
   const seeded = state.fitness && state.fitness.params && state.fitness.params[RACE_FITNESS_PARAM];
-  const predictions = seeded
+  const predictions = (finishSecsFor || seeded)
     ? STD.map(d => {
-        const p = predictFromFitness(state.fitness, d.km, { k, kFor, racedKms: opts.racedKms });
-        return { dist: d.label, secs: p ? p.secs : null, time: fmtTime(p && p.secs) };
+        let secs = finishSecsFor ? finishSecsFor(d.km) : null;
+        if (!(secs > 0) && seeded) { const p = predictFromFitness(state.fitness, d.km, { k, kFor, racedKms: opts.racedKms }); secs = p ? p.secs : null; }
+        return { dist: d.label, secs: secs > 0 ? Math.round(secs) : null, time: fmtTime(secs > 0 ? secs : null) };
       })
     : [];
 

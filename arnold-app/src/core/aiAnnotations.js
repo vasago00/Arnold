@@ -14,6 +14,7 @@
 import { storage } from './storage.js';
 import { weeklyRunVolume, weeklyStrengthVolume } from './derive/volume.js';
 import { zoneForHr, getProfileZoneBpm } from './derive/hr.js';
+import { resolveZones } from './zones.js';   // the ONE resolved zone frame (personal-data > garmin), not the cached Garmin zone
 import { parseLocalDate } from './dateUtils.js';
 
 // ─── Detectors ───────────────────────────────────────────────────────────────
@@ -89,7 +90,7 @@ function detectIntensityCorrelation(activities, sleepData) {
   // %HRmax fallback when not. Without this, an avg HR of 133 at maxHR
   // 165 was flagged as Z4 (hard) by %HRmax even though Garmin treats
   // it as Z2 (easy).
-  const zoneBpm = getProfileZoneBpm(storage.get('profile') || {});
+  const zoneBpm = (() => { try { const rz = resolveZones(); return (rz && rz.z) || getProfileZoneBpm(storage.get('profile') || {}); } catch { return getProfileZoneBpm(storage.get('profile') || {}); } })();
   let highIntensityShortSleep = 0;
   for (const a of recent) {
     const next = parseLocalDate(a.date); if (!next) continue; next.setDate(next.getDate() + 1);

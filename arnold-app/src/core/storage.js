@@ -252,6 +252,7 @@ export const KEYS = {
   labSnapshots:  'arnold:lab-snapshots',       // Lab/blood panel results — previously only inside the vitals-v4 blob (not synced). Now in KEYS so cloud-sync propagates labs entered on web to paired devices.
   clinicalTests: 'arnold:clinical-tests',      // Clinical test records (RMR, DEXA, etc.) — same migration as labSnapshots.
   startTilePrefs: 'arnold:start-tile-prefs',  // Phase 4b: user's chosen Start-screen tiles per category (run/strength/recovery/body). Shape: { run: ['avgHR','cadence',...], strength: [...], recovery: [...], body: [...] }. Min 2, max 4 per category. Syncs cross-device via LWW.
+  coachLlmPref:  'arnold:coach-llm-pref',     // On-device coach LLM phrasing on/off ('on'|'off'). Toggled in Profile; syncs cross-device via LWW so the choice follows you.
   fullSyncMeta:  'arnold:full-sync-meta',     // Phase 4o.fullsync.1: last-success timestamps per source ({ garminActivities: { lastOkAt, lastResult, ... }, ... }). Local-only — each device tracks its own freshness.
 
   // User-owned
@@ -260,6 +261,32 @@ export const KEYS = {
   goals:         'arnold:goals',
   planner:       'arnold:planner',
   races:         'arnold:races',
+  careerRaces:   'arnold:career-races',    // marathon RÉSUMÉ (durable career finishes) — durability/experience input, seeded once, hand-editable
+  planChanges:   'arnold:plan-changes',    // intentional plan changes (swap/move/skip/shorten) — coach responds/re-calibrates; carried into the durable record
+  planCommitment: 'arnold:plan-commitment', // the ladder option the athlete COMMITTED to for the A-race, plus what it demanded and what they were holding when they chose it (core/planCommitment.js). Syncs cross-device: the goal picked on the desktop is the goal the phone coaches against.
+  // ── planPrefs — THE SHAPE OF THE PLAN ──────────────────────────────────────────────
+  // Emil, 2026-07-25: "the Your plan on web and mobile show two different things."
+  // He was right, and this line is why. Every input the season block is built FROM lives
+  // in this object — startDate, target race, tier, customGoalSecs, runDays, longRunDow,
+  // strengthDows, availableDays, strengthDays, focus — and until now it was written by
+  // LivingPlan as `storage.set('planPrefs', …)` with NO entry here. resolveKey falls
+  // through to `KEYS[key] || key`, so it landed on a bare, unprefixed `planPrefs` slot;
+  // and cloud-sync's buildSnapshot walks `Object.entries(KEYS)`, so a key that is not in
+  // this map is a key that has never left the device it was typed on.
+  //
+  // The consequence is exactly what he screenshotted. `planner` and `planCommitment` were
+  // both in this map and syncing fine, so the two devices agreed about the calendar — but
+  // they each held their OWN startDate, and a plan that starts 27 Jul is 19 weeks to
+  // Valencia while one that starts a week earlier is 20. Different weeksToRace solves a
+  // different ramp (9.3–12.9 %/wk vs 7.0–10.1), which peaks at a different mileage (39 vs
+  // 41), which makes a different tier reachable (Current vs Target). One un-synced key,
+  // and every number downstream of it forks. Two systems computing the same thing
+  // differently — the failure this codebase is written to refuse.
+  //
+  // It is a settings OBJECT, not a record array, so plain LWW is the right merge: the last
+  // device you configured the plan on wins, wholesale. See migratePlanPrefsKey below for
+  // the one-time move off the unprefixed slot.
+  planPrefs:     'arnold:plan-prefs',
   logs:          'arnold:logs',
   dailyLogs:     'arnold:daily-logs',        // Phase 1: was missing, forced direct localStorage
   nutritionLog:  'arnold:nutrition-log',      // Phase 1: was missing, forced direct localStorage
@@ -530,6 +557,47 @@ export function migrateSupplementKeys() {
     return { migrated: moved };
   } catch (e) {
     console.error('migrateSupplementKeys failed:', e);
+    return { error: e.message };
+  }
+}
+
+// ─── planPrefs migration: unprefixed 'planPrefs' → 'arnold:plan-prefs' ────────
+//
+// Same shape of bug as the supplement keys above, with a worse blast radius: because
+// `planPrefs` was absent from KEYS, resolveKey fell through to the bare string, so the
+// object that defines the entire plan sat outside the arnold:* namespace AND outside
+// cloud-sync's snapshot. See the KEYS entry for what that cost.
+//
+// Deliberately NOT symmetrical with the supplements migration in one respect: this runs
+// even when the new key already holds a value, IF the old key is newer-looking — no, it
+// does not. It copies only into an empty slot and is a no-op otherwise. The reason is that
+// once planPrefs is in KEYS it is a synced key, so by the time a second device runs this
+// migration its arnold:plan-prefs may already have been filled by a PULL from the first
+// device. Overwriting that with the phone's stale local copy would resurrect the exact
+// divergence this migration exists to end. An empty slot means nothing has synced yet and
+// the local copy is the only copy — that is the only case where the move is safe.
+//
+// The old key is removed afterward so a later reload cannot read it back and re-fork.
+const PLANPREFS_MIGRATION_FLAG = 'arnold:migration:planprefs-v1';
+
+export function migratePlanPrefsKey() {
+  try {
+    if (localStorage.getItem(PLANPREFS_MIGRATION_FLAG)) return { skipped: true };
+    let moved = false;
+    const raw = localStorage.getItem('planPrefs');
+    if (raw !== null) {
+      if (localStorage.getItem(KEYS.planPrefs) === null) {
+        localStorage.setItem(KEYS.planPrefs, raw);
+        moved = true;
+      }
+      localStorage.removeItem('planPrefs');
+    }
+    localStorage.setItem(PLANPREFS_MIGRATION_FLAG, new Date().toISOString());
+    logEvent({ type: 'migration:planprefs-v1', moved });
+    if (moved) console.info('arnold: migrated planPrefs → arnold:plan-prefs (now syncs cross-device)');
+    return { migrated: moved };
+  } catch (e) {
+    console.error('migratePlanPrefsKey failed:', e);
     return { error: e.message };
   }
 }

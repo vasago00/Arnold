@@ -50,7 +50,7 @@ export function HubCard() {
 
       {facts.responses && facts.responses.length > 0 && (
         <div style={{ marginTop: 10, borderTop: '0.5px solid var(--border-subtle)', paddingTop: 8 }}>
-          <span style={{ fontSize: 8.5, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>how conditions cost you</span>
+          <span style={{ fontSize: 8.5, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>How conditions cost you</span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
             {facts.responses.slice(0, 3).map(r => (
               <span key={r.factor} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
