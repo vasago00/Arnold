@@ -24,17 +24,36 @@
 
 import { makeRng } from './prng.js';
 import { narrateSurface, allBeats } from '../coachNarrative.js';
+import { buildClinicalContext } from '../clinicalCoach.js';   // exercise clinical beats (Stage 7) via the property test
 
 const SURFACES = ['start', 'edgeiq', 'play', 'fuel', 'daily', 'plan', 'trend', 'calendar'];
 
 // Domain lanes (the rule Emil set: each surface speaks about ITS metrics). Encoded by beat id so a
 // future change that re-tags a fuel beat onto 'plan' fails loudly here.
 const FUEL_BODY_IDS = new Set(['fuel-status', 'mech-protein-timing', 'reds-lowEA', 'cut-divergence']);
-const PLAN_IDS = new Set(['plan-status', 'week-drift']);   // plan-domain — must not appear on Fuel
+// plan-domain — must not appear on Fuel. `week-redistributed` (ROUND 95) and `week-short`
+// (ROUND 96) are the two siblings gWeekDrift can return instead of `week-drift`; leaving them
+// out would mean the lane rule silently stopped covering the branch that most recently changed.
+const PLAN_IDS = new Set(['plan-status', 'week-drift', 'week-redistributed', 'week-short']);
 
 const RUN_TYPES = ['easy_run', 'long_run', 'tempo', 'intervals', 'hiit'];
 const ANY_TYPES = [...RUN_TYPES, 'strength', 'mobility', 'cycle', 'cross', 'recovery', 'rest', 'swim'];
 const RACES = ['Valencia', 'Berlin Marathon', 'NYC Marathon', 'Chicago'];
+
+// The strings the PLANNER writes on a day, which is the only name for a session the athlete has
+// ever seen. Deliberately NOT the type token: the point of the ROUND 96 naming fix is that these
+// two can disagree, so a sim whose labels were just the types back again would prove nothing.
+const SIM_LABEL = {
+  easy_run: 'Easy', long_run: 'Long run', tempo: 'Tempo', intervals: 'Intervals', hiit: 'HIIT',
+};
+
+// Fixed "today" for clinical recency in the sim (no Date.now — determinism), and a date-shift helper.
+const SIM_TODAY = '2026-07-17';
+const dateMinus = (today, days) => {
+  const d = new Date(`${today}T12:00:00`);
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 // ── context generator ─────────────────────────────────────────────────────────
 // `adversarial` sprinkles nulls / NaN / wrong-typed slices to probe robustness. Realistic runs keep
@@ -49,12 +68,61 @@ function genContext(rng, { adversarial = false } = {}) {
   const missed = [];
   const remaining = [];
   const nMissed = rng.int(0, 2);
-  for (let i = 0; i < nMissed; i++) missed.push({ type: rng.choice(RUN_TYPES), mi: rng.int(3, 16) });
+  // LABEL + DATE (ROUND 96). A real planner day carries both, and computePlanSlice now passes them
+  // through so the coach can name a session the way the athlete's own calendar names it — Emil's
+  // stored planner holds a day typed `easy_run` whose label reads "Intervals 5mi". Half the cases
+  // carry the metadata and half do not, because the 4-arg `computePlanSlice` callers and the older
+  // tests still produce bare `{type, mi}` entries and the legacy phrasing must survive for them.
+  const withMeta = rng.chance(0.5);
+  for (let i = 0; i < nMissed; i++) {
+    const t = rng.choice(RUN_TYPES);
+    const m = { type: t, mi: rng.int(3, 16) };
+    if (withMeta) {
+      m.label = `${SIM_LABEL[t] || t} ${m.mi}mi`;
+      m.date = dateMinus(SIM_TODAY, rng.int(1, 6));
+    }
+    missed.push(m);
+  }
   const nRem = rng.int(0, 3);
   for (let i = 0; i < nRem; i++) remaining.push({ type: rng.choice(RUN_TYPES), mi: rng.int(3, 16) });
   const weekMiTarget = rng.int(0, 60);
   const missedMi = missed.reduce((s, m) => s + m.mi, 0);
   const strengthTarget = rng.int(0, 3);
+  // MEASURED WEEKS (2026-07-26). computePlanSlice now reports `weekMiActual` whenever it was
+  // handed real logged distances, and gWeekDrift branches on it — so a sim that only ever
+  // produced the plan-only estimate would ship the `week-redistributed` beat with zero
+  // invariant coverage: no lane check, no compose-integrity check, no contradiction check.
+  // Roughly half the cases are measured, and among those the athlete is deliberately made to
+  // have covered the week about as often as not, so BOTH branches get hammered.
+  const remainingMi = remaining.reduce((s, m) => s + m.mi, 0);
+  const measured = rng.chance(0.5);
+  // THE DECOMPOSITION (ROUND 96). computePlanSlice now also reports how far the days he DID run
+  // had asked him to go (`donePlannedMi`), how much of the week was covered by a run that arrived
+  // with no distance on it (`doneUnmeasuredMi`), and the UNROUNDED actual (`weekMiActualRaw`) —
+  // and gWeekDrift branches on all three, including the new `week-short` beat for the week with
+  // no misses that still came in under. Synthesising them keeps the sim's slice obeying the same
+  // identity the real one does, so no branch can be reached with an impossible arithmetic:
+  //     weekMiTarget = donePlannedMi + doneUnmeasuredMi + missedMi + plannedLeftMi
+  const doneUnmeasuredMi = measured && rng.chance(0.15)
+    ? Math.min(rng.int(3, 12), Math.max(0, weekMiTarget - remainingMi - missedMi))
+    : 0;
+  const donePlannedMi = measured
+    ? Math.max(0, weekMiTarget - remainingMi - missedMi - doneUnmeasuredMi)
+    : null;
+  // What he actually covered on those days — short about as often as long, and often enough inside
+  // the ±0.5 deadband, so `week-short`, the "you ran more than asked, which covers part of it"
+  // branch, the plain causal `so` and the silences either side all get hammered.
+  // The floor is 0.5 rather than 0 whenever any day was measured, because a day only lands in
+  // `donePlannedMi` if a run was logged there WITH a distance — so "asked for 12, ran exactly 0"
+  // is not a state the real slice can produce, and letting the sim mint it would have the coach
+  // grading a sentence no athlete can ever see.
+  const weekMiActualRaw = measured
+    ? Math.max(donePlannedMi > 0 ? 0.5 : 0, donePlannedMi + rng.uniform(-7, 7))
+    : null;
+  const weekMiActual = measured ? Math.round(weekMiActualRaw) : null;
+  const weekMiProjected = measured
+    ? Math.max(0, Math.round(weekMiActualRaw + remainingMi + doneUnmeasuredMi))
+    : Math.max(0, weekMiTarget - missedMi);
 
   const eaVal = rng.int(15, 55);
   const kToday = rng.int(0, 3200);
@@ -86,7 +154,8 @@ function genContext(rng, { adversarial = false } = {}) {
       deficitPct: maybe(0.5, rng.uniform(0, 0.3)),
     },
     plan: bad && rng.chance(0.3) ? null : (weekMiTarget > 0 ? {
-      weekMiTarget, weekMiProjected: Math.max(0, weekMiTarget - missedMi), missed, remaining,
+      weekMiTarget, weekMiProjected, missed, remaining,
+      ...(weekMiActual != null ? { weekMiActual, weekMiActualRaw, donePlannedMi, doneUnmeasuredMi } : {}),
       swappedToStrength: rng.chance(0.4),
       ...(strengthTarget > 0 ? { strengthTarget, strengthDone: rng.int(0, strengthTarget) } : {}),
     } : {}),
@@ -94,6 +163,22 @@ function genContext(rng, { adversarial = false } = {}) {
     clinical: {},
     memory: maybe(0.3, { saidAgoDays: { 'week-drift': rng.int(0, 5) }, kindWeight: { progress: rng.uniform(-0.2, 0.2) } }) || {},
   };
+  // Clinical (Stage 7): sometimes attach a REAL lab-derived clinical context — random markers at a
+  // random AGE — so the invariant sim + quality harness exercise clinical beats, including the recency
+  // tiers (fresh present-tense / aging date-stamped / stale re-test or dropped).
+  if (!bad && rng.chance(0.4)) {
+    const markers = {};
+    if (rng.chance(0.5)) markers['Ferritin (ng/mL)'] = rng.int(10, 220);
+    if (rng.chance(0.4)) markers['Vitamin D (ng/mL)'] = rng.int(15, 80);
+    if (rng.chance(0.3)) markers['Creatine kinase (U/L)'] = rng.int(50, 800);
+    if (rng.chance(0.3)) markers['hsCRP (mg/L)'] = Math.round(rng.uniform(0.1, 3) * 10) / 10;
+    if (rng.chance(0.3)) markers['Testosterone:Cortisol Ratio (Units)'] = rng.int(25, 110);
+    try {
+      ctx.clinical = buildClinicalContext([{ date: dateMinus(SIM_TODAY, rng.int(0, 700)), markers }], [], {
+        goalDirection: ctx.goal && ctx.goal.body && ctx.goal.body.direction, today: SIM_TODAY,
+      });
+    } catch { /* leave {} */ }
+  }
   if (bad && rng.chance(0.2)) ctx.today = null;         // hardest: whole slice gone
   if (bad && rng.chance(0.2)) ctx.goal = null;
   return ctx;

@@ -20,6 +20,11 @@
 //   limiter; null → gPurpose falls back to generic framing (still fires from primarySession).
 
 import { intentFor } from './sessionAdapt.js';
+import { estimateDurability } from './derive/durability.js';   // P2: durability (fourth pillar) as a coach signal
+import { resolvePotentialGap, readMeasuredVo2 } from './derive/potentialGap.js';   // aerobic ceiling / engine-vs-legs gap (wraps state+projection)
+import { resolveRedsScreen } from './derive/redsScreen.js';   // P3: REDs / energy-availability screen (2023 IOC)
+import { recentPlanChange } from './planChanges.js';   // intentional plan changes → coach responds/re-calibrates
+import { resolveEasyZone } from './derive/easyZoneResolve.js';   // P4: reserve-anchored "define easy honestly"
 import { classifyCutMode } from './cutMode.js';
 import { getGoals } from './goals.js';
 import { buildGoalModel } from './goalResolve.js';   // canonical A-race resolver (the plan's goal race)
@@ -29,10 +34,11 @@ import { readTodaySignals, readinessScoreFrom } from './todayAdaptation.js';   /
 import { adaptSession } from './adaptPlan.js';         // pure session-adaptation (the reason to back off)
 import { hubFacts } from './hub/hubFacts.js';          // learned response sensitivities (heat %/°C, …)
 import { weekKey, getPlannerWeek, daySessions, dayRunMiles } from './planner.js';
-import { isRun, isStrength } from './activityClass.js';
+import { isRun, isStrength, activityKind } from './activityClass.js';
 import { storage } from './storage.js';
 import { buildWorldModel } from './worldModel.js';   // day/week/season/body/person snapshot (Stage 1)
 import { learnedKindWeights, learnedPerson } from './coachPersonalization.js';   // preference learning (Stage 4)
+import { buildClinicalContext } from './clinicalCoach.js';   // bloodwork/DEXA → training (Stage 7)
 
 const num = (x) => (Number.isFinite(+x) ? +x : null);
 const QUAL = new Set(['intervals', 'tempo', 'hiit']);
@@ -42,32 +48,99 @@ const normType = (t) => { const s = String(t || '').toLowerCase(); return ALIAS[
 // Canonical run types the engine's gWeekDrift understands (mirror coachNarrative RUN_TYPES).
 const RUN_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'hiit']);
 
+// PURE: map a LOGGED session's generic classification (activityKind: run/strength/hiit/cycling/swim/
+// mobility/other) to the GRANULAR type the coach engine speaks (easy_run/long_run/tempo/…). A plain
+// logged 'run' has no structure, so it inherits today's PLANNED run type when that's granular (Fri =
+// easy_run), else defaults to easy_run. This is the bridge between logged `.activityType` and the
+// planner's `.type` — without it intentFor() saw no `.type` and the post-workout beats never fired.
+export function canonicalSessionType(kind, plannedType, activityType) {
+  if (kind === 'run') { const pt = normType(plannedType); return RUN_TYPES.has(pt) ? pt : 'easy_run'; }
+  if (kind === 'strength') return 'strength';
+  if (kind === 'hiit') return 'hiit';
+  if (kind === 'cycling') return 'cycle';
+  if (kind === 'swim') return 'swim';
+  if (kind === 'mobility') return 'mobility';
+  return normType(activityType || '');   // fall back to any explicit type string on the object
+}
+
 // ── PURE plan reconcile (node-testable; no storage/date/planner imports) ──────────────────
 // normDays: [{ dateStr:'YYYY-MM-DD', hasStrength:bool, runSessions:[{type,mi}] }] for the
 // current Mon–Sun week, in order. runOn/strOn: Sets of 'YYYY-MM-DD' that have a run / strength
 // actually logged. todayStr: 'YYYY-MM-DD'. Returns the `plan` slice the engine reads
 // (weekMiTarget/weekMiProjected/missed/remaining[/strengthTarget/strengthDone]) or {} when the
 // week has no planned running (→ gWeekDrift + gProgress stay silent).
-export function computePlanSlice(normDays, runOn, strOn, todayStr) {
+// `runMiOn` (optional): Map|object of 'YYYY-MM-DD' → miles ACTUALLY RUN that day. When it is
+// supplied the projection is measured; when it is omitted the old plan-only estimate is kept, so
+// every existing caller and the coach sim behave exactly as before.
+//
+// Emil, 2026-07-26: *"why the Coach says 'You didn't get the easy run this week' — this makes no
+// sense."* He was right, and this parameter is the fix. The projection used to be
+// `weekMiTarget − missedMi` — a number computed ENTIRELY FROM THE PLAN, which never once looked at
+// how far he actually ran. `runOn`/`strOn` are sets of DATES; they carry no distance at all. So the
+// week he missed a 3-mile Monday but ran 7.5 on Friday and 7.5 on Saturday came out as "tracking
+// ~18 mi against the ~21 target — about 3 mi light" while he had in fact covered ~21. The coach was
+// narrating the plan back to itself and calling it observation.
+//
+// Projected is now what the word means: **what you have already run, plus what is still on the
+// calendar ahead of you.** A missed session still counts as missed — that is a real fact about
+// distribution and the beats below judge it — but it no longer subtracts miles the athlete went out
+// and ran somewhere else in the week.
+export function computePlanSlice(normDays, runOn, strOn, todayStr, runMiOn) {
   const rOn = runOn instanceof Set ? runOn : new Set(runOn || []);
   const sOn = strOn instanceof Set ? strOn : new Set(strOn || []);
-  let weekMiTarget = 0, strengthTarget = 0, strengthDone = 0, swappedToStrength = false;
+  const miOn = runMiOn == null ? null
+    : (runMiOn instanceof Map ? runMiOn : new Map(Object.entries(runMiOn)));
+  let weekMiTarget = 0, weekMiActual = 0, plannedLeftMi = 0, donePlannedMi = 0, doneUnmeasuredMi = 0;
+  let strengthTarget = 0, strengthDone = 0, swappedToStrength = false;
   const missed = [], remaining = [];
+  const miCounted = new Set();                      // actual miles are per DATE, never per session
   for (const d of (normDays || [])) {
     if (!d || !d.dateStr) continue;
     const past = d.dateStr < todayStr;              // strictly-before-today = a session that has passed
     const runLogged = rOn.has(d.dateStr);
     if (d.hasStrength) { strengthTarget += 1; if (sOn.has(d.dateStr)) strengthDone += 1; }
+    // Count what was RUN once per date. A two-a-day is one date with one logged total, so summing
+    // inside the session loop below would double it against a single day's real mileage.
+    if (miOn && !miCounted.has(d.dateStr)) {
+      miCounted.add(d.dateStr);
+      weekMiActual += Math.max(0, Number(miOn.get(d.dateStr)) || 0);
+    }
     for (const s of (d.runSessions || [])) {
       if (!RUN_TYPES.has(s.type)) continue;
       const mi = Number(s.mi) || 0;
       weekMiTarget += mi;                           // target = the FULL planned week (done or not)
+      // `label` and `date` ride along so the coach can name a session the way the ATHLETE was
+      // shown it. Emil's own planner holds a day typed `easy_run` whose label reads "Intervals
+      // 5mi" — so a coach that names the session by `type` tells him he missed an easy run on a
+      // day his calendar calls intervals, which is precisely why the sentence "makes no sense".
+      // Both are optional: every existing caller and the coach sim omit them and get the old text.
       const entry = { type: s.type, mi };
+      if (s.label) entry.label = s.label;
+      entry.date = d.dateStr;
       if (past && !runLogged) {                     // planned run, day gone, nothing run → missed
         missed.push(entry);
         if (sOn.has(d.dateStr)) swappedToStrength = true;   // ...and strength WAS logged that day → a true swap
       } else if (!past && !runLogged) {
         remaining.push(entry);                      // today/future, not yet done → absorbable
+        plannedLeftMi += mi;                        // ...and still on the calendar, so still projected
+      } else if (miOn && Number(miOn.get(d.dateStr)) > 0) {
+        // Ran on a day that asked for a run, AND we know how far. These are the miles the week
+        // ORDERED from the days he actually got out on — the term that makes the gap decomposable.
+        // Every planned session lands in exactly one of {missed, remaining, done, done-unmeasured},
+        // so   weekMiTarget = donePlannedMi + doneUnmeasuredMi + missedMi + plannedLeftMi
+        // and  gap = weekMiTarget − projected = missedMi − (weekMiActual − donePlannedMi).
+        // Without this term the coach can see a gap but cannot say where it came from, so it blames
+        // the whole thing on the missed session — true only when the athlete ran exactly what was
+        // asked on every other day, which is almost never.
+        donePlannedMi += mi;
+      } else {
+        // A run WAS logged here but arrived with no distance on it (a manual entry, a watch that
+        // synced the session and not the track). Counting it as 0 miles run against a 9-mile
+        // prescription would manufacture a 9-mile shortfall out of a run he actually did — the
+        // exact species of lie this whole slice exists to stop. Credit what was asked, which is the
+        // least-inventing assumption available, and keep the amount separate so the narrative can
+        // decline to make any claim about running short when a chunk of the week is unmeasured.
+        doneUnmeasuredMi += mi;
       }
     }
   }
@@ -75,11 +148,22 @@ export function computePlanSlice(normDays, runOn, strOn, todayStr) {
   const missedMi = missed.reduce((a, m) => a + (m.mi || 0), 0);
   const slice = {
     weekMiTarget: Math.round(weekMiTarget),
-    weekMiProjected: Math.round(Math.max(0, weekMiTarget - missedMi)),
+    weekMiProjected: Math.round(Math.max(0, miOn ? weekMiActual + plannedLeftMi + doneUnmeasuredMi
+                                                : weekMiTarget - missedMi)),
     missed,
     remaining,
     swappedToStrength,                              // did the athlete log strength on a missed-run day?
   };
+  // Only present when it was actually measured — a fabricated 0 would read as "you have run nothing".
+  // donePlannedMi travels with it and only with it: on its own it is a planned number, and the only
+  // thing it is for is being subtracted from a MEASURED one. Unrounded, because the difference of
+  // two rounded numbers is where a phantom "1 mi short" comes from.
+  if (miOn) {
+    slice.weekMiActual = Math.round(weekMiActual);
+    slice.weekMiActualRaw = weekMiActual;             // unrounded: differencing two rounded numbers is where a phantom "1 mi short" is born
+    slice.donePlannedMi = donePlannedMi;
+    slice.doneUnmeasuredMi = doneUnmeasuredMi;        // > 0 ⇒ the coach must not claim he ran short
+  }
   if (strengthTarget > 0) { slice.strengthTarget = strengthTarget; slice.strengthDone = strengthDone; }
   return slice;
 }
@@ -103,9 +187,18 @@ function livePlanSlice(nowMs) {
     const wkts = storage.get('workouts') || [];
     const logs = storage.get('dailyLogs') || [];
     const runOn = new Set(), strOn = new Set();
-    for (const a of acts) { if (a && a.date) { if (isRun(a)) runOn.add(a.date); if (isStrength(a)) strOn.add(a.date); } }
-    for (const w of wkts) { if (w && w.date) { if (/run/i.test(w.type || '')) runOn.add(w.date); if (/strength/i.test(w.type || '')) strOn.add(w.date); } }
+    // Miles actually run, per date. The three stores OVERLAP — a Garmin run can appear in both
+    // `activities` and `workouts` — so miles are summed WITHIN each store and then the largest
+    // store's total wins for that date. Summing across stores would double a synced run and tell
+    // the athlete he covered twice what he did; taking the max never invents a mile.
+    // `dailyLogs.distanceMeters` is deliberately NOT used: it is whole-day step distance, not running.
+    const actMi = new Map(), wktMi = new Map();
+    const addMi = (m, date, mi) => { const v = Number(mi); if (v > 0) m.set(date, (m.get(date) || 0) + v); };
+    for (const a of acts) { if (a && a.date) { if (isRun(a)) { runOn.add(a.date); addMi(actMi, a.date, a.distanceMi); } if (isStrength(a)) strOn.add(a.date); } }
+    for (const w of wkts) { if (w && w.date) { if (/run/i.test(w.type || '')) { runOn.add(w.date); addMi(wktMi, w.date, w.distanceMi); } if (/strength/i.test(w.type || '')) strOn.add(w.date); } }
     for (const l of logs) { if (l && l.date) { const t = `${l.workout || ''} ${l.type || ''} ${l.activityType || ''}`; if (/run/i.test(t)) runOn.add(l.date); if (/strength|weight/i.test(t)) strOn.add(l.date); } }
+    const runMiOn = new Map();
+    for (const d of new Set([...actMi.keys(), ...wktMi.keys()])) runMiOn.set(d, Math.max(actMi.get(d) || 0, wktMi.get(d) || 0));
 
     const normDays = days.map((day, i) => {
       const d = new Date(monday); d.setDate(monday.getDate() + i);
@@ -113,32 +206,56 @@ function livePlanSlice(nowMs) {
       return {
         dateStr: fmtDate(d),
         hasStrength: sess.some((s) => s.type === 'strength'),
-        runSessions: sess.filter((s) => RUN_TYPES.has(s.type)).map((s) => ({ type: s.type, mi: Number(s.distanceMi) || 0 })),
+        // The LABEL is the string printed on the calendar tile and in the day drawer, so it is the
+        // only name for this session the athlete has ever seen. Carry it: the planner's `type` and
+        // its `label` can and do disagree in real stored data, and when they do the athlete is
+        // right and the type field is the one that is out of date.
+        runSessions: sess.filter((s) => RUN_TYPES.has(s.type)).map((s) => ({ type: s.type, mi: Number(s.distanceMi) || 0, label: s.label || null })),
       };
     });
     // dayRunMiles kept imported as the canonical per-day miles source of truth; normDays mirrors
     // it (sum of run-session distanceMi), so target math stays aligned with the calendar totals.
     void dayRunMiles;
-    return computePlanSlice(normDays, runOn, strOn, fmtDate(now));
+    return computePlanSlice(normDays, runOn, strOn, fmtDate(now), runMiOn);
   } catch { return {}; }
 }
 
-export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hour, nowMs, weakLink = null } = {}) {
+export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hour, nowMs, weakLink = null, activities = null } = {}) {
   try {
     const n = (us && us.numbers) || {};
     const S = Array.isArray(sessions) ? sessions : [];
 
     // Today's PRIMARY training session (a strength/run, not a bare mobility) for "purpose".
-    const primary = S.find((s) => { const i = intentFor(s); return i && i.family !== 'mobility'; }) || S[0] || null;
-    const ip = primary ? intentFor(primary) : null;
-    let primarySession = ip ? { type: normType(primary.type), label: ip.label, loadBearing: !!ip.loadBearing } : null;
+    // IMPORTANT: LOGGED activities carry `.activityType` and classify via activityKind() — NOT the
+    // planner's `.type` that intentFor() reads. So intentFor(loggedRun) was null → primarySession fell
+    // through to null → the post-workout Play/Daily surface had no session at all and dropped to the
+    // strength tally (Emil: "Play says strength after my run"). Resolve a canonical GRANULAR type for
+    // the logged session: a plain 'run' takes today's PLANNED run type (Fri = easy_run), else easy_run.
+    // todayPlanned is the next7Days[0] WRAPPER { planned:{type,…}, intensityClass, label, done } — the
+    // GRANULAR type lives at .planned.type, NOT on the wrapper. Reading .type off the wrapper returned
+    // undefined, so a logged plain 'run' never inherited today's granular type AND (worse) the pre-workout
+    // fallback below never fired — leaving Play/Start to drop to the strength tally every day (Emil).
+    const todayPlannedType = (upcomingPlan && upcomingPlan.todayPlanned && upcomingPlan.todayPlanned.planned && upcomingPlan.todayPlanned.planned.type) || null;
+    const kindOf = (a) => { try { return activityKind(a); } catch { return 'other'; } };
+    const primary = S.find((s) => { const k = kindOf(s); return k !== 'other' && k !== 'mobility'; }) || S[0] || null;
+    const primaryType = primary ? canonicalSessionType(kindOf(primary), todayPlannedType, primary.activityType || primary.type) : null;
+    const ip = primaryType ? intentFor({ type: primaryType }) : null;
+    let primarySession = (primary && primaryType && primaryType !== 'mobility')
+      ? { type: primaryType, label: (ip && ip.label) || null, loadBearing: !!(ip && ip.loadBearing) }
+      : null;
+    // Ground the post-workout read (gSessionDone) in the ACTUAL logged distance when there is one.
+    if (primarySession && primary) {
+      const dmi = num(primary.distanceMi ?? primary.distance_mi ?? primary.miles);
+      if (dmi != null && dmi > 0) primarySession.distanceMi = Math.round(dmi * 10) / 10;
+    }
     // Pre-workout fallback: nothing logged yet → speak to TODAY'S PLANNED session so the purpose
     // beat fires on Play/Start before you train (not just after). Only a real, non-mobility plan.
     if (!primarySession) {
-      const todP = upcomingPlan && upcomingPlan.todayPlanned;
+      const todWrap = upcomingPlan && upcomingPlan.todayPlanned;
+      const todP = todWrap && todWrap.planned;   // the granular planned session ({ type, distanceMi, … })
       if (todP && todP.type && todP.type !== 'rest') {
         const ipp = intentFor(todP);
-        if (ipp && ipp.family !== 'mobility') primarySession = { type: normType(todP.type), label: ipp.label, loadBearing: !!ipp.loadBearing };
+        if (ipp && ipp.family !== 'mobility') primarySession = { type: normType(todP.type), label: (todWrap && todWrap.label) || ipp.label, loadBearing: !!ipp.loadBearing };
       }
     }
 
@@ -214,7 +331,8 @@ export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hou
     // Only when today has a planned session that ISN'T done yet — a "back off" nudge is moot post-run.
     let readiness = null; let adaptation = null;
     try {
-      const todP = upcomingPlan && upcomingPlan.todayPlanned;
+      const todWrap = upcomingPlan && upcomingPlan.todayPlanned;
+      const todP = todWrap && todWrap.planned;   // granular planned session — type/distance live here, not on the wrapper
       if (todP && todP.type && todP.type !== 'rest' && S.length === 0) {
         const sig = readTodaySignals();
         const score = readinessScoreFrom(sig);
@@ -222,7 +340,7 @@ export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hou
         readiness = { score, band };
         const prof = storage.get('profile') || {};
         const adapt = adaptSession(
-          { type: todP.type, intensityClass: todP.type, distanceMi: num(todP.distanceMi), durationMin: num(todP.durationMin), label: todP.label },
+          { type: todP.type, intensityClass: todP.type, distanceMi: num(todP.distanceMi), durationMin: num(todP.durationMin), label: (todWrap && todWrap.label) || todP.label },
           { readiness: band, debtLbs: 0, hrvDelta: sig.hrvDelta, sleepHrs: sig.sleepHrs, sleepGoalHrs: Number(prof.sleepGoalHrs) || 7.5, fatigueLevel: 0 },
         );
         if (adapt && (adapt.action === 'ease' || adapt.action === 'trim')) {
@@ -231,7 +349,7 @@ export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hou
           const rawWhy = adapt.reason && adapt.reason.includes('—') ? adapt.reason.split('—').slice(1).join('—').trim().replace(/\.$/, '') : null;
           const whyTail = (rawWhy && !/low readiness/i.test(rawWhy)) ? ` (${rawWhy})` : '';
           const verb = adapt.action === 'ease' ? 'is best eased to an easy effort' : 'is best trimmed ~15%';
-          adaptation = { reason: `today's ${todP.label || todP.type} ${verb}${whyTail}`, action: adapt.action };
+          adaptation = { reason: `today's ${(todWrap && todWrap.label) || todP.label || todP.type} ${verb}${whyTail}`, action: adapt.action };
         }
       }
     } catch { /* readiness unavailable → gReadiness stays silent */ }
@@ -268,7 +386,7 @@ export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hou
     // from the same normalised signals above. Additive: every legacy field below is untouched, and
     // ctx.clock is preserved, so existing generators keep working while they migrate to ctx.day.phase.
     const hasPlannedToday = !!primarySession
-      || !!(upcomingPlan && upcomingPlan.todayPlanned && upcomingPlan.todayPlanned.type && upcomingPlan.todayPlanned.type !== 'rest');
+      || !!(upcomingPlan && upcomingPlan.todayPlanned && upcomingPlan.todayPlanned.planned && upcomingPlan.todayPlanned.planned.type && upcomingPlan.todayPlanned.planned.type !== 'rest');
     let world = null;
     try {
       world = buildWorldModel({
@@ -295,7 +413,12 @@ export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hou
       goal: { aRace, weakLink: (typeof weakLink === 'string' ? weakLink : null), body },   // weakLink: lever string from trainingProfile (slice 2b), or null
       fuel: { protein, calories, ea, deficitPct },
       plan,
-      learned, clinical: {},
+      learned,
+      // Clinical (Stage 7): bloodwork + DEXA classified + framed for training. Guarded; no labs → {flags:[]}.
+      clinical: (() => {
+        try { return buildClinicalContext(storage.get('labSnapshots'), storage.get('clinicalTests'), { goalDirection: body && body.direction, today: todayStr }); }
+        catch { return { flags: [] }; }
+      })(),
       // Episodic memory (Phase D): novelty — days since each beat was last shown (prior days only),
       // so the salience function down-weights what the coach already said and surfaces something new.
       memory,
@@ -306,6 +429,30 @@ export function buildCoachContext({ us, sessions, upcomingPlan, raceHorizon, hou
       season: world ? world.season : undefined,
       person: world ? world.person : undefined,
       world: world || undefined,
+      // P2 — durability (the fourth pillar): decoupling on long runs when present, else the long-run
+      // efficiency trend. Fed to gDurability. Needs the FULL activity history, so it's computed from the
+      // passed `activities` (CoachComment provides it); null-safe when absent.
+      durability: (() => { try { return estimateDurability(activities || sessions || [], { today: todayStr }); } catch { return null; } })() || undefined,
+      // Aerobic ceiling (the "big engine, race legs" gap): race-anchored VDOT vs measured VO2max. Read as a
+      // SEPARATE upside signal — it never touches the finish prediction (that stays race-anchored). Fed to
+      // gPotentialGap. Guarded end-to-end; absent data → undefined (generator no-ops).
+      potentialGap: (() => {
+        try {
+          const acts = activities || sessions || [];
+          if (!acts.length) return undefined;
+          const measured = readMeasuredVo2({ storage, activities: acts, clinicalTests: storage.get('clinicalTests') });
+          if (!measured || !(measured.value > 0)) return undefined;
+          // Goal-race distance (the number the coach is actually reasoning about); default marathon.
+          const mi = Number(aRace && (aRace.distanceMi ?? aRace.distance_mi));
+          const dKm = Number(aRace && (aRace.distanceKm ?? aRace.distance_km)) || (Number.isFinite(mi) ? mi * 1.60934 : 42.195);
+          return resolvePotentialGap({ activities: acts, today: todayStr, distanceKm: dKm > 0 ? dKm : 42.195, measured }) || undefined;
+        } catch { return undefined; }
+      })(),
+      // P3 — REDs / energy-availability screen (2023 IOC): EA + the biomarker constellation → a severity-graded
+      // risk read with a clinician hand-off. Chronic screen (distinct from the acute daily fuel nudge). Guarded.
+      reds: (() => { try { return resolveRedsScreen({ storage, today: todayStr }) || undefined; } catch { return undefined; } })(),
+      planChange: (() => { try { return recentPlanChange({ today: todayStr }) || undefined; } catch { return undefined; } })(),
+      easyZone: (() => { try { return resolveEasyZone({ storage, today: todayStr }) || undefined; } catch { return undefined; } })(),
     };
   } catch { return null; }
 }
