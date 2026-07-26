@@ -61,7 +61,13 @@ export function volumeReadout({ goalTimeSecs, distanceMi = 26.2, currentWeeklyMi
   return {
     peakMi, gapMi,
     behind: cur > 0 && cur < peakMi * 0.9,
-    note: `Peak ${peakMi} mi/wk — what a ${goalStr} marathon needs.`,
+    // ROUND 98 — this used to open "Peak N mi/wk", six lines under a stat tile ALSO
+    // labelled "peak" that carries a DIFFERENT number: this one is what the finish time
+    // DEMANDS (a pure function of goal pace), that one is what the ramp actually
+    // DELIVERS inside the weeks left before the race. Two true numbers, one word, and
+    // the athlete reasonably reads the pair as a contradiction. The demand side now says
+    // "needs", the delivery side says "plan peak", and neither one is just "peak".
+    note: `Needs ${peakMi} mi/wk at peak — what a ${goalStr} marathon demands.`,
   };
 }
 

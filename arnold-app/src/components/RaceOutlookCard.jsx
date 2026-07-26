@@ -37,14 +37,10 @@ const STATUS = {
 
 // Finish times route through the ONE formatter (core/time.js fmtFinish) — this card and
 // LivingPlan each had their own, and they disagreed about the leftover seconds: Emil saw
-// 3:48 here and 3:49 on "Your plan" for the same goal. Sub-hour times keep their m:ss,
-// which fmtFinish deliberately does not render.
-const fmt = (s) => {
-  if (!(s > 0)) return '—';
-  if (s >= 3600) return fmtFinish(s);
-  const m = Math.floor(s / 60), ss = Math.round(s % 60);
-  return `${m}:${String(ss).padStart(2, '0')}`;
-};
+// 3:48 here and 3:49 on "Your plan" for the same goal. The sub-hour m:ss fallback that used
+// to live here moved INTO fmtFinish in ROUND 98, so all that is left is the em-dash for
+// "no time yet" — a display decision, not an arithmetic one.
+const fmt = (s) => (s > 0 ? fmtFinish(s) : '\u2014');
 const isMarathon = (o) => (o.distanceKm || 0) >= 41;
 const VERDICT_LABEL = { 'on-target': 'On-target', stretch: 'Stretch', 'beyond-cycle': 'Beyond cycle', 'no-goal': '' };
 const VERDICT_COLOR = { 'on-target': '#5eead4', stretch: '#7dd3fc', 'beyond-cycle': '#f87171', 'no-goal': '#5b6b86' };

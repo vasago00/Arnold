@@ -1,0 +1,73 @@
+ROUND 99 — the LIVING line stops borrowing a second engine's number
+
+"this week targets 19 mi" sat directly above a WEEK BUDGET strip reading 25.
+Both numbers were true, neither was about the same week, and — the part that
+makes it a bug rather than a wording problem — they came from two different
+engines.
+
+THE MECHANISM
+
+LivingPlan renders `· this week targets N mi` from `thisBlockWk`, a lookup that
+asks the generated block for the week whose weekKey equals the Monday of today.
+On Sunday 26 Jul that Monday is 20 Jul. The block's first Monday is 27 Jul,
+because the plan starts tomorrow. Nothing matched, thisBlockWk returned null,
+and the render fell through to `plan.targetWeeklyMiles`.
+
+That fallback is the bug. `plan` is seasonCoach.getSeasonCoach() ->
+seasonPlan.resolveSeasonPlan(), which computes its own single-week target as the
+28-day average times a ramp (seasonPlan.js:182-194) without ever looking at the
+block. 25 is planGenerator's periodized week 1 and is literally sumRunMiles(days)
+— the sum of the tiles printed below it.
+
+So the card printed one engine's number under words that promised the other's,
+in the one state where they were guaranteed to differ. This is the parallel-
+systems failure again, in its nastiest form: not a fork between two surfaces,
+which a screenshot can catch, but a silent fallback between two engines behind
+one unchanged sentence, where there is no seam to see.
+
+THE RULE — THE BLOCK IS THE PLAN
+
+  covers this week   -> unchanged: "this week targets 25 mi · long 10"
+  has not started    -> "week 1 starts Jul 27 — it targets 25 mi · long 10",
+                        quoting the block's OWN first week, so the header and
+                        the strip below it cannot contradict each other
+  ran out behind us  -> print nothing; a finished block has no "this week", and
+                        back-filling one from a second engine is how we got here
+  no block at all    -> plan.targetWeeklyMiles prints, and that is fine: it is
+                        then the only read on the card. An empty weeks array
+                        counts as NO block, not as a finished one.
+
+The not-started wording follows an idiom this same file already had ten lines of
+JSX away (the week-status strip: `startDate > localDate() ? 'Week 1 · starts …'
+: 'This week'`). It had been getting this right all along.
+
+ONE MONDAY
+
+thisMondayKey lifted out of thisBlockWk into its own memo, because two callers
+now need it and letting the second compute its own would be the same class of
+bug in a smaller box. The harness asserts `(d.getDay() + 6) % 7` appears exactly
+once in LivingPlan.jsx.
+
+ALSO CONFIRMED THIS ROUND
+
+ROUND 98 verified in the field, and verified under version skew: web and mobile
+now read the same plan (38 mi / 3:58 / REACHABLE / +17.3) while running
+DIFFERENT bundles — mobile on ROUND 98, web on a stale pre-98 dev cache. Same
+numbers from different code is planPrefs having actually converged, which is
+what savePlanPrefs was for.
+
+VERIFICATION
+
+esbuild clean. New harness /tmp/wknum.mjs, 31 assertions ALL GREEN — including
+one that proves the two engines genuinely disagree on identical inputs, because
+if they were ever equal the old fallback would have been invisible. Full sweep
+26/26 harnesses green. runPlanSim 2,000 plans ok:true, 0 hard violations, acwr
+99.84%, ramp 100.00%, peak 97.26% — byte-identical to the ROUND 98 baseline.
+coachSim 6,000 cases + 4 seeds x 3,000 -> 0 violations. qualityEval mean 0.9999.
+No engine file was touched, which is why the sims are unchanged.
+
+FILES
+
+  src/components/LivingPlan.jsx
+  HANDOVER.md
+  COMMIT_MSG_99.txt

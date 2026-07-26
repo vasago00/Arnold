@@ -157,9 +157,23 @@ export function lastNDays(refDate, n) {
 //
 // Seconds are dropped on purpose — these are ladder targets carrying error bars measured in
 // minutes, and printing 3:48:35 would claim a precision the estimate does not have.
+//
+// ROUND 98 — the sub-hour branch moved IN here. Two other copies of this function existed
+// solely because this one had no answer for a time under an hour: trainingProfile.js kept a
+// whole second formatter (which ROUNDED, reintroducing the very one-minute fork this comment
+// was written about), and RaceOutlookCard.jsx wrapped this one in an `if (s >= 3600)` guard
+// with its own m:ss fallback. Without a sub-hour branch a 47-minute 10K renders "0:47", so
+// every caller with a non-marathon race had to grow its own copy — which is the mechanism,
+// not the accident. Seconds are KEPT below the hour because at that distance a 20-second
+// error is a real error, and they TRUNCATE for the same two reasons the minutes do: never
+// print a target easier than the one solved for, and `Math.round(59.6)` is a ":60".
 export function fmtFinish(secs) {
   const n = Number(secs);
   if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 3600) {
+    const m = Math.floor(n / 60);
+    return `${m}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
+  }
   const h = Math.floor(n / 3600);
   const m = Math.floor((n % 3600) / 60);
   return `${h}:${String(m).padStart(2, '0')}`;

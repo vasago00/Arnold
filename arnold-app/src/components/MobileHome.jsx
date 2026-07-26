@@ -2748,7 +2748,6 @@ function MobileHomeInner({ data, onOpenTab, initialView }) {
   // when the planner has a real week, project from its run mileage; else fall back to
   // the weekly run-distance goal. A build/taper plan that differs from the flat target
   // now moves the year-end projection.
-  const _RUN_TYPES = new Set(['easy_run','long_run','tempo','intervals','race']);
   const plannedWeekRunMi = (() => {
     try { const wk = getPlannerWeek(weekKey()); return (wk?.days||[]).reduce((s,d)=>s+dayRunMiles(d),0); }
     catch { return 0; }

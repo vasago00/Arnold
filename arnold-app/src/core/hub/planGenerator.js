@@ -13,6 +13,7 @@
 import { resolveSeasonPlan, HALF_MIN_MI } from '../seasonPlan.js';   // periodization engine (2.1 season layer)
 import { vdotFromRace, trainingPaces } from '../coaching/vdot.js';   // P1 — Daniels VDOT (adopted method)
 import { AGGRAVATORS, INJURY_LIBRARY } from '../injury.js';   // selective niggle protection (knee → speed eased)
+import { sumRunMiles } from '../runMiles.js';   // ROUND 98 — the ONE week-mileage sum (see that file's header)
 
 // Mon=0 .. Sun=6.
 const DEFAULT_LONG_DOW = 5;             // Saturday (only used as a hint)
@@ -258,7 +259,12 @@ function demoteLongRunToEasy(days) {
   const i = findDayIndex(days, 'long_run');
   if (i >= 0) days[i] = mkEasy(Number(days[i].distanceMi) || 4, days[i]);
 }
-const sumDayMiles = (days) => Math.round((days || []).reduce((t, d) => t + (Number(d && d.distanceMi) || 0), 0) * 10) / 10;
+// ROUND 98: was a local sum of every day's top-level `distanceMi`, which counted a
+// cross-training day as running and counted a two-a-day once. Same answer on a
+// freshly generated block (only run days get a distance here), a different answer on
+// any week that has since been edited — and the card header reads this number while
+// the week-budget strip below it read a different one. Now shared.
+const sumDayMiles = sumRunMiles;
 // Selective injury protection. An active niggle only aggravates SOME running stresses
 // (injury.js encodes which: a knee aggravates intensity, a shin aggravates impact +
 // volume, …). Downgrade ONLY the aggravating sessions — speed/tempo → easy aerobic; a

@@ -11,7 +11,8 @@
 // This retires SeasonPlanGenerator's static-config-first UX per Emil (2026-07).
 
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { storage } from '../core/storage.js';
+import { storage, savePlanPrefs } from '../core/storage.js';
+import { SESSION_RUN_TYPES } from '../core/runMiles.js';   // ROUND 98 — the ONE 'does this carry run miles' set
 import { getGoals } from '../core/goals.js';
 import { generateSeasonBlock, pasteSeasonBlock, clearSeasonBlock, pacesFromHubFacts } from '../core/hub/planGenerator.js';
 import { buildHubFromStorage } from '../core/hub/hubDebug.js';
@@ -716,7 +717,7 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
     // Only paint the calendar preview rings on an EXPLICIT (re)generate — not on the
     // auto-derive at mount, which otherwise circled every future day in blue permanently.
     if (preview) onPreview?.(result);
-    try { storage.set('planPrefs', { availableDays: avail, runDays, strengthDays, focus, target: nextTarget, targetExplicit: targetExplicit.current, tier: chosenRow?.key || null, tierExplicit: tierExplicit.current, customGoalSecs: customSecsRef.current || null, startDate, longRunDow, strengthDows }, { skipValidation: true }); } catch {}
+    savePlanPrefs({ availableDays: avail, runDays, strengthDays, focus, target: nextTarget, targetExplicit: targetExplicit.current, tier: chosenRow?.key || null, tierExplicit: tierExplicit.current, customGoalSecs: customSecsRef.current || null, startDate, longRunDow, strengthDows });
     // LIVING auto-apply — when the plan is already on your calendar, keep it in sync with
     // this recalibration automatically. 'refresh' RE-BASELINES the forward machine days to
     // the freshly-computed road (so a slower actual week pulls the whole road down, a strong
@@ -963,20 +964,36 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
   const FEAS_COLOR = { 'on-track': '#34d399', aggressive: '#e0b45e', unrealistic: '#f87171', unknown: 'var(--text-muted)', 'no-goal': 'var(--text-muted)' };
   // The weak link the plan is built to close (from the recipe-path).
   const weakLink = profile?.weakLink || null;
-  const peakMi = block?.weeks?.length ? Math.max(1, ...block.weeks.map(w => w.targetWeeklyMiles || 0)) : 0;
+  // What the ramp DELIVERS — the biggest week the block actually contains. This is NOT
+  // goalVol.peakMi, which is what the finish time DEMANDS (volumeModel, a pure function of
+  // goal pace, blind to how many weeks are left). They are equal only when the calendar is
+  // long enough and the base high enough to reach the demand; every other season they are
+  // two different numbers, and until ROUND 98 both were printed under the word "peak".
+  const deliveredPeakMi = block?.weeks?.length ? Math.max(1, ...block.weeks.map(w => w.targetWeeklyMiles || 0)) : 0;
+  const peakMi = deliveredPeakMi;   // legacy name, kept for the render sites below
   // THIS week as the BLOCK sees it. coach.plan is the periodization layer's read and it
   // deliberately knows nothing about the days — so on a race week it reports the training
   // line (26 mi) while the calendar below it lists a marathon and adds up to 47. Emil:
   // "On race weeks the plan should incorporate the runs into the weekly mileage." The
   // generator now publishes both numbers per week; the LIVING line reads the block's when
   // there is one so the sentence and the calendar underneath it are the same week.
-  const thisBlockWk = useMemo(() => {
-    const wks = block?.weeks; if (!wks || !wks.length) return null;
+  // The Monday of the week we are STANDING IN. Lifted out of thisBlockWk in ROUND 99 because
+  // two callers need it and neither may compute its own: the lookup below, to find today
+  // inside the block, and the LIVING line, to tell "the block has not started yet" apart from
+  // "the block ran out behind us". Those two states print different sentences and used to
+  // print the same one. Keyed on storageVersion so it refreshes whenever anything else on the
+  // card does; `today` itself only moves at midnight.
+  const thisMondayKey = useMemo(() => {
     const d = new Date(`${localDate()}T12:00:00`);
     d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    const key = ymd(d);
-    return wks.find(w => w.weekKey === key) || null;
-  }, [block]);
+    return ymd(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageVersion]);
+
+  const thisBlockWk = useMemo(() => {
+    const wks = block?.weeks; if (!wks || !wks.length) return null;
+    return wks.find(w => w.weekKey === thisMondayKey) || null;
+  }, [block, thisMondayKey]);
 
   // ── THE ACCOUNTABILITY READ ── planned vs actual on the weeks already gone by.
   // Recomputed whenever storage moves (a logged run, an edited planner week), so the
@@ -1061,17 +1078,48 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
           <span style={{ color: '#5eead4', fontWeight: 700, letterSpacing: '0.05em' }}>⟳ LIVING</span>
           <span>you’re averaging <b style={{ color: 'var(--text-primary)' }}>{coach.inputs.weeklyMiles} mi/wk</b></span>
           {plan && plan.targetWeeklyMiles > 0 && (() => {
+            // ── WHICH WEEK IS THIS SENTENCE ABOUT ─────────────────────────────────── ROUND 99
+            // Emil, 2026-07-26, looking at the card: the header read "this week targets 19 mi"
+            // with a WEEK BUDGET strip an inch below it reading 25. Both numbers were true,
+            // neither was about the same week, and — the part that makes it a bug rather than a
+            // wording problem — they came from two different engines. 25 is planGenerator's
+            // periodized week 1, starting Mon 27 Jul, and it is the sum of the day tiles.
+            // 19 was seasonPlan.resolveSeasonPlan's own single-week read: the 28-day average
+            // (17.4) times a ramp, computed without ever looking at the block.
+            //
+            // The mechanism: the lookup above asks the block for the week we are standing in.
+            // On Sun 26 Jul that Monday is 20 Jul; the block's first Monday is 27 Jul; nothing
+            // matched; and the code fell through to `plan.targetWeeklyMiles` — the OTHER
+            // engine's number — under the unchanged words "this week". A silent fallback across
+            // an engine boundary is exactly the parallel-systems failure this file keeps
+            // finding, and it is worse than a fork because there is no seam to see.
+            //
+            // THE BLOCK IS THE PLAN. Three states, three different sentences:
+            //   covers this week  → speak for it, as before.
+            //   has not started   → say WHEN it starts and quote ITS first week, which is the
+            //                       same number the strip below prints. Never "this week".
+            //   ran out behind us → say nothing. A finished block has no "this week", and
+            //                       inventing one from a second engine is how we got here.
+            // Only with NO block at all does plan.targetWeeklyMiles print, because then it is
+            // the sole read on the card and there is nothing for it to contradict.
+            const wks = (block && Array.isArray(block.weeks) && block.weeks.length) ? block.weeks : null;
+            const firstWk = wks ? wks[0] : null;
+            const ahead = !thisBlockWk && !!firstWk && firstWk.weekKey > thisMondayKey;
+            const wkB = thisBlockWk || (ahead ? firstWk : null);
+            if (!wkB && wks) return null;
             // On a race week the two numbers genuinely differ and BOTH are true: the
             // training line is what the ramp is doing, the total is what you will cover.
             // Print the total (it is the number "how far am I running this week" means)
             // and show the training line beside it rather than silently picking one.
-            const wkB = thisBlockWk;
             const total = wkB && wkB.totalWeeklyMiles > 0 ? Math.round(wkB.totalWeeklyMiles) : null;
             const train = wkB ? wkB.targetWeeklyMiles : plan.targetWeeklyMiles;
             const raceMi = wkB ? (wkB.raceMi || 0) : 0;
             const longMi = wkB ? wkB.longRunTargetMi : plan.longRunTargetMi;
             return (
-              <span>· this week targets <b style={{ color: 'var(--text-primary)' }}>{total ?? train} mi</b>
+              <span>· {ahead
+                ? <>week 1 starts <b style={{ color: 'var(--text-primary)' }}>{fmtWk(firstWk.weekKey)}</b>{' — it targets '}</>
+                : 'this week targets '}
+                <b style={{ color: 'var(--text-primary)' }}>{total ?? train} mi</b>
                 {raceMi > 0 && total ? ` (${train} training + ${raceMi} racing)` : ''}
                 {longMi ? ` · long ${longMi}${wkB && wkB.longRunIsRace ? ' — the race' : ''}` : ''}</span>
             );
@@ -1108,7 +1156,13 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
           the glance, Calendar = the execution. */}
       {(peakMi > 0 || weakLink) && (
         <div style={{ display: 'flex', gap: 26, marginTop: 12, paddingBottom: 12, borderBottom: '0.5px solid var(--border-subtle)', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          {peakMi > 0 && <Stat val={Math.round(peakMi)} unit=" mi" label="peak" />}
+          {peakMi > 0 && <Stat val={Math.round(peakMi)} unit=" mi" label="plan peak" />}
+          {/* The demand, beside the delivery, and ONLY when they differ enough to matter —
+              a plan that reaches its target should say so by showing one number, not by
+              showing the same number twice. */}
+          {peakMi > 0 && goalVol?.peakMi > 0 && Math.abs(goalVol.peakMi - Math.round(peakMi)) > 2 && (
+            <Stat val={goalVol.peakMi} unit=" mi" label="goal needs" />
+          )}
           {weakLink && (
             <div style={{ textAlign: 'left' }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#f87171', lineHeight: 1.15 }}>{weakLink.label}</div>
@@ -1123,7 +1177,10 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
           fantasy), and we say so; the outlook ladder above shows the goal migrating. */}
       {goalVol && (
         <div style={{ fontSize: 11, color: '#5eead4', lineHeight: 1.4, marginTop: 6 }}>
-          ◎ {goalVol.note}{goalVol.gapMi > 0 ? ` Building the base toward it — +${goalVol.gapMi} mi to the peak.` : ''}
+          {/* "+N mi to the peak" read as a shortfall in the PLAN. It is not — it is the gap
+              between the athlete's CURRENT weekly volume and the demand, i.e. the size of the
+              build, which is what a build is for. Say which two numbers it spans. */}
+          ◎ {goalVol.note}{goalVol.gapMi > 0 ? ` That is +${goalVol.gapMi} mi/wk above what you are running now — the build.` : ''}
           {goalVol.targetClamped && !tierChosen && showWork && (
             <span style={{ color: 'var(--text-muted)' }}> Sized to this cycle’s Target — your goal is a reach the plan grows into as you prove it.</span>
           )}
@@ -1712,7 +1769,10 @@ export function LivingPlan({ races: propRaces, initialTargetDate = null, onAppli
         // The ACTUAL miles logged that day (from summarizePlanWeek) — so a done day reflects what was
         // really run (7.5) rather than the planned figure (6). Null when nothing logged.
         const actualMiOf = (i) => (weekStatus && weekStatus.days && weekStatus.days[i] && weekStatus.days[i].actualMi != null) ? weekStatus.days[i].actualMi : null;
-        const RUN_SET = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'hiit']);
+        // ROUND 98 — was a local Set missing `race`, `recovery` and legacy `run`, which is
+        // why a race week could show plannedMi including the race and doneMi excluding it:
+        // the card contradicted itself in two numbers printed side by side.
+        const RUN_SET = SESSION_RUN_TYPES;
         // totalWeeklyMiles first: the tiles beside this number include the race, so the
         // header has to as well or the card contradicts its own days on every race week.
         const plannedMi = weekStatus && weekStatus.totals ? Math.round(weekStatus.totals.runMiles) : Math.round(wk.totalWeeklyMiles ?? wk.targetWeeklyMiles);

@@ -10,9 +10,15 @@
 // { sessions: [{ type, distanceMi }] } (rest = empty sessions). The caller normalises via the
 // planner's daySessions() before calling, so this file imports nothing storage-coupled.
 
+import { SESSION_RUN_TYPES } from './runMiles.js';
+
 const HARD = new Set(['long_run', 'tempo', 'intervals', 'hiit', 'race']);
 const QUALITY = new Set(['tempo', 'intervals', 'hiit']);
-const RUN = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'hiit']);
+// ROUND 98 — this used to be a local Set that omitted `race`, `recovery` and the legacy
+// `run`, so a week containing any of them resolved against a smaller total than the same
+// week showed on the calendar. One definition now (core/runMiles.js, zero imports, so this
+// file stays as storage-free as its header promises).
+const RUN = SESSION_RUN_TYPES;
 const RECOVERY_CLASSES = new Set(['rest', 'recovery']);
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 

@@ -7,6 +7,12 @@ import { weekStart } from "./derive/volume.js";
 import { isRun, isStrength } from "./activityClass.js";
 import { localDate, ymd } from "./time.js";
 import { CATEGORY } from "../theme/tokens.js";
+// ROUND 98 — the run-type set and the per-session miles rule now live in ONE leaf
+// module (core/runMiles.js) that the plan generator and planTiers also import, so
+// "how many run miles is this week" cannot be answered four different ways again.
+// Re-exported because callers already reach for it through planner.
+import { SESSION_RUN_TYPES, sessionRunMiles } from "./runMiles.js";
+export { SESSION_RUN_TYPES, sumRunMiles } from "./runMiles.js";
 
 // ─── ISO week key ────────────────────────────────────────────────────────────
 export function weekKey(date = new Date()) {
@@ -121,7 +127,7 @@ export function applyTemplate(weekKeyStr, templateId) {
 // core). New shape: day = { sessions: [{ type, distanceMi?, durationMin?,
 // slot?: 'AM'|'PM'|'EVE' }] }. Legacy shape (one { type, ... } per day) is still
 // read transparently via daySessions() so old stored weeks keep working.
-const SESSION_RUN_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'race']);
+// (SESSION_RUN_TYPES now imported from ./runMiles.js — see the import block above.)
 
 // Normalize a day record (legacy OR new) → array of real sessions (rest excluded).
 export function daySessions(day) {
@@ -157,8 +163,7 @@ export function dayIsRest(day) {
 
 // Sum of planned run miles across all run-type sessions that day.
 export function dayRunMiles(day) {
-  return daySessions(day).reduce((mi, s) =>
-    mi + (SESSION_RUN_TYPES.has(s.type) ? (Number(s.distanceMi) || 0) : 0), 0);
+  return daySessions(day).reduce((mi, s) => mi + sessionRunMiles(s), 0);
 }
 
 // Count of planned sessions that day (rest = 0).

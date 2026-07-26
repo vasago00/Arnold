@@ -578,6 +578,40 @@ export function migrateSupplementKeys() {
 // the local copy is the only copy — that is the only case where the move is safe.
 //
 // The old key is removed afterward so a later reload cannot read it back and re-fork.
+// ─── planPrefs: MERGE, never replace ─────────────────────────────────────────
+//
+// ROUND 98. `storage.set` is a whole-value replace for non-array data (rawSet →
+// JSON.stringify), and `storage.merge` is array-only. So ANY writer that hands
+// planPrefs a partial object silently DELETES every field it did not mention.
+// Two such writers exist — PlanGeneratorPanel.jsx and SeasonPlanGenerator.jsx —
+// and each writes exactly four fields (availableDays, runDays, strengthDays,
+// focus), which erases the other eight: `target`, `targetExplicit`, `tier`,
+// `tierExplicit`, `customGoalSecs`, `startDate`, `longRunDow`, `strengthDows`.
+//
+// WHY THAT IS THE WHOLE BALL GAME. planPrefs is a SYNCED key (it is in KEYS, and
+// cloud-sync snapshots the whole KEYS map), merged last-write-wins wholesale. So a
+// truncating write does not just break the device it ran on — it pushes the
+// truncated object to the other device. `tier` is the field that selects
+// `chosenRow` in LivingPlan, and `chosenRow` drives the goal time, the ramp, the
+// peak the ramp delivers and therefore the feasibility verdict. Lose `tier` on one
+// device and you get precisely Emil's screenshots: 38 mi / REACHABLE / "a 3:58
+// marathon" on one screen and 43 mi / AGGRESSIVE / "a 3:45 marathon" on the other,
+// from one account at one moment. One deleted field, four divergent numbers.
+//
+// Both of those components are ORPHANS today (nothing imports either), so they
+// cannot be firing right now — but a truncated object written while they WERE
+// mounted is still a perfectly good explanation for a stale synced snapshot, and
+// re-mounting either one would reintroduce the bug silently. Hence a structural
+// fix rather than a deletion: this is now the ONLY supported way to write
+// planPrefs, and it cannot truncate no matter who calls it.
+export function savePlanPrefs(patch) {
+  if (!patch || typeof patch !== 'object') return false;
+  let prev = null;
+  try { prev = storage.get('planPrefs'); } catch { prev = null; }
+  const next = { ...(prev && typeof prev === 'object' ? prev : {}), ...patch };
+  try { return storage.set('planPrefs', next, { skipValidation: true }); } catch { return false; }
+}
+
 const PLANPREFS_MIGRATION_FLAG = 'arnold:migration:planprefs-v1';
 
 export function migratePlanPrefsKey() {

@@ -20,6 +20,15 @@ import { goalRequirements } from './volumeModel.js';
 // copy is how two surfaces start disagreeing about what counts as a marathon. Static import is
 // safe — aRace.js is PURE (no storage/date), so this stays node-testable.
 import { isMarathon } from './aRace.js';
+// ROUND 98 — the ONE finish-time formatter. This file used to define its own, nine lines
+// below where the import now sits, and that copy ROUNDED to the nearest minute where
+// core/time.js truncates. A 3:48:35 goal was therefore "3:49" in the training profile and
+// "3:48" everywhere the profile's number was re-derived — the exact one-minute fork that
+// core/time.js's own header comment was written to end, quietly re-opened by a second
+// definition. Re-exported (not just imported) because trainingProfile.test.js imports
+// fmtFinish FROM HERE; the name stays, the arithmetic is now shared.
+import { fmtFinish } from './time.js';
+export { fmtFinish } from './time.js';
 
 // "a number, or null if there isn't one". The explicit null/''/whitespace rejection is the whole
 // point: `Number(null)` is 0 and `Number('')` is 0, so without it this helper reports a MISSING
@@ -75,16 +84,10 @@ export function parseRaceFinishSecs(race, distanceKm = null) {
   return null;
 }
 
-// ── format seconds → "H:MM" (marathon-style, rounded to the minute) or "MM:SS" ──
-export function fmtFinish(secs) {
-  if (secs == null || !Number.isFinite(secs) || secs <= 0) return null;
-  if (secs >= 3600) {
-    const totalMin = Math.round(secs / 60);
-    return `${Math.floor(totalMin / 60)}:${String(totalMin % 60).padStart(2, '0')}`;
-  }
-  const m = Math.floor(secs / 60), s = Math.round(secs % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
+// fmtFinish lives in core/time.js — imported and re-exported at the top of this file.
+// Note for callers: it returns '' (not null) for a missing/invalid input. Every call site
+// here is already guarded by a truthiness check on the seconds, so nothing downstream can
+// tell the difference, and '' is falsy exactly where null was.
 // ── format a signed second-gap → "~2 min" / "~45 s" ──
 function fmtGain(secs) {
   if (secs == null || secs <= 0) return null;

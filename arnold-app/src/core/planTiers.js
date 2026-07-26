@@ -83,6 +83,8 @@
 // Mirrors seasonPlan.js's ACWR_HOT (1.3) and ACWR_SWEET_LO/HI in hub/promotionLoop.js
 // (0.8–1.3). Duplicated as a literal ONLY here, with this note, because importing it
 // would cost this module its zero-import property; the harness asserts the two agree.
+import { sumRunMiles, sessionRunMiles } from './runMiles.js';   // ROUND 98 — the ONE week-mileage sum
+
 export const ACWR_OVERREACH = 1.3;
 
 // The three rungs, named as Emil named them, each defined by how close to the
@@ -340,9 +342,10 @@ export function mergeTriadWeeks(rungs = []) {
     live.forEach((r, i) => {
       const w = wks[i];
       targetMi[r.rung] = num(w && w.targetWeeklyMiles) || 0;
-      let sum = 0;
-      for (const d of (w && w.days) || []) sum += num(d && d.distanceMi) || 0;
-      budgetMi[r.rung] = Math.round(sum * 10) / 10;
+      // ROUND 98: was an inline re-implementation of planGenerator's sumDayMiles. Both
+      // ignored `sessions[]` and both counted any day with a distance as running, so a
+      // rung's budget and the header above it could disagree on the same week. One sum now.
+      budgetMi[r.rung] = sumRunMiles((w && w.days) || []);
       // Why a rung's week looks the way it does. A faster rung climbs faster, so it
       // reaches its every-4th-build-week cut-back at a DIFFERENT build index than the
       // slower rungs — which means in that one calendar week the challenge plan can
@@ -454,7 +457,12 @@ export function weekBudgetStatus({ week, picks = {} } = {}) {
     const rung = RUNG_ORDER.includes(picks[i]) ? picks[i] : 'baseline';
     const t = d.tiers && d.tiers[rung];
     const baseT = d.tiers && d.tiers.baseline;
-    const mi = num(t && t.distanceMi) || num(d.distanceMi) || 0;
+    // ROUND 98: the THIRD copy of this sum, and the one the athlete sees as the big
+    // number on the WEEK BUDGET strip. It now filters by run type through the same
+    // helper as everything else, so a strength or cross-training day carrying a stray
+    // distance can no longer inflate the strip past the header. The tier variant `t`
+    // carries the miles but not always the type, so the TYPE is read off the day.
+    const mi = sessionRunMiles({ type: d.type, distanceMi: num(t && t.distanceMi) || num(d.distanceMi) || 0 });
     totalMi += mi;
     if (rung !== 'baseline' && QUALITY.has(d.type)) {
       elevatedQuality++;

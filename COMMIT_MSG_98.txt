@@ -1,0 +1,36 @@
+ROUND 98 — one week-mileage sum, one pref writer, two named peaks, one clock
+
+The same plan rendered 38 mi / REACHABLE / "3:58 marathon" on web and
+43 mi / AGGRESSIVE / "3:45 marathon" on mobile at the same moment.
+
+Four independent causes, all of the same shape: two implementations of one idea.
+
+1. planPrefs was being truncated, not merged.
+   storage.set is a whole-value replace, so a writer naming four of the twelve
+   fields silently deleted the other eight -- including `tier`, which selects
+   the ladder row that drives goal time, ramp, delivered peak and verdict.
+   planPrefs syncs last-write-wins wholesale, so a truncating write pushed the
+   hole to the other device too.
+   -> new storage.savePlanPrefs(patch) merges onto what is stored; all three
+      writers use it; the harness now forbids storage.set('planPrefs' outright.
+
+2. Five places computed "how many run miles is this week".
+   -> new zero-import leaf core/runMiles.js owns the rule. planGenerator,
+      planTiers (budget + WEEK BUDGET strip), planner and weekResolve share it.
+   And the run-type set itself was forked six ways: HIIT counted on the calendar
+   and vanished from the week budget; a race counted in the budget and vanished
+   from the "done" figure printed inches away on the same card. The widest set --
+   the one the athlete adds up by eye -- is now the shared one.
+
+3. Two different numbers were both printed as "peak": what the ramp DELIVERS and
+   what the finish time DEMANDS.
+   -> "plan peak" and "goal needs", side by side and only when they differ.
+      volumeReadout's note leads with "Needs" now; its test asserts it.
+
+4. trainingProfile held a second fmtFinish that ROUNDED where core/time.js
+   TRUNCATES -- reopening the one-minute 3:48/3:49 fork on purpose-built code
+   written to close it. Deleted. The sub-hour m:ss branch that was its reason to
+   exist moved into core/time.js, which also collapses RaceOutlookCard's wrapper.
+
+Verified in node: 24 harnesses green (2 new -- onesum, fmtfin), planSim 2,000
+plans 0 hard violations, coachSim 5 seeds 0 violations, quality mean 0.9999.

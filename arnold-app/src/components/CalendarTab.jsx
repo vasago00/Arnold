@@ -26,6 +26,7 @@ import { getRaces, saveRaces, deleteRaceEverywhere } from "../core/memory.js";
 import { allActivities as getUnifiedActivities } from "../core/dcyMath.js";
 import { isRun, isStrength, isHIIT, isExplicitHIIT, isHybridWorkout, isMobility, isCycling, isSwim, isSki, isWalk } from "../core/activityClass.js";
 import { getPlannerWeek, savePlannerWeek, weekKey, DAY_TYPES, daySessions, makeDay, dayRunMiles, dayWorkoutCount, weekPlanTotals } from "../core/planner.js";
+import { SESSION_RUN_TYPES } from "../core/runMiles.js";   // ROUND 98 — the ONE "does this carry run miles" set
 import { PLAN_TYPE_FAMILY } from "../core/todayStatus.js";   // plan-type → family for the planned-session rail
 // The three roads, on the ACTUAL month grid (Emil: "I see nothing on the Calendar for the option
 // on what to run"). READ ONLY — the calendar never builds a triad, it reads back the one that was
@@ -1537,7 +1538,9 @@ const FAMILY_PRETTY = {
 };
 // Only run-family sessions carry mileage; cross-train (bike/pool/…) is time-based, so
 // any leftover distanceMi on a non-run type is stale and must not render as "N mi" (Emil).
-const MILEAGE_TYPES = new Set(['easy_run', 'long_run', 'tempo', 'intervals', 'hiit', 'recovery', 'run', 'race']);
+// ROUND 98 — this list was the most complete of the six copies in the tree, so it became
+// the shared one rather than being replaced by a narrower one. Same members, one home.
+const MILEAGE_TYPES = SESSION_RUN_TYPES;
 
 function prettyFamily(type) {
   if (!type) return '';

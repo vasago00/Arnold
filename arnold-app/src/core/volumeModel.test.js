@@ -46,7 +46,10 @@ describe('volumeReadout', () => {
     expect(r.peakMi).toBe(48);
     expect(r.gapMi).toBe(18);
     expect(r.behind).toBe(true);
-    expect(r.note).toMatch(/Peak 48 mi\/wk — what a 3:30 marathon needs/);
+    // ROUND 98 — asserts the DEMAND side never opens with the bare word "peak", which
+    // the delivered-peak stat tile owns. If someone renames it back, this fails.
+    expect(r.note).toMatch(/^Needs 48 mi\/wk at peak — what a 3:30 marathon demands\.$/);
+    expect(r.note).not.toMatch(/^Peak /);
   });
   it('not behind when already near peak', () => {
     const r = volumeReadout({ goalTimeSecs: 3.5 * 3600, currentWeeklyMi: 46 });
