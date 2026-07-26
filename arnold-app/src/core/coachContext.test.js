@@ -32,7 +32,7 @@ describe('computePlanSlice', () => {
     const p = computePlanSlice(week, new Set(['2026-07-13']), new Set(['2026-07-14']), '2026-07-15');
     expect(p.weekMiTarget).toBe(42);
     expect(p.weekMiProjected).toBe(36);
-    expect(p.missed).toEqual([{ type: 'easy_run', mi: 6 }]);
+    expect(p.missed).toEqual([{ type: 'easy_run', mi: 6, date: '2026-07-14' }]);
     expect(p.swappedToStrength).toBe(true);
     expect(p.strengthTarget).toBe(1);
     expect(p.strengthDone).toBe(1);
@@ -49,7 +49,7 @@ describe('computePlanSlice', () => {
     // one 1-mi easy run missed → gapMi < 2 → gWeekDrift suppresses
     const week = [day('2026-07-14', [{ type: 'easy_run', mi: 1 }]), day('2026-07-15', [{ type: 'easy_run', mi: 20 }])];
     const p = computePlanSlice(week, new Set(), new Set(), '2026-07-15');
-    expect(p.missed).toEqual([{ type: 'easy_run', mi: 1 }]);
+    expect(p.missed).toEqual([{ type: 'easy_run', mi: 1, date: '2026-07-14' }]);
     expect(allBeats(mkCtx(p)).find((b) => b.id === 'week-drift')).toBeUndefined();
   });
 });
@@ -406,7 +406,7 @@ describe('gWeekDrift (engine, fed by the real slice)', () => {
     const drift = allBeats(mkCtx(p)).find((b) => b.id === 'week-drift');
     expect(drift).toBeTruthy();
     expect(drift.tone).toBe('gentle');
-    expect(drift.claim.text).toMatch(/^You logged strength but not the easy run/);
+    expect(drift.claim.text).toMatch(/^You logged strength but not Tuesday's easy run/);
     expect(drift.claim.text).toMatch(/Valencia/);
     expect(drift.claim.text).toMatch(/without touching the long run/);
     expect(drift.claim.text).toMatch(/wouldn't do is cram it all back/);
@@ -428,7 +428,7 @@ describe('gWeekDrift (engine, fed by the real slice)', () => {
     const beats = allBeats(mkCtx(p, { type: 'easy_run', label: 'Easy run', loadBearing: false }));
     const drift = beats.find((b) => b.id === 'week-drift');
     expect(drift.tone).toBe('corrective');
-    expect(drift.claim.text).toMatch(/^You didn't get the long run in this week/);
+    expect(drift.claim.text).toMatch(/^You didn't get Saturday's long run/);
     expect(drift.claim.text).toMatch(/key session/);
     // under a corrective beat, affirming purpose/progress cheerleading is dropped
     expect(beats.some((b) => b.id.startsWith('purpose'))).toBe(false);
